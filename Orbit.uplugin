@@ -1,0 +1,24 @@
+{
+  "FileVersion": 3,
+  "Version": 3,
+  "VersionName": "0.1.2",
+  "FriendlyName": "Orbit",
+  "Description": "Gravity field framework: point, axis, directional and spline fields, gravity queries, experimental automatic rigid-body physics and character gravity direction.",
+  "Category": "Physics",
+  "CreatedBy": "Mippi",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "Orbit",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "OrbitEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ]
+}
