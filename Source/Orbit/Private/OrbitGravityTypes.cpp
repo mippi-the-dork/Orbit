@@ -29,12 +29,41 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
 {
     OutAcceleration = FVector::ZeroVector;
     if (Position.ContainsNaN() || Field.Center.ContainsNaN() || !FMath::IsFinite(Field.Strength)) { return false; }
-    if (Field.bLimitToBox || Field.Shape == EOrbitGravityShape::Volume)
+    // Optional legacy box mask remains independent of the new Volume boundary.
+    const FVector Local = Field.Rotation.Inverse().RotateVector(Position - Field.Center);
+    if (Local.ContainsNaN()) { return false; }
+    if (Field.bLimitToBox &&
+        (FMath::Abs(Local.X) > Field.BoxExtents.X ||
+         FMath::Abs(Local.Y) > Field.BoxExtents.Y ||
+         FMath::Abs(Local.Z) > Field.BoxExtents.Z)) { return false; }
+
+    if (Field.Shape == EOrbitGravityShape::Volume)
     {
-        const FVector Local = Field.Rotation.Inverse().RotateVector(Position - Field.Center);
-        if (FMath::Abs(Local.X) > Field.BoxExtents.X ||
-            FMath::Abs(Local.Y) > Field.BoxExtents.Y ||
-            FMath::Abs(Local.Z) > Field.BoxExtents.Z) { return false; }
+        const double Radius = FMath::Max(Field.VolumeRadius, 1.0);
+        const double HalfHeight = FMath::Max(Field.VolumeHalfHeight, 1.0);
+        switch (Field.VolumeShape)
+        {
+        case EOrbitVolumeShape::Box:
+            if (FMath::Abs(Local.X) > Field.BoxExtents.X ||
+                FMath::Abs(Local.Y) > Field.BoxExtents.Y ||
+                FMath::Abs(Local.Z) > Field.BoxExtents.Z) { return false; }
+            break;
+        case EOrbitVolumeShape::Sphere:
+            if (Local.SizeSquared() > FMath::Square(Radius)) { return false; }
+            break;
+        case EOrbitVolumeShape::Cylinder:
+            if (FMath::Abs(Local.Z) > HalfHeight ||
+                FMath::Square(Local.X) + FMath::Square(Local.Y) > FMath::Square(Radius)) { return false; }
+            break;
+        case EOrbitVolumeShape::Capsule:
+        {
+            // Capsule Z is the source actor's local Up axis; HalfHeight includes the caps.
+            const double SegmentHalfHeight = FMath::Max(HalfHeight - Radius, 0.0);
+            const FVector Closest = FVector(0.0, 0.0, FMath::Clamp(Local.Z, -SegmentHalfHeight, SegmentHalfHeight));
+            if ((Local - Closest).SizeSquared() > FMath::Square(Radius)) { return false; }
+            break;
+        }
+        }
     }
 
     FVector Direction = FVector::ZeroVector;
@@ -71,16 +100,18 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         const FVector Radial = Position - Closest;
         Distance = Radial.Size();
         Direction = Radial.GetSafeNormal();
-        if (Field.Direction == EOrbitGravityDirection::SplineUp && Field.CurveUp.IsValidIndex(Segment + 1))
+        if ((Field.Direction == EOrbitGravityDirection::SplineUp || Field.Direction == EOrbitGravityDirection::SplineDown) && Field.CurveUp.IsValidIndex(Segment + 1))
         {
             Direction = FMath::Lerp(Field.CurveUp[Segment], Field.CurveUp[Segment + 1], Alpha).GetSafeNormal();
+            if (Field.Direction == EOrbitGravityDirection::SplineDown) { Direction *= -1.0; }
         }
         break;
     }
     }
 
     if (Field.MaxDistance > 0.0 && Distance > Field.MaxDistance) { return false; }
-    if (Field.Shape != EOrbitGravityShape::Directional && Field.Direction == EOrbitGravityDirection::Inward)
+    if ((Field.Shape == EOrbitGravityShape::Point || Field.Shape == EOrbitGravityShape::Axis || Field.Shape == EOrbitGravityShape::Spline) &&
+        Field.Direction == EOrbitGravityDirection::Inward)
     {
         Direction *= -1.0;
     }

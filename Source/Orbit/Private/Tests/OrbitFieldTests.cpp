@@ -105,3 +105,58 @@ bool FOrbitFalloffGravityTest::RunTest(const FString& Parameters)
     return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVolumeShapesTest, "Orbit.Field.VolumeShapes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitVolumeShapesTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Volume;
+    Field.VolumeShape = EOrbitVolumeShape::Box;
+    Field.BoxExtents = FVector(100.0, 200.0, 300.0);
+    FVector Acceleration;
+    TestTrue(TEXT("Box interior"), FOrbitFieldEvaluator::Evaluate(Field, FVector(90.0, 190.0, 290.0), Acceleration));
+    TestTrue(TEXT("Volume inward points along actor -Z"), Acceleration.Equals(FVector(0.0, 0.0, -980.0), 0.001));
+    Field.Direction = EOrbitGravityDirection::Outward;
+    TestTrue(TEXT("Volume outward is valid"), FOrbitFieldEvaluator::Evaluate(Field, FVector(90.0, 190.0, 290.0), Acceleration));
+    TestTrue(TEXT("Volume outward points along actor +Z"), Acceleration.Equals(FVector(0.0, 0.0, 980.0), 0.001));
+    Field.Direction = EOrbitGravityDirection::Inward;
+    TestFalse(TEXT("Box exterior"), FOrbitFieldEvaluator::Evaluate(Field, FVector(110.0, 0.0, 0.0), Acceleration));
+
+    Field.VolumeShape = EOrbitVolumeShape::Sphere;
+    Field.VolumeRadius = 200.0;
+    TestTrue(TEXT("Sphere interior"), FOrbitFieldEvaluator::Evaluate(Field, FVector(100.0, 100.0, 0.0), Acceleration));
+    TestFalse(TEXT("Sphere exterior"), FOrbitFieldEvaluator::Evaluate(Field, FVector(150.0, 150.0, 0.0), Acceleration));
+
+    Field.VolumeShape = EOrbitVolumeShape::Cylinder;
+    Field.VolumeRadius = 100.0;
+    Field.VolumeHalfHeight = 300.0;
+    Field.Rotation = FQuat(FVector::RightVector, PI / 2.0);
+    TestTrue(TEXT("Rotated cylinder interior"), FOrbitFieldEvaluator::Evaluate(Field, Field.Rotation.RotateVector(FVector(70.0, 60.0, 290.0)), Acceleration));
+    TestFalse(TEXT("Rotated cylinder radial exterior"), FOrbitFieldEvaluator::Evaluate(Field, Field.Rotation.RotateVector(FVector(110.0, 0.0, 0.0)), Acceleration));
+    TestFalse(TEXT("Rotated cylinder end exterior"), FOrbitFieldEvaluator::Evaluate(Field, Field.Rotation.RotateVector(FVector(0.0, 0.0, 310.0)), Acceleration));
+
+    Field.VolumeShape = EOrbitVolumeShape::Capsule;
+    TestTrue(TEXT("Capsule cap interior"), FOrbitFieldEvaluator::Evaluate(Field, Field.Rotation.RotateVector(FVector(0.0, 0.0, 290.0)), Acceleration));
+    TestFalse(TEXT("Capsule cap exterior"), FOrbitFieldEvaluator::Evaluate(Field, Field.Rotation.RotateVector(FVector(0.0, 0.0, 310.0)), Acceleration));
+    TestFalse(TEXT("Capsule radial exterior"), FOrbitFieldEvaluator::Evaluate(Field, Field.Rotation.RotateVector(FVector(110.0, 0.0, 0.0)), Acceleration));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineDirectionTest, "Orbit.Field.SplineOrientedDirections", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineDirectionTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Spline;
+    Field.Curve = { FVector(0.0, 0.0, 0.0), FVector(1000.0, 0.0, 0.0) };
+    Field.CurveUp = { FVector::UpVector, FVector::UpVector };
+    FVector Acceleration;
+    Field.Direction = EOrbitGravityDirection::SplineDown;
+    TestTrue(TEXT("Spline Down influences"), FOrbitFieldEvaluator::Evaluate(Field, FVector(500.0, 120.0, 0.0), Acceleration));
+    TestTrue(TEXT("Spline Down opposes authored Up"), Acceleration.Equals(FVector(0.0, 0.0, -980.0), 0.001));
+    Field.Direction = EOrbitGravityDirection::SplineUp;
+    TestTrue(TEXT("Spline Up influences"), FOrbitFieldEvaluator::Evaluate(Field, FVector(500.0, 120.0, 0.0), Acceleration));
+    TestTrue(TEXT("Spline Up follows authored Up"), Acceleration.Equals(FVector(0.0, 0.0, 980.0), 0.001));
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS

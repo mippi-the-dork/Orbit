@@ -6,5 +6,10 @@ public class Orbit : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DeveloperSettings" });
+        // Editor-only billboard sprite is loaded from the plugin's Resources directory.
+        if (Target.bBuildEditor)
+        {
+            PrivateDependencyModuleNames.Add("Projects");
+        }
     }
 }

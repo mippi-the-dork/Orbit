@@ -18,7 +18,18 @@ enum class EOrbitGravityDirection : uint8
 {
     Inward UMETA(DisplayName="Inward / Down"),
     Outward UMETA(DisplayName="Outward / Reversed"),
-    SplineUp UMETA(DisplayName="Spline Up (Oriented)")
+    SplineUp UMETA(DisplayName="Spline Up (Oriented)"),
+    SplineDown UMETA(DisplayName="Spline Down (Oriented)")
+};
+
+/** Boundary for a Volume gravity source. All shapes follow the source actor rotation. */
+UENUM(BlueprintType)
+enum class EOrbitVolumeShape : uint8
+{
+    Box,
+    Sphere,
+    Cylinder,
+    Capsule
 };
 
 UENUM(BlueprintType)
@@ -50,12 +61,15 @@ struct ORBIT_API FOrbitFieldDefinition
     EOrbitGravityShape Shape = EOrbitGravityShape::Point;
     EOrbitGravityDirection Direction = EOrbitGravityDirection::Inward;
     EOrbitGravityFalloff Falloff = EOrbitGravityFalloff::Constant;
+    EOrbitVolumeShape VolumeShape = EOrbitVolumeShape::Box;
     EOrbitGravityCombine Combine = EOrbitGravityCombine::Override;
     FVector Center = FVector::ZeroVector;
     FVector Axis = FVector::UpVector;
     FVector DirectionVector = FVector::DownVector;
     FQuat Rotation = FQuat::Identity;
     FVector BoxExtents = FVector(1000.0);
+    double VolumeRadius = 1000.0;
+    double VolumeHalfHeight = 1000.0;
     TArray<FVector> Curve;
     TArray<FVector> CurveUp;
     double Strength = 980.0;

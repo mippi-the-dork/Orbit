@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 3,
-  "VersionName": "0.1.2",
+  "Version": 4,
+  "VersionName": "0.1.3",
   "FriendlyName": "Orbit",
-  "Description": "Gravity field framework: point, axis, directional and spline fields, gravity queries, experimental automatic rigid-body physics and character gravity direction.",
+  "Description": "Gravity field framework: point, axis, directional, spline and shaped volume fields, gravity queries, experimental automatic rigid-body physics and character gravity direction.",
   "Category": "Physics",
   "CreatedBy": "Mippi",
   "CanContainContent": false,
