@@ -24,4 +24,12 @@ public:
     /** Returns true only when an unambiguous gravity-relative up direction can be formed. */
     UFUNCTION(BlueprintPure, Category="Orbit|Gravity")
     static bool GravityUpFromAcceleration(FVector Acceleration, FVector& Up);
+
+    /** Builds a stable gravity-relative Forward/Right frame from local Up and a preferred world-space heading. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Orientation")
+    static bool GetGravityTangentBasis(FVector Up, FVector PreferredForward, FVector& Forward, FVector& Right);
+
+    /** Aligns an existing world rotation's local +Z to Up while preserving heading on the gravity tangent plane. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Orientation")
+    static bool MakeGravityAlignedRotation(FRotator CurrentRotation, FVector Up, FRotator& AlignedRotation);
 };

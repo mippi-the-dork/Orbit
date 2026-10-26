@@ -1,3 +1,23 @@
+## 0.1.9 - Documentation update - Gravity Source Actor and Blueprint API references
+
+- Added `Docs/GRAVITY_SOURCE_ACTOR.md`, documenting every placeable Gravity Source property, all five source shapes, vortex physics behavior, gravity channels, combining, bounds, editor previews, live editing, limitations and practical examples.
+- Kept the current `Docs/COMPONENTS_AND_BLUEPRINT_API.md` (updated to v0.1.9) in the same folder, cross-linked both references and updated the README index.
+- Established a source-verification requirement for maintaining both reference documents in future Orbit iterations.
+- Documented a known Additive-only influence-reporting limitation found during the source review; no runtime code changed in this documentation-only pass.
+
+**Verification:** Both references were cross-checked against the Orbit v0.1.9 C++ headers and implementation. No Unreal compile or runtime validation was performed; plugin binaries and runtime source are unchanged.
+
+## 0.1.9 - Iteration 010 - Character gravity and orientation foundation
+
+- Extended the existing Orbit Character Gravity Component to apply gravity **magnitude** through native CharacterMovement.GravityScale as well as gravity direction. Gravity magnitude tracks live source Strength/falloff. Explicit zero-g fields set the scale to zero while retaining a stable orientation.
+- Capture and restore native Character Movement gravity direction and scale as the character enters and exits matching Orbit fields. Channel selection and the existing "Use Default Gravity Outside Fields" property are respected.
+- Added opt-in actor/capsule alignment to local Up with configurable quaternion smoothing and an option to return to the original Up when leaving a field. Off by default to avoid fighting an existing controller or camera.
+- Added pure Blueprint nodes `Get Gravity Tangent Basis` and `Make Gravity Aligned Rotation`, backed by a shared numerical gravity-frame helper with defined behavior for invalid/collinear vectors.
+- Added three `Orbit.Character.*` regression tests for tangent bases, orientation alignment and gravity magnitude conversion (18 total tests, 15 field + 3 character). Added dedicated Character test instructions and refreshed Blueprint/component documentation.
+- Preserved the existing source actors, three Gravity Channels, physics path, visualizer, streamlines and the complete supplied Orbit icon set.
+
+**Validation:** UE 5.8.3 documentation was consulted for the Character Movement direction and math interfaces, and the source/ZIP were statically checked. No UE installation is available in this environment, so this iteration has not been compiled or tested in PIE. Full controller, camera, animation, multiplayer and navigation integrations remain future work.
+
 ## 0.1.8 - Iteration 009 - Inward vortex spiral capture and live-edit clarification
 
 - Added a **Spiral Capture** physics behavior (default) for Vortex Inward on Point, Axis and Spline gravity. It steers simulated bodies toward a converging rotational flow and brakes excess tangential speed to avoid the runaway ejection observed with continuously applied tangential acceleration.

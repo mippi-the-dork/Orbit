@@ -1,5 +1,6 @@
 #include "OrbitBlueprintLibrary.h"
 #include "OrbitWorldSubsystem.h"
+#include "OrbitGravityFrame.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 
@@ -33,4 +34,18 @@ bool UOrbitBlueprintLibrary::GravityUpFromAcceleration(FVector Acceleration, FVe
     if (Acceleration.ContainsNaN() || Acceleration.IsNearlyZero()) { return false; }
     Up = -Acceleration.GetSafeNormal();
     return true;
+}
+
+
+bool UOrbitBlueprintLibrary::GetGravityTangentBasis(FVector Up, FVector PreferredForward, FVector& Forward, FVector& Right)
+{
+    return FOrbitGravityFrame::MakeTangentBasis(Up, PreferredForward, Forward, Right);
+}
+
+bool UOrbitBlueprintLibrary::MakeGravityAlignedRotation(FRotator CurrentRotation, FVector Up, FRotator& AlignedRotation)
+{
+    FQuat Output;
+    const bool bValid = FOrbitGravityFrame::MakeAlignedRotation(Up, CurrentRotation.Quaternion(), Output);
+    AlignedRotation = bValid ? Output.Rotator() : CurrentRotation;
+    return bValid;
 }

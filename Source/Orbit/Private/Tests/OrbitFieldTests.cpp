@@ -461,3 +461,61 @@ bool FOrbitVortexSpiralCaptureTest::RunTest(const FString& Parameters)
     return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "OrbitGravityFrame.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitGravityFrameBasisTest,
+    "Orbit.Character.GravityRelativeBasis", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitGravityFrameBasisTest::RunTest(const FString& Parameters)
+{
+    FVector Forward, Right;
+    TestTrue(TEXT("Tangent basis exists for inverted gravity"),
+        FOrbitGravityFrame::MakeTangentBasis(FVector::DownVector, FVector::ForwardVector, Forward, Right));
+    TestTrue(TEXT("Forward is tangent to new ground"), FMath::Abs(FVector::DotProduct(Forward, FVector::DownVector)) < 1e-6);
+    TestTrue(TEXT("Right is tangent to new ground"), FMath::Abs(FVector::DotProduct(Right, FVector::DownVector)) < 1e-6);
+    TestTrue(TEXT("Correct-handed tangent frame"), FVector::CrossProduct(Forward, Right).Equals(FVector::DownVector, 1e-5));
+
+    TestTrue(TEXT("Parallel heading uses safe fallback"),
+        FOrbitGravityFrame::MakeTangentBasis(FVector::ForwardVector, FVector::ForwardVector, Forward, Right));
+    TestTrue(TEXT("Fallback forward is perpendicular to Up"),
+        FMath::Abs(FVector::DotProduct(Forward, FVector::ForwardVector)) < 1e-6);
+    TestFalse(TEXT("No basis for zero Up"),
+        FOrbitGravityFrame::MakeTangentBasis(FVector::ZeroVector, FVector::ForwardVector, Forward, Right));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitGravityFrameRotationTest,
+    "Orbit.Character.GravityRelativeRotation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitGravityFrameRotationTest::RunTest(const FString& Parameters)
+{
+    const FQuat Starting = FQuat::Identity;
+    FQuat Aligned;
+    const FVector Up = FVector(1.0, 1.0, 1.0).GetSafeNormal();
+    TestTrue(TEXT("Can align arbitrary spherical Up"),
+        FOrbitGravityFrame::MakeAlignedRotation(Up, Starting, Aligned));
+    TestTrue(TEXT("Local Z matches target Up"), Aligned.GetUpVector().Equals(Up, 1e-5));
+    TestTrue(TEXT("Rotation is normalized"), Aligned.IsNormalized());
+    TestFalse(TEXT("Cannot align to zero Up"),
+        FOrbitGravityFrame::MakeAlignedRotation(FVector::ZeroVector, Starting, Aligned));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitGravityMagnitudeTest,
+    "Orbit.Character.GravityMagnitude", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitGravityMagnitudeTest::RunTest(const FString& Parameters)
+{
+    float Scale = -1.0f;
+    TestTrue(TEXT("Earth gravity can be mapped"), FOrbitGravityFrame::MakeGravityScale(980.0, 980.0, 100.0, Scale));
+    TestTrue(TEXT("Matching default gravity gives scale 1"), FMath::IsNearlyEqual(Scale, 1.0f));
+    TestTrue(TEXT("Reduced field gravity can be mapped"), FOrbitGravityFrame::MakeGravityScale(245.0, 980.0, 100.0, Scale));
+    TestTrue(TEXT("Quarter gravity gives scale 0.25"), FMath::IsNearlyEqual(Scale, 0.25f));
+    TestTrue(TEXT("Explicit zero-g can be mapped"), FOrbitGravityFrame::MakeGravityScale(0.0, 980.0, 100.0, Scale));
+    TestTrue(TEXT("Zero-g gives scale 0"), FMath::IsNearlyZero(Scale));
+    TestTrue(TEXT("Upper safety clamp works"), FOrbitGravityFrame::MakeGravityScale(20000.0, 980.0, 2.0, Scale));
+    TestTrue(TEXT("Safety clamp gives scale 2"), FMath::IsNearlyEqual(Scale, 2.0f));
+    TestFalse(TEXT("Zero native gravity cannot supply an Orbit magnitude"),
+        FOrbitGravityFrame::MakeGravityScale(980.0, 0.0, 100.0, Scale));
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS

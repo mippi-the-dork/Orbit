@@ -2,7 +2,7 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.1.8 (Iteration 009, experimental)  
+**Current version:** 0.1.9 (Iteration 010, experimental)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
 **Status:** Source package prepared; compile, PIE and packaged-game validation are pending.
@@ -27,11 +27,11 @@ Orbit is a *gravity framework*, not a Character Movement plugin. The world owns 
 | Runtime world subsystem and Blueprint queries | Implemented; pending UE test |
 | Automatic ordinary simulated rigid-body gravity | **Experimental** game-thread `AddForce` bridge |
 | Gravity-enabled-state preservation and opt-out tags | Implemented; pending UE test |
-| Optional Character Movement gravity-direction bridge | **Experimental**, not a complete locomotion/camera solution |
+| Optional Character Movement direction/strength bridge, native-gravity restoration and opt-in actor alignment | **Experimental**, not a complete locomotion/camera solution |
 | Editor volumetric field arrows and purple streamlines, relative density (1–10), influence wireframes | Implemented; pending UE test |
 | Actor viewport billboard from supplied Orbit artwork | Implemented with Editor-only transient texture; pending UE visual test |
 | Orbit editor icons | Registered for plugin browser, gravity-source actor, character gravity component and class thumbnail; pending UE visual test |
-| Field math automated tests | 15 tests authored, including streamline tracing and vortex capture; pending UE 5.8.3 verification |
+| Field math automated tests | 18 tests authored, including streamline tracing and vortex capture; pending UE 5.8.3 verification |
 | Chaos solver callbacks and per-body substep gravity | **Not yet implemented** |
 | Gravity-aware NavMesh, EQS, AI MoveTo | **Not yet implemented** |
 | Ragdoll/cloth/vehicles/water/Niagara/PCG | **Not yet integrated** |
@@ -61,6 +61,14 @@ Orbit now includes an **Editor-only** `OrbitEditor` module for Slate class-icon 
 There is **no standalone Orbit Content Browser asset class** in this iteration. The 64px artwork is used for the existing source actor class thumbnail and is rasterized to `Resources/Icons/OrbitBillboard.png` for an Editor-only, selectable billboard component. The billboard uses a session-cached transient texture; no Content Browser asset is created. No toolbar is registered yet.
 
 **Verification:** Restart the Editor after building so the new Slate style is loaded. Check **Edit > Plugins** for the plugin icon, place an `Orbit Gravity Source` and check its World Outliner icon, inspect the source class thumbnail in class selection views, then open a Character Blueprint's **Add Component** picker for `Orbit Character Gravity Component`. Rendering remains untested against the user's actual UE 5.8.3 installation.
+
+## Character Movement adapter (0.1.9)
+
+Add **Orbit Character Gravity Component** to a Character Blueprint. It now samples the Character query and updates both `SetGravityDirection()` and `GravityScale` (on by default) to match the sampled acceleration magnitude, rather than only rotating the gravity vector. When leaving all matching sources, it restores the Character Movement direction and scale captured before Orbit first took control. An explicit zero-strength field sets `GravityScale` to 0 while keeping orientation stable.
+
+For planets and twisted hallways, optionally enable **Align Actor to Gravity**. This rotates the Character's Actor/capsule to local Up while preserving its projected forward heading; response speed is editable during PIE. The option is **off by default** because existing controller/camera schemes often own rotation. Disable `Use Controller Rotation Yaw` and any competing actor-rotation logic in your test Character before enabling. This is an experimental single-player orientation adapter, **not** complete camera, controller, locomotion, or network prediction support.
+
+New pure Blueprint nodes: `Get Gravity Tangent Basis` and `Make Gravity Aligned Rotation`. See `Docs/COMPONENTS_AND_BLUEPRINT_API.md` and `Docs/ITERATION_010.md`.
 
 ## First physics test
 
@@ -199,6 +207,8 @@ This uses game-thread `UPrimitiveComponent::AddForce(..., bAccelChange=true)` on
 - `Docs/COMPATIBILITY.md`: implementation and validation status, without inflated support claims.
 - `Docs/TEST_PLAN.md`: step-by-step Editor, physics, field and packaging smoke tests.
 - `Docs/ARCHITECTURE.md`: module design, extension contracts and future roadmap.
+- `Docs/COMPONENTS_AND_BLUEPRINT_API.md`: maintained reference for both addable Orbit components and all 13 Orbit-authored Blueprint functions.
+- `Docs/GRAVITY_SOURCE_ACTOR.md`: maintained guide for the placeable Gravity Source Actor, shapes, properties, channels, vortex, debug visualization and gameplay examples.
 - `Docs/Orbit_Master_Roadmap.md`: living project-wide roadmap.
 - `Source/Orbit/Private/Tests/OrbitFieldTests.cpp`: ten Unreal automation tests under `Orbit.Field.*`.
 
