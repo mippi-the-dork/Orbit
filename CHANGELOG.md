@@ -1,3 +1,26 @@
+## 0.2.2 - Iteration 013 - Character landing, facing, live Details and transforms
+
+- Reworked the near-floor assist to use UE 5.8.3 native `K2_FindFloor` walkable sweep results instead of incorrectly feeding shortened floor-sweep hits into the actual-landing `IsValidLandingSpot` validation. Added native floor gap and walkability diagnostics. Manual sphere/low-g validation required; do not treat it as a verified fix yet.
+- Added editor-only **Mirror Editor Changes to PIE** on Gravity Source (default true), copying only the changed editable Orbit property to matching PIE-world source actor(s) by GUID or exact actor/level identity. Exposed `Last Editor PIE Mirror Count` diagnostic. Retained game-world Blueprint setters.
+- Added **Face Movement Direction** and smoothing/threshold controls to Orbit Character Controls. Actor facing follows latest gravity-tangent movement input independently of the quaternion Spring Arm camera.
+- Added two Blueprint Library convenience wrapper nodes taking a Character target (Self in Character Blueprints) to resolve component target type errors without removing the original component API.
+- Added four gravity-frame/transform Blueprint utilities (explicit gravity Up or Actor query, relative-to-world and world-to-relative transforms) compatible with Unreal's standard transform math nodes.
+- Two regression tests added for transform round trips and gravity-tangent facing. Three maintained reference guides updated plus `Docs/ITERATION_013.md` and test plan.
+- Optional OrbitMover companion version synchronized; Mover behavior and Chaos/rollback support unchanged.
+
+**Verification:** Local source review, script checks, ZIP integrity checks. **Not compiled or PIE-tested against UE 5.8.3.**
+
+## 0.2.0 - Iteration 011 - Optional Kinematic Mover Integration
+
+- Added separately enabled `OrbitMover` companion plugin with the Blueprint-spawnable `Orbit Mover Gravity` component. The core `Orbit` plugin remains independent of Epic Mover.
+- Applied the existing Orbit field's gravity acceleration and local Up through Mover's public overrides at the synchronous kinematic pre-simulation callback. Respect Orbit Receiver Gravity Channels and the source's Affect Characters setting.
+- Explicit zero-gravity fields preserve a stable Up; source exit and disabled adapters relinquish Orbit overrides to native Mover.
+- Added two optional Blueprint functions and runtime diagnostic properties, plus three pure regression tests for gravity/Up policy.
+- Chaos Mover and async backends explicitly excluded until gravity can be injected before the backend's simulation input snapshot. Network rollback and source-state replay not implemented.
+- Added and linked `Docs/MOVER_INTEGRATION.md`; updated existing component/API and Gravity Source references to cover the optional integration.
+
+**Verification:** Complete source archive checked. Unreal Engine 5.8.3 compile, PIE and network tests are pending. No engine source changed.
+
 ## 0.1.9 - Documentation update - Gravity Source Actor and Blueprint API references
 
 - Added `Docs/GRAVITY_SOURCE_ACTOR.md`, documenting every placeable Gravity Source property, all five source shapes, vortex physics behavior, gravity channels, combining, bounds, editor previews, live editing, limitations and practical examples.
@@ -111,6 +134,18 @@
 **Verification:** Resource and packaging checks completed locally. UE 5.8.3 compile and visual verification remain pending.
 
 # Changelog
+
+## 0.2.1 - Iteration 012 - Character Movement reliability
+
+- Added same-world runtime Source **Set Gravity Strength** and World Subsystem **Refresh Active Sources** Blueprint nodes; PIE-world Details changes also refresh active source snapshots immediately.
+- Added PIE diagnostics for actual applied native gravity scale, dominant field ID and near-floor walkable sweep distance.
+- Added opt-in **near-floor landing assist** gated by native UE 5.8.3 gravity-relative capsule sweep, landing validity, Falling movement mode, and slow descending speed. No teleport or fake floor hits.
+- Added optional **Orbit Character Controls** component with gravity-tangent movement and quaternion/parallel-transport camera, preferentially rotating the existing Spring Arm directly to avoid world pitch clamp. Input bindings must be rewired deliberately in the Third Person character Blueprint.
+- Added three pure regression tests, documentation, sphere repro instructions, and updated all three maintained guides. OrbitMover code unchanged.
+
+**Verification:** Source authored and ZIP consistency checked. Engine compilation, automated test execution and PIE landing/camera validation not available in this environment.
+
+
 
 ## 0.1.0 - Iteration 001 - Experimental
 

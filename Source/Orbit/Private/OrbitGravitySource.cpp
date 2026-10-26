@@ -14,6 +14,9 @@
 #include "Misc/Paths.h"
 #include "Engine/Texture2D.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/UObjectIterator.h"
+#include "UObject/UnrealType.h"
+#include "Engine/Level.h"
 #endif
 
 AOrbitGravitySource::AOrbitGravitySource()
@@ -41,8 +44,69 @@ AOrbitGravitySource::AOrbitGravitySource()
 void AOrbitGravitySource::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
     Super::PostEditChangeProperty(PropertyChangedEvent);
-    // UI property edits should rebuild streamlines on the very next viewport tick.
     bStreamlinesCached = false;
+    UWorld* World = GetWorld();
+    if (!World) { return; }
+
+    if (World->IsGameWorld())
+    {
+        // Editing the actual PIE actor works immediately, whether edited by
+        // Details or Blueprint (source snapshots also rebuild each world tick).
+        if (UOrbitWorldSubsystem* Subsystem = World->GetSubsystem<UOrbitWorldSubsystem>())
+        {
+            Subsystem->RefreshActiveSources();
+        }
+        return;
+    }
+
+    LastEditorPIEMirrorCount = 0;
+    if (World->WorldType != EWorldType::Editor || !bMirrorEditorChangesToPIE ||
+        !PropertyChangedEvent.MemberProperty)
+    {
+        return;
+    }
+
+    FProperty* EditedProperty = PropertyChangedEvent.MemberProperty;
+    // Never copy component pointers, Actor base properties, or transient debug
+    // values between worlds. Only user-authored Orbit properties are eligible.
+    if (!EditedProperty->HasAnyPropertyFlags(CPF_Edit) ||
+        EditedProperty->GetOwnerClass() != AOrbitGravitySource::StaticClass() ||
+        EditedProperty->HasAnyPropertyFlags(CPF_Transient))
+    {
+        return;
+    }
+
+    const FGuid EditorGuid = GetActorGuid();
+    for (TObjectIterator<AOrbitGravitySource> It; It; ++It)
+    {
+        AOrbitGravitySource* RuntimeActor = *It;
+        if (!IsValid(RuntimeActor) || RuntimeActor == this || RuntimeActor->IsTemplate() ||
+            RuntimeActor->GetClass() != GetClass())
+        {
+            continue;
+        }
+        UWorld* RuntimeWorld = RuntimeActor->GetWorld();
+        if (!RuntimeWorld || RuntimeWorld->WorldType != EWorldType::PIE) { continue; }
+        const FGuid RuntimeGuid = RuntimeActor->GetActorGuid();
+        const bool bGuidMatches = EditorGuid.IsValid() && RuntimeGuid.IsValid() &&
+            EditorGuid == RuntimeGuid;
+        // Some editor simulation paths remap GUIDs. Fall back only to the
+        // original actor name PLUS exact (PIE-prefix-adjusted) level package.
+        const bool bNameAndLevelMatch = RuntimeActor->GetFName() == GetFName() &&
+            RuntimeActor->GetLevel() && GetLevel() &&
+            RuntimeActor->GetLevel()->GetOutermost()->GetName().EndsWith(
+                GetLevel()->GetOutermost()->GetName());
+        const bool bIdentityMatches = bGuidMatches || bNameAndLevelMatch;
+        if (!bIdentityMatches) { continue; }
+
+        EditedProperty->CopyCompleteValue_InContainer(RuntimeActor, this);
+        RuntimeActor->bStreamlinesCached = false;
+        if (UOrbitWorldSubsystem* Subsystem = RuntimeWorld->GetSubsystem<UOrbitWorldSubsystem>())
+        {
+            Subsystem->RefreshActiveSources();
+        }
+        ++LastEditorPIEMirrorCount;
+    }
 }
 
 void AOrbitGravitySource::PostRegisterAllComponents()
@@ -96,6 +160,22 @@ void AOrbitGravitySource::EndPlay(const EEndPlayReason::Type EndPlayReason)
         }
     }
     Super::EndPlay(EndPlayReason);
+}
+
+void AOrbitGravitySource::SetGravityStrength(double NewStrength)
+{
+    if (!FMath::IsFinite(NewStrength) || NewStrength < 0.0)
+    {
+        return;
+    }
+    Strength = NewStrength;
+    if (UWorld* World = GetWorld(); World && World->IsGameWorld())
+    {
+        if (UOrbitWorldSubsystem* Subsystem = World->GetSubsystem<UOrbitWorldSubsystem>())
+        {
+            Subsystem->RefreshActiveSources();
+        }
+    }
 }
 
 void AOrbitGravitySource::BuildDefinition(FOrbitFieldDefinition& Field) const

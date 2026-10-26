@@ -15,6 +15,12 @@ public:
     /** Aligns local +Z to Up while preserving as much of CurrentRotation's forward heading as possible. */
     static bool MakeAlignedRotation(const FVector& Up, const FQuat& CurrentRotation, FQuat& OutRotation);
 
+    /** Safe test of whether native near-floor landing assistance can even be considered.
+     *  The movement component MUST still validate a collision sweep and walkable landing hit. */
+    static bool ShouldAttemptNearFloorLanding(bool bFalling, double VerticalVelocityUp,
+        double HorizontalSpeed, double MaxApproachSpeed, double FloorDistance,
+        double MaxLandingDistance);
+
     /** Converts acceleration magnitude to CharacterMovement.GravityScale relative to native WorldSettings gravity.
      *  Does not invent an acceleration when world gravity is zero.
      */

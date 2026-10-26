@@ -75,6 +75,16 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex|Spiral Capture", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward", ClampMin="0.1", ClampMax="20.0", UIMin="0.5", UIMax="6.0"))
     double VortexMaxAccelerationFactor = 3.0;
 
+    /** In PIE, mirror direct editor-world Details edits to the corresponding
+     *  runtime source when their stable actor identity matches. Editor-only. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Runtime")
+    bool bMirrorEditorChangesToPIE = true;
+
+    /** Last number of matching PIE actor instances updated by an editor-world
+     *  Details property edit. Visible only for debugging the editing workflow. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Debug|Runtime")
+    int32 LastEditorPIEMirrorCount = 0;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(ClampMin="0.0", Units="cm/s^2"))
     double Strength = 980.0;
 
@@ -128,6 +138,12 @@ public:
     /** World-space spline sampling interval. Lower values improve bend fidelity at a cost. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Spline", meta=(ClampMin="25.0", Units="cm"))
     double SplineSampleSpacing = 200.0;
+
+    /** Set strength on THIS world instance and publish it to gravity consumers immediately.
+     *  Prefer this to an unqualified editor actor property change during PIE debugging.
+     *  Does not replicate and does not change the saved editor-world actor. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Field|Runtime")
+    void SetGravityStrength(double NewStrength);
 
     UFUNCTION(BlueprintCallable, Category="Orbit|Field")
     FOrbitGravitySample SampleSource(const FVector& WorldLocation) const;

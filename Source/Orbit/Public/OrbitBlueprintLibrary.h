@@ -5,6 +5,8 @@
 #include "OrbitGravityTypes.h"
 #include "OrbitBlueprintLibrary.generated.h"
 
+class ACharacter;
+
 UCLASS()
 class ORBIT_API UOrbitBlueprintLibrary : public UBlueprintFunctionLibrary
 {
@@ -32,4 +34,34 @@ public:
     /** Aligns an existing world rotation's local +Z to Up while preserving heading on the gravity tangent plane. */
     UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Orientation")
     static bool MakeGravityAlignedRotation(FRotator CurrentRotation, FVector Up, FRotator& AlignedRotation);
+
+    /** Constructs a world-space frame: local +Z = Gravity Up; local +X is the
+     *  preferred heading projected onto the tangent plane. Returns false for
+     *  invalid Up, without silently inventing a gravity direction. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Transforms")
+    static bool MakeGravityFrame(FVector WorldOrigin, FVector GravityUp,
+        FVector PreferredForward, FTransform& GravityFrame);
+
+    /** Source-aware gravity frame using the Actor's Receiver channels and a
+     *  Character gravity query. Actor can be Self in ordinary Actor Blueprints. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Transforms", meta=(DefaultToSelf="Actor"))
+    static bool MakeGravityFrameForActor(const AActor* Actor, FVector WorldPosition,
+        FVector PreferredForward, FTransform& GravityFrame);
+
+    /** Interpret RelativeTransform as local to the supplied gravity frame. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Transforms")
+    static FTransform GravityLocalToWorldTransform(const FTransform& RelativeTransform, const FTransform& GravityFrame);
+
+    /** Express a world-space transform in the supplied gravity frame. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Transforms")
+    static FTransform GravityWorldToLocalTransform(const FTransform& WorldTransform, const FTransform& GravityFrame);
+
+    /** Convenient Character Blueprint call (no Orbit Controls component target pin).
+     *  Requires Orbit Character Controls component on that Character. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Controls|Input", meta=(DefaultToSelf="Character", DisplayName="Apply Orbit Gravity Relative Move"))
+    static void ApplyOrbitGravityRelativeMove(ACharacter* Character, FVector2D MoveAxis);
+
+    /** Convenient Character Blueprint call (no Orbit Controls component target pin). */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Controls|Input", meta=(DefaultToSelf="Character", DisplayName="Apply Orbit Gravity Relative Look"))
+    static void ApplyOrbitGravityRelativeLook(ACharacter* Character, FVector2D LookAxis);
 };

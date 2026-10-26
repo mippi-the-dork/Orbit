@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 10,
-  "VersionName": "0.1.9",
+  "Version": 13,
+  "VersionName": "0.2.2",
   "FriendlyName": "Orbit",
-  "Description": "Gravity framework with point, axis, spline, and volume fields, three gravity channels, signed vortex fields with spiral-capture physics, Character Movement gravity magnitude and optional alignment, configurable 3D vector previews and streamlines, and experimental rigid-body integration.",
+  "Description": "Gravity fields, experimental native Character Movement and controls, reliable near-floor diagnostics, gravity-relative transform utilities, and optional Mover integration.",
   "Category": "Physics",
   "CreatedBy": "Mippi",
   "CanContainContent": false,

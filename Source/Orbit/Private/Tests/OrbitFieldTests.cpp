@@ -1,4 +1,5 @@
 #include "OrbitGravityTypes.h"
+#include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
@@ -516,6 +517,120 @@ bool FOrbitGravityMagnitudeTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Safety clamp gives scale 2"), FMath::IsNearlyEqual(Scale, 2.0f));
     TestFalse(TEXT("Zero native gravity cannot supply an Orbit magnitude"),
         FOrbitGravityFrame::MakeGravityScale(980.0, 0.0, 100.0, Scale));
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "OrbitGravityFrame.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitNearFloorSafetyTest,
+    "Orbit.Character.NearFloorSafety", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitNearFloorSafetyTest::RunTest(const FString& Parameters)
+{
+    const auto Eligible = [](bool bFalling, double VelUp, double Sideways, double Floor)
+    {
+        return FOrbitGravityFrame::ShouldAttemptNearFloorLanding(bFalling, VelUp, Sideways, 100.0, Floor, 10.0);
+    };
+    TestTrue(TEXT("Slow descent above valid sweep range is eligible"), Eligible(true, -20.0, 5.0, 6.0));
+    TestFalse(TEXT("Walking never triggers assist"), Eligible(false, -20.0, 5.0, 6.0));
+    TestFalse(TEXT("Rising jump never triggers assist"), Eligible(true, 20.0, 5.0, 6.0));
+    TestFalse(TEXT("Fast fall must use native landing"), Eligible(true, -500.0, 5.0, 6.0));
+    TestFalse(TEXT("Fast lateral motion must use native landing"), Eligible(true, -20.0, 150.0, 6.0));
+    TestFalse(TEXT("Missing ground cannot trigger assist"), Eligible(true, -20.0, 5.0, -1.0));
+    TestFalse(TEXT("Out of range ground cannot trigger assist"), Eligible(true, -20.0, 5.0, 11.0));
+    TestFalse(TEXT("NaN velocity must be rejected"),
+        FOrbitGravityFrame::ShouldAttemptNearFloorLanding(true, std::numeric_limits<double>::quiet_NaN(), 0., 100., 5., 10.));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitEquatorTangentTest,
+    "Orbit.Character.EquatorTangentMovement", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitEquatorTangentTest::RunTest(const FString& Parameters)
+{
+    for (const FVector& Up : TArray<FVector>{ FVector::ForwardVector, -FVector::ForwardVector,
+        FVector::RightVector, -FVector::RightVector, FVector::UpVector, -FVector::UpVector })
+    {
+        FVector Forward, Right;
+        TestTrue(TEXT("Valid basis at every cardinal planet location"),
+            FOrbitGravityFrame::MakeTangentBasis(Up, FVector::ForwardVector, Forward, Right));
+        TestTrue(TEXT("Forward movement remains tangent"), FMath::Abs(FVector::DotProduct(Up, Forward)) < 1e-5);
+        TestTrue(TEXT("Right movement remains tangent"), FMath::Abs(FVector::DotProduct(Up, Right)) < 1e-5);
+        TestTrue(TEXT("Both input directions stay nonzero"), Forward.SizeSquared() > .99 && Right.SizeSquared() > .99);
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitCameraTransportTest,
+    "Orbit.Character.GravityCameraTransport", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitCameraTransportTest::RunTest(const FString& Parameters)
+{
+    FVector Up = FVector::UpVector;
+    FVector Heading = FVector::ForwardVector;
+    for (int32 Step = 1; Step <= 180; ++Step)
+    {
+        const double Angle = FMath::DegreesToRadians(static_cast<double>(Step));
+        const FVector NextUp(FMath::Sin(Angle), 0.0, FMath::Cos(Angle));
+        const FQuat Transport = FQuat::FindBetweenNormals(Up, NextUp);
+        FVector Right;
+        TestTrue(TEXT("Basis remains valid through pole and equator"),
+            FOrbitGravityFrame::MakeTangentBasis(NextUp, Transport.RotateVector(Heading), Heading, Right));
+        TestTrue(TEXT("No tangent NaN"), !Heading.ContainsNaN() && !Right.ContainsNaN());
+        TestTrue(TEXT("Tangent perpendicular to transported Up"), FMath::Abs(FVector::DotProduct(Heading, NextUp)) < 1e-5);
+        Up = NextUp;
+    }
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "OrbitBlueprintLibrary.h"
+#include "Math/RotationMatrix.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitGravityFrameRoundTripTest,
+    "Orbit.Character.GravityFrameTransformRoundTrip", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitGravityFrameRoundTripTest::RunTest(const FString& Parameters)
+{
+    for (const FVector& GravityUp : TArray<FVector>{FVector::ForwardVector,
+        -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector,
+        FVector::UpVector, -FVector::UpVector, FVector(0.4, 0.2, 0.7).GetSafeNormal()})
+    {
+        FTransform Frame;
+        TestTrue(TEXT("Build non-world-up frame"), UOrbitBlueprintLibrary::MakeGravityFrame(
+            FVector(1000., -1200., 2000.), GravityUp, FVector::ForwardVector, Frame));
+        TestTrue(TEXT("Frame local Z equals gravity Up"),
+            Frame.GetUnitAxis(EAxis::Z).Equals(GravityUp, 1.e-4));
+        const FTransform Local(FQuat(FVector::UpVector, 0.4), FVector(15., 22., 35.), FVector::OneVector);
+        const FTransform World = UOrbitBlueprintLibrary::GravityLocalToWorldTransform(Local, Frame);
+        const FTransform Back = UOrbitBlueprintLibrary::GravityWorldToLocalTransform(World, Frame);
+        TestTrue(TEXT("Transform local/world round-trip location"),
+            Back.GetLocation().Equals(Local.GetLocation(), 1.e-3));
+        TestTrue(TEXT("Transform local/world round-trip rotation"),
+            Back.GetRotation().Equals(Local.GetRotation(), 1.e-3));
+    }
+    FTransform Invalid;
+    TestFalse(TEXT("Reject zero-Up frame"), UOrbitBlueprintLibrary::MakeGravityFrame(
+        FVector::ZeroVector, FVector::ZeroVector, FVector::ForwardVector, Invalid));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMovementFacingTangentTest,
+    "Orbit.Character.MovementFacingTangent", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMovementFacingTangentTest::RunTest(const FString& Parameters)
+{
+    for (const FVector& Up : TArray<FVector>{FVector::ForwardVector, FVector::UpVector,
+        -FVector::ForwardVector, -FVector::UpVector})
+    {
+        FVector Forward, Right;
+        TestTrue(TEXT("Valid surface basis"), FOrbitGravityFrame::MakeTangentBasis(
+            Up, FVector(1., 0.5, 0.1), Forward, Right));
+        const FVector Desired = (Forward * 0.7 + Right * 0.4).GetSafeNormal();
+        const FQuat Facing = FRotationMatrix::MakeFromXZ(Desired, Up).ToQuat();
+        TestTrue(TEXT("Facing forward matches tangent movement"),
+            Facing.GetForwardVector().Equals(Desired, 1.e-4));
+        TestTrue(TEXT("Facing Up matches gravity Up"),
+            Facing.GetUpVector().Equals(Up, 1.e-4));
+    }
     return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -3,6 +3,9 @@
 #include "OrbitGravityFrame.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/Character.h"
+#include "OrbitCharacterControlsComponent.h"
+#include "Math/RotationMatrix.h"
 
 FOrbitGravitySample UOrbitBlueprintLibrary::SampleOrbitGravity(const UObject* WorldContextObject, FVector WorldPosition, EOrbitGravityChannel Channel)
 {
@@ -48,4 +51,66 @@ bool UOrbitBlueprintLibrary::MakeGravityAlignedRotation(FRotator CurrentRotation
     const bool bValid = FOrbitGravityFrame::MakeAlignedRotation(Up, CurrentRotation.Quaternion(), Output);
     AlignedRotation = bValid ? Output.Rotator() : CurrentRotation;
     return bValid;
+}
+
+bool UOrbitBlueprintLibrary::MakeGravityFrame(FVector WorldOrigin, FVector GravityUp,
+    FVector PreferredForward, FTransform& GravityFrame)
+{
+    GravityFrame = FTransform::Identity;
+    if (WorldOrigin.ContainsNaN()) { return false; }
+    FVector Forward, Right;
+    if (!FOrbitGravityFrame::MakeTangentBasis(GravityUp, PreferredForward, Forward, Right))
+    {
+        return false;
+    }
+    const FQuat Rotation = FRotationMatrix::MakeFromXZ(Forward, GravityUp.GetSafeNormal()).ToQuat();
+    GravityFrame = FTransform(Rotation, WorldOrigin, FVector::OneVector);
+    return !GravityFrame.ContainsNaN();
+}
+
+bool UOrbitBlueprintLibrary::MakeGravityFrameForActor(const AActor* Actor,
+    FVector WorldPosition, FVector PreferredForward, FTransform& GravityFrame)
+{
+    GravityFrame = FTransform::Identity;
+    const UWorld* World = Actor ? Actor->GetWorld() : nullptr;
+    const UOrbitWorldSubsystem* Gravity = World ? World->GetSubsystem<UOrbitWorldSubsystem>() : nullptr;
+    if (!Gravity) { return false; }
+    const FOrbitGravitySample Sample = Gravity->SampleGravityForActor(
+        Actor, WorldPosition, EOrbitGravityChannel::Character);
+    return Sample.bHasValidDirection && MakeGravityFrame(WorldPosition, Sample.Up,
+        PreferredForward, GravityFrame);
+}
+
+FTransform UOrbitBlueprintLibrary::GravityLocalToWorldTransform(
+    const FTransform& RelativeTransform, const FTransform& GravityFrame)
+{
+    return RelativeTransform * GravityFrame;
+}
+
+FTransform UOrbitBlueprintLibrary::GravityWorldToLocalTransform(
+    const FTransform& WorldTransform, const FTransform& GravityFrame)
+{
+    return WorldTransform.GetRelativeTransform(GravityFrame);
+}
+
+void UOrbitBlueprintLibrary::ApplyOrbitGravityRelativeMove(ACharacter* Character, FVector2D MoveAxis)
+{
+    if (IsValid(Character))
+    {
+        if (UOrbitCharacterControlsComponent* Controls = Character->FindComponentByClass<UOrbitCharacterControlsComponent>())
+        {
+            Controls->ApplyGravityRelativeMove(MoveAxis);
+        }
+    }
+}
+
+void UOrbitBlueprintLibrary::ApplyOrbitGravityRelativeLook(ACharacter* Character, FVector2D LookAxis)
+{
+    if (IsValid(Character))
+    {
+        if (UOrbitCharacterControlsComponent* Controls = Character->FindComponentByClass<UOrbitCharacterControlsComponent>())
+        {
+            Controls->ApplyGravityRelativeLook(LookAxis);
+        }
+    }
 }

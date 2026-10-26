@@ -34,7 +34,13 @@ public:
             StyleSet->RootToContentDir(TEXT("Icons/OrbitActor_16"), TEXT(".svg")), Icon16));
         StyleSet->Set(TEXT("ClassIcon.OrbitCharacterGravityComponent"), new FSlateVectorImageBrush(
             StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
+        StyleSet->Set(TEXT("ClassIcon.OrbitCharacterControlsComponent"), new FSlateVectorImageBrush(
+            StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
         StyleSet->Set(TEXT("ClassIcon.OrbitGravityReceiverComponent"), new FSlateVectorImageBrush(
+            StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
+        // Optional OrbitMover companion is registered by class name only; this Editor module
+        // has no compile-time dependency on Epic Mover or the OrbitMover plugin.
+        StyleSet->Set(TEXT("ClassIcon.OrbitMoverGravityComponent"), new FSlateVectorImageBrush(
             StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
 
         // A gravity source is a placeable actor, not a custom Content Browser

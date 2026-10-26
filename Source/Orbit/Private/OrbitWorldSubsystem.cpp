@@ -39,6 +39,11 @@ TStatId UOrbitWorldSubsystem::GetStatId() const
     RETURN_QUICK_DECLARE_CYCLE_STAT(UOrbitWorldSubsystem, STATGROUP_Tickables);
 }
 
+void UOrbitWorldSubsystem::RefreshActiveSources()
+{
+    UpdateSourceSnapshot();
+}
+
 void UOrbitWorldSubsystem::RegisterSource(AOrbitGravitySource* Source)
 {
     if (IsValid(Source) && Source->GetWorld() == GetWorld())

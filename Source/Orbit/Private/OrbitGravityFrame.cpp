@@ -53,6 +53,19 @@ bool FOrbitGravityFrame::MakeAlignedRotation(const FVector& Up, const FQuat& Cur
     return !OutRotation.ContainsNaN();
 }
 
+bool FOrbitGravityFrame::ShouldAttemptNearFloorLanding(bool bFalling, double VerticalVelocityUp,
+    double HorizontalSpeed, double MaxApproachSpeed, double FloorDistance, double MaxLandingDistance)
+{
+    return bFalling && FMath::IsFinite(VerticalVelocityUp) &&
+        FMath::IsFinite(HorizontalSpeed) && FMath::IsFinite(MaxApproachSpeed) &&
+        FMath::IsFinite(FloorDistance) && FMath::IsFinite(MaxLandingDistance) &&
+        VerticalVelocityUp <= 0.0 &&
+        FMath::Abs(VerticalVelocityUp) <= MaxApproachSpeed &&
+        HorizontalSpeed <= MaxApproachSpeed &&
+        FloorDistance >= 0.0 && MaxLandingDistance > 0.0 &&
+        FloorDistance <= MaxLandingDistance;
+}
+
 bool FOrbitGravityFrame::MakeGravityScale(double DesiredAcceleration, double WorldGravityMagnitude,
     double MaxGravityScale, float& OutScale)
 {

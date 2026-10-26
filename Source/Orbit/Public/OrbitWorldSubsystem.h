@@ -21,6 +21,12 @@ public:
     virtual void Tick(float DeltaTime) override;
     virtual TStatId GetStatId() const override;
 
+    /** Force a synchronous rebuild of all registered sources. Runtime Blueprint changes to
+     *  source properties are normally visible by the next world tick; this forces them visible
+     *  to queries later in the CURRENT tick. Call after editing many properties at once. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Gravity|Runtime")
+    void RefreshActiveSources();
+
     void RegisterSource(AOrbitGravitySource* Source);
     void UnregisterSource(AOrbitGravitySource* Source);
 
