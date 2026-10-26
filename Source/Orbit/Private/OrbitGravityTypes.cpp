@@ -28,7 +28,8 @@ FVector FOrbitFieldEvaluator::ClosestOnCurve(const TArray<FVector>& Curve, const
 bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FVector& Position, FVector& OutAcceleration)
 {
     OutAcceleration = FVector::ZeroVector;
-    if (Position.ContainsNaN() || Field.Center.ContainsNaN() || !FMath::IsFinite(Field.Strength)) { return false; }
+    if (Position.ContainsNaN() || Field.Center.ContainsNaN() ||
+        !FMath::IsFinite(Field.Strength) || !FMath::IsFinite(Field.VortexSpin)) { return false; }
     // Optional legacy box mask remains independent of the new Volume boundary.
     const FVector Local = Field.Rotation.Inverse().RotateVector(Position - Field.Center);
     if (Local.ContainsNaN()) { return false; }
@@ -66,6 +67,12 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         }
     }
 
+    const bool bVortexInward = Field.Direction == EOrbitGravityDirection::VortexInward;
+    const bool bVortexOutward = Field.Direction == EOrbitGravityDirection::VortexOutward;
+    const bool bVortex = bVortexInward || bVortexOutward;
+    // Signed vortex uses a clockwise tangent when viewed from positive local
+    // axis toward negative. A negative multiplier reverses to counterclockwise.
+    FVector ClockwiseTangent = FVector::ZeroVector;
     FVector Direction = FVector::ZeroVector;
     double Distance = 0.0;
     switch (Field.Shape)
@@ -75,15 +82,22 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         const FVector Radial = Position - Field.Center;
         Distance = Radial.Size();
         Direction = Radial.GetSafeNormal();
+        if (bVortex)
+        {
+            // At the poles, tangent magnitude smoothly goes to zero.
+            ClockwiseTangent = FVector::CrossProduct(Direction, Field.Axis.GetSafeNormal());
+        }
         break;
     }
     case EOrbitGravityShape::Axis:
     {
         const FVector Axis = Field.Axis.GetSafeNormal();
+        if (Axis.IsNearlyZero()) { return false; }
         const FVector Offset = Position - Field.Center;
         const FVector Radial = Offset - Axis * FVector::DotProduct(Offset, Axis);
         Distance = Radial.Size();
         Direction = Radial.GetSafeNormal();
+        if (bVortex) { ClockwiseTangent = FVector::CrossProduct(Direction, Axis); }
         break;
     }
     case EOrbitGravityShape::Volume:
@@ -100,6 +114,11 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         const FVector Radial = Position - Closest;
         Distance = Radial.Size();
         Direction = Radial.GetSafeNormal();
+        if (bVortex && Field.Curve.IsValidIndex(Segment + 1))
+        {
+            const FVector Tangent = (Field.Curve[Segment + 1] - Field.Curve[Segment]).GetSafeNormal();
+            ClockwiseTangent = FVector::CrossProduct(Direction, Tangent);
+        }
         if ((Field.Direction == EOrbitGravityDirection::SplineUp || Field.Direction == EOrbitGravityDirection::SplineDown) && Field.CurveUp.IsValidIndex(Segment + 1))
         {
             Direction = FMath::Lerp(Field.CurveUp[Segment], Field.CurveUp[Segment + 1], Alpha).GetSafeNormal();
@@ -111,13 +130,26 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
 
     if (Field.MaxDistance > 0.0 && Distance > Field.MaxDistance) { return false; }
     if ((Field.Shape == EOrbitGravityShape::Point || Field.Shape == EOrbitGravityShape::Axis || Field.Shape == EOrbitGravityShape::Spline) &&
-        Field.Direction == EOrbitGravityDirection::Inward)
+        (Field.Direction == EOrbitGravityDirection::Inward || bVortexInward))
     {
         Direction *= -1.0;
     }
-    else if ((Field.Shape == EOrbitGravityShape::Directional || Field.Shape == EOrbitGravityShape::Volume) && Field.Direction == EOrbitGravityDirection::Outward)
+    else if ((Field.Shape == EOrbitGravityShape::Directional || Field.Shape == EOrbitGravityShape::Volume) &&
+        (Field.Direction == EOrbitGravityDirection::Outward || bVortexOutward))
     {
         Direction *= -1.0;
+    }
+
+    // Mix radial attraction/repulsion with tangential acceleration, then
+    // normalize so Strength continues to mean TOTAL acceleration magnitude.
+    // 0 spin is exactly radial; +1 is a 45-degree spiral on the axis.
+    // For Point, the tangent shrinks smoothly toward the spin-axis poles.
+    if (bVortex && (Field.Shape == EOrbitGravityShape::Point ||
+                    Field.Shape == EOrbitGravityShape::Axis ||
+                    Field.Shape == EOrbitGravityShape::Spline))
+    {
+        const double Spin = FMath::Clamp(Field.VortexSpin, -10.0, 10.0);
+        Direction = (Direction + ClockwiseTangent * Spin).GetSafeNormal();
     }
 
     double Multiplier = 1.0;
@@ -136,7 +168,88 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
     return !OutAcceleration.ContainsNaN();
 }
 
-FOrbitGravitySample FOrbitFieldEvaluator::Combine(const TArray<FOrbitFieldDefinition>& Fields, const FVector& Position, EOrbitGravityChannel Channel)
+bool FOrbitFieldEvaluator::EvaluateForBody(const FOrbitFieldDefinition& Field,
+    const FVector& Position, const FVector& Velocity, FVector& OutAcceleration)
+{
+    // Keep the ordinary field evaluator authoritative for source bounds, strength,
+    // falloff, and direction. No body may be captured by an uninfluential field.
+    if (!Evaluate(Field, Position, OutAcceleration)) { return false; }
+    if (Field.Direction != EOrbitGravityDirection::VortexInward ||
+        Field.VortexPhysicsMode != EOrbitVortexPhysicsMode::SpiralCapture ||
+        FMath::Abs(Field.VortexSpin) <= UE_DOUBLE_SMALL_NUMBER ||
+        (Field.Shape != EOrbitGravityShape::Point && Field.Shape != EOrbitGravityShape::Axis &&
+         Field.Shape != EOrbitGravityShape::Spline) || Velocity.ContainsNaN())
+    {
+        return true;
+    }
+
+    // Resolve a locally radial, tangential, and along-axis frame.
+    // Point gravity uses full 3D velocity. Axis and spline fields leave
+    // along-axis travel untouched, so e.g. a character can travel down a tube.
+    FVector Radial = FVector::ZeroVector;
+    FVector Axis = Field.Axis.GetSafeNormal();
+    bool bPreserveAxisVelocity = false;
+    if (Field.Shape == EOrbitGravityShape::Point)
+    {
+        Radial = Position - Field.Center;
+    }
+    else if (Field.Shape == EOrbitGravityShape::Axis)
+    {
+        if (Axis.IsNearlyZero()) { return true; }
+        const FVector Offset = Position - Field.Center;
+        Radial = Offset - Axis * FVector::DotProduct(Offset, Axis);
+        bPreserveAxisVelocity = true;
+    }
+    else
+    {
+        int32 Segment = INDEX_NONE;
+        double Alpha = 0.0;
+        const FVector Closest = ClosestOnCurve(Field.Curve, Position, Segment, Alpha);
+        if (Segment == INDEX_NONE || !Field.Curve.IsValidIndex(Segment + 1)) { return true; }
+        Axis = (Field.Curve[Segment + 1] - Field.Curve[Segment]).GetSafeNormal();
+        if (Axis.IsNearlyZero()) { return true; }
+        Radial = Position - Closest;
+        bPreserveAxisVelocity = true;
+    }
+
+    const double Radius = Radial.Size();
+    // The ordinary vector is zero *at* the singularity, but the authored
+    // strength is still available to brake a body crossing the centerline.
+    const double AvailableAcceleration = Radius <= 1e-3
+        ? FMath::Max(0.0, Field.Strength) : OutAcceleration.Size();
+    if (AvailableAcceleration <= UE_DOUBLE_SMALL_NUMBER) { return true; }
+    const double Response = FMath::Clamp(Field.VortexResponseRate, 0.1, 30.0);
+    // At the centerline there is no unique radial/tangential basis. Brake only
+    // transverse velocity so bodies cannot slingshot from the singularity.
+    if (Radius <= 1e-3)
+    {
+        const FVector TransverseVelocity = bPreserveAxisVelocity
+            ? Velocity - Axis * FVector::DotProduct(Velocity, Axis) : Velocity;
+        OutAcceleration = (-TransverseVelocity * Response).GetClampedToMaxSize(
+            AvailableAcceleration * FMath::Clamp(Field.VortexMaxAccelerationFactor, 0.1, 20.0));
+        return !OutAcceleration.ContainsNaN();
+    }
+
+    const FVector Outward = Radial / Radius;
+    const FVector Tangent = FVector::CrossProduct(Outward, Axis).GetSafeNormal();
+    const double InwardSpeed = FMath::Max(0.0, Field.VortexConvergenceRate) * Radius;
+    const double TangentialSpeed = FMath::Max(0.0, Field.VortexAngularRateRadians) *
+        Radius * FMath::Abs(Field.VortexSpin);
+    FVector DesiredVelocity = -Outward * InwardSpeed +
+        Tangent * (Field.VortexSpin >= 0.0 ? TangentialSpeed : -TangentialSpeed);
+    DesiredVelocity = DesiredVelocity.GetClampedToMaxSize(FMath::Max(1.0, Field.VortexMaxFlowSpeed));
+
+    const FVector MeasuredVelocity = bPreserveAxisVelocity
+        ? Velocity - Axis * FVector::DotProduct(Velocity, Axis) : Velocity;
+    const double MaxSteeringAcceleration = AvailableAcceleration *
+        FMath::Clamp(Field.VortexMaxAccelerationFactor, 0.1, 20.0);
+    OutAcceleration = ((DesiredVelocity - MeasuredVelocity) * Response)
+        .GetClampedToMaxSize(MaxSteeringAcceleration);
+    return !OutAcceleration.ContainsNaN();
+}
+
+static FOrbitGravitySample CombineFieldsInternal(const TArray<FOrbitFieldDefinition>& Fields, const FVector& Position,
+    EOrbitGravityChannel Channel, uint8 ReceiverMask, const FVector* BodyVelocity)
 {
     FOrbitGravitySample Result;
     FVector Additive = FVector::ZeroVector;
@@ -150,10 +263,12 @@ FOrbitGravitySample FOrbitFieldEvaluator::Combine(const TArray<FOrbitFieldDefini
     // An overriding field suppresses additive fields at the same or lower priority.
     for (const FOrbitFieldDefinition& Field : Fields)
     {
-        if ((Channel == EOrbitGravityChannel::Physics && !Field.bPhysics) ||
+        if ((Field.ChannelMask & ReceiverMask) == 0u ||
+            (Channel == EOrbitGravityChannel::Physics && !Field.bPhysics) ||
             (Channel == EOrbitGravityChannel::Character && !Field.bCharacters)) { continue; }
         FVector Acceleration;
-        if (!Evaluate(Field, Position, Acceleration)) { continue; }
+        if (!(BodyVelocity ? FOrbitFieldEvaluator::EvaluateForBody(Field, Position, *BodyVelocity, Acceleration)
+                            : FOrbitFieldEvaluator::Evaluate(Field, Position, Acceleration))) { continue; }
         bAny = true;
         if (Field.Combine == EOrbitGravityCombine::Override)
         {
@@ -170,11 +285,13 @@ FOrbitGravitySample FOrbitFieldEvaluator::Combine(const TArray<FOrbitFieldDefini
     for (const FOrbitFieldDefinition& Field : Fields)
     {
         if (Field.Combine != EOrbitGravityCombine::Additive ||
+            (Field.ChannelMask & ReceiverMask) == 0u ||
             (bOverrideFound && Field.Priority <= OverridePriority) ||
             (Channel == EOrbitGravityChannel::Physics && !Field.bPhysics) ||
             (Channel == EOrbitGravityChannel::Character && !Field.bCharacters)) { continue; }
         FVector Acceleration;
-        if (!Evaluate(Field, Position, Acceleration)) { continue; }
+        if (!(BodyVelocity ? FOrbitFieldEvaluator::EvaluateForBody(Field, Position, *BodyVelocity, Acceleration)
+                            : FOrbitFieldEvaluator::Evaluate(Field, Position, Acceleration))) { continue; }
         Additive += Acceleration;
         const double MagnitudeSq = Acceleration.SizeSquared();
         if (!bOverrideFound && MagnitudeSq > BestMagnitudeSq)
@@ -192,4 +309,50 @@ FOrbitGravitySample FOrbitFieldEvaluator::Combine(const TArray<FOrbitFieldDefini
     Result.Up = Result.bHasValidDirection ? -Result.Down : FVector::UpVector;
     Result.DominantSourceId = BestId;
     return Result;
+}
+
+
+FOrbitGravitySample FOrbitFieldEvaluator::Combine(const TArray<FOrbitFieldDefinition>& Fields,
+    const FVector& Position, EOrbitGravityChannel Channel, uint8 ReceiverMask)
+{
+    return CombineFieldsInternal(Fields, Position, Channel, ReceiverMask, nullptr);
+}
+
+FOrbitGravitySample FOrbitFieldEvaluator::CombineForBody(const TArray<FOrbitFieldDefinition>& Fields,
+    const FVector& Position, const FVector& Velocity, uint8 ReceiverMask)
+{
+    return CombineFieldsInternal(Fields, Position, EOrbitGravityChannel::Physics, ReceiverMask, &Velocity);
+}
+
+int32 FOrbitFieldEvaluator::TraceStreamline(const FOrbitFieldDefinition& Field,
+    const FVector& Seed, double StepDistance, int32 MaxSteps, TArray<FVector>& OutPoints)
+{
+    OutPoints.Reset();
+    if (Seed.ContainsNaN() || !FMath::IsFinite(StepDistance) || StepDistance <= 0.0 || MaxSteps <= 0)
+    {
+        return 0;
+    }
+
+    FVector Position = Seed;
+    FVector Acceleration;
+    if (!Evaluate(Field, Position, Acceleration) || Acceleration.IsNearlyZero()) { return 0; }
+    OutPoints.Add(Position);
+
+    const int32 Count = FMath::Clamp(MaxSteps, 0, 512);
+    for (int32 Step = 0; Step < Count; ++Step)
+    {
+        FVector AtStart, AtMiddle, AtEnd;
+        if (!Evaluate(Field, Position, AtStart) || AtStart.IsNearlyZero()) { break; }
+        const FVector Midpoint = Position + AtStart.GetSafeNormal() * (0.5 * StepDistance);
+        if (!Evaluate(Field, Midpoint, AtMiddle) || AtMiddle.IsNearlyZero()) { break; }
+        const FVector Heading = AtMiddle.GetSafeNormal();
+        const FVector Next = Position + Heading * StepDistance;
+        if (Next.ContainsNaN() || !Evaluate(Field, Next, AtEnd) || AtEnd.IsNearlyZero()) { break; }
+        // Crossing a radial singularity can reverse the acceleration vector.
+        // Never let the visualizer ping-pong across the center of a field.
+        if (FVector::DotProduct(AtEnd.GetSafeNormal(), Heading) < -0.5) { break; }
+        OutPoints.Add(Next);
+        Position = Next;
+    }
+    return OutPoints.Num() - 1;
 }

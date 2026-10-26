@@ -1,8 +1,12 @@
 #include "OrbitWorldSubsystem.h"
 
 #include "OrbitGravitySource.h"
+#include "OrbitGravityReceiverComponent.h"
+#include "GameFramework/Actor.h"
+#include "Engine/EngineTypes.h"
 #include "OrbitSettings.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "Stats/Stats.h"
 #include "UObject/UObjectIterator.h"
@@ -76,9 +80,35 @@ void UOrbitWorldSubsystem::UpdateSourceSnapshot()
     }
 }
 
+uint8 UOrbitWorldSubsystem::GetReceiverChannelMask(const AActor* Owner) const
+{
+    // Like Lighting Channels, a missing receiver component means channel 0.
+    const UOrbitGravityReceiverComponent* Receiver =
+        Owner ? Owner->FindComponentByClass<UOrbitGravityReceiverComponent>() : nullptr;
+    return Receiver ? Receiver->GravityChannels.ToMask() : 1u;
+}
+
+bool UOrbitWorldSubsystem::HasCompatiblePhysicsSource(uint8 ReceiverMask) const
+{
+    for (const FOrbitFieldDefinition& Field : ActiveFields)
+    {
+        if (Field.bPhysics && (Field.ChannelMask & ReceiverMask) != 0u)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 FOrbitGravitySample UOrbitWorldSubsystem::SampleGravity(const FVector& WorldLocation, EOrbitGravityChannel Channel) const
 {
-    FOrbitGravitySample Result = FOrbitFieldEvaluator::Combine(ActiveFields, WorldLocation, Channel);
+    return SampleGravityWithChannels(WorldLocation, FOrbitGravityChannels(), Channel);
+}
+
+FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityWithChannels(
+    const FVector& WorldLocation, FOrbitGravityChannels ReceiverChannels, EOrbitGravityChannel Channel) const
+{
+    FOrbitGravitySample Result = FOrbitFieldEvaluator::Combine(ActiveFields, WorldLocation, Channel, ReceiverChannels.ToMask());
     if (!Result.bHasInfluence)
     {
         const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
@@ -92,6 +122,24 @@ FOrbitGravitySample UOrbitWorldSubsystem::SampleGravity(const FVector& WorldLoca
         }
     }
     return Result;
+}
+
+FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityForActor(
+    const AActor* Actor, const FVector& WorldLocation, EOrbitGravityChannel Channel) const
+{
+    FOrbitGravityChannels Channels;
+    const uint8 Mask = GetReceiverChannelMask(Actor);
+    Channels.bChannel0 = (Mask & 1u) != 0u;
+    Channels.bChannel1 = (Mask & 2u) != 0u;
+    Channels.bChannel2 = (Mask & 4u) != 0u;
+    return SampleGravityWithChannels(WorldLocation, Channels, Channel);
+}
+
+FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityForComponent(
+    const UPrimitiveComponent* Component, EOrbitGravityChannel Channel) const
+{
+    return Component ? SampleGravityForActor(Component->GetOwner(), Component->GetComponentLocation(), Channel)
+                     : FOrbitGravitySample();
 }
 
 FVector UOrbitWorldSubsystem::GetGravityAcceleration(const FVector& WorldLocation, EOrbitGravityChannel Channel) const
@@ -127,6 +175,17 @@ void UOrbitWorldSubsystem::DiscoverBodies()
         {
             continue;
         }
+        // Crucial: unmatched channels and outside-field bodies retain native Chaos
+        // gravity, and therefore its usual collision settling and sleeping behavior.
+        const FOrbitGravitySample Sample = SampleGravityForComponent(Component, EOrbitGravityChannel::Physics);
+        if (!Sample.bHasInfluence &&
+            (Settings->bUseWorldGravityOutsideFields ||
+             !HasCompatiblePhysicsSource(GetReceiverChannelMask(Component->GetOwner()))))
+        {
+            // In particular, channel-mismatched objects must keep native
+            // gravity, even when Orbit zero-g fallback is configured.
+            continue;
+        }
         FManagedBody NewBody;
         NewBody.Component = Component;
         NewBody.bOriginalGravity = bNativeGravity;
@@ -148,9 +207,31 @@ void UOrbitWorldSubsystem::RestoreBodyGravity()
     ManagedBodies.Empty();
 }
 
-void UOrbitWorldSubsystem::ApplyPhysicsForces()
+bool UOrbitWorldSubsystem::IsSupportedAlongGravity(const UPrimitiveComponent* Component, const FVector& Down) const
 {
+    if (!Component || !GetWorld() || Down.IsNearlyZero() || !Component->GetOwner())
+    {
+        return false;
+    }
+    // Only a supporting blocking collision counts. Checking the surface normal
+    // avoids sleeping against near-vertical walls or ceilings.
+    FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(OrbitGravityRest), false);
+    QueryParams.AddIgnoredActor(Component->GetOwner());
+    FCollisionObjectQueryParams ObjectTypes;
+    ObjectTypes.AddObjectTypesToQuery(ECC_WorldStatic);
+    ObjectTypes.AddObjectTypesToQuery(ECC_WorldDynamic);
+    const FVector Start = Component->Bounds.Origin;
+    const double ProbeLength = FMath::Max(10.0, static_cast<double>(Component->Bounds.SphereRadius) + 4.0);
+    FHitResult Hit;
+    return GetWorld()->LineTraceSingleByObjectType(Hit, Start, Start + Down * ProbeLength, ObjectTypes, QueryParams) &&
+        Hit.bBlockingHit && FVector::DotProduct(Hit.ImpactNormal, -Down) > 0.7;
+}
+
+void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
+{
+    const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
     static const FName IgnoreTag(TEXT("Orbit.Ignore"));
+    static const FName NoRestTag(TEXT("Orbit.NoRest"));
     for (int32 Index = ManagedBodies.Num() - 1; Index >= 0; --Index)
     {
         FManagedBody& Body = ManagedBodies[Index];
@@ -166,15 +247,68 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces()
             ManagedBodies.RemoveAtSwap(Index);
             continue;
         }
-        // Another system can set native gravity back on. Orbit must not double-apply gravity.
+
+        const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
+            ActiveFields, Component->GetComponentLocation(), Component->GetPhysicsLinearVelocity(),
+            GetReceiverChannelMask(Component->GetOwner()));
+        if (!Sample.bHasInfluence &&
+            (Settings->bUseWorldGravityOutsideFields ||
+             !HasCompatiblePhysicsSource(GetReceiverChannelMask(Component->GetOwner()))))
+        {
+            // An unmatched channel is never taken over by Orbit. Outside-field
+            // objects also revert to native gravity when fallback is enabled.
+            Component->SetEnableGravity(Body.bOriginalGravity);
+            ManagedBodies.RemoveAtSwap(Index);
+            continue;
+        }
         if (Component->IsGravityEnabled())
         {
             Component->SetEnableGravity(false);
         }
-        const FVector Acceleration = GetGravityAcceleration(Component->GetComponentLocation(), EOrbitGravityChannel::Physics);
+
+        const FVector Acceleration = Sample.Acceleration;
+        if (!Component->IsAnyRigidBodyAwake())
+        {
+            // Never re-awaken a resting body with the same gravity every tick.
+            // Wake if the local field changed substantially while it slept.
+            if (FVector::DistSquared(Acceleration, Body.LastAcceleration) > FMath::Square(20.0))
+            {
+                Component->WakeAllRigidBodies();
+            }
+            else
+            {
+                continue;
+            }
+        }
+        Body.LastAcceleration = Acceleration;
+
+        // The game-thread force bridge can inhibit Chaos sleep. For supported
+        // single-body props only, explicitly allow a slow, stable contact to
+        // sleep. This never modifies physical-material restitution or damping.
+        if (Settings->bStabilizeRestingRigidBodies && Cast<UStaticMeshComponent>(Component) &&
+            !Component->ComponentHasTag(NoRestTag) &&
+            Sample.bHasValidDirection && !Acceleration.IsNearlyZero() &&
+            Component->GetPhysicsLinearVelocity().SizeSquared() <= FMath::Square(Settings->RestLinearSpeed) &&
+            Component->GetPhysicsAngularVelocityInRadians().SizeSquared() <= FMath::Square(Settings->RestAngularSpeed) &&
+            IsSupportedAlongGravity(Component, Sample.Down))
+        {
+            Body.StableSeconds += FMath::Max(0.0f, DeltaTime);
+            if (Body.StableSeconds >= Settings->RestTime)
+            {
+                Component->PutRigidBodyToSleep(NAME_None);
+                Body.StableSeconds = 0.0f;
+                continue;
+            }
+        }
+        else
+        {
+            Body.StableSeconds = 0.0f;
+        }
+
         if (!Acceleration.IsNearlyZero())
         {
-            // bAccelChange=true makes gravity mass-independent. Game-thread integration, not Chaos substep integration.
+            // bAccelChange=true makes acceleration mass-independent. Remaining
+            // bounce differences require a solver/substep-level gravity callback.
             Component->AddForce(Acceleration, NAME_None, true);
         }
     }
@@ -186,7 +320,7 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
     UpdateSourceSnapshot(); // Rebuilds per frame: moving sources are supported, but large splines need future caching.
 
     const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
-    const bool bHasPhysicsField = ActiveFields.ContainsByPredicate([](const FOrbitFieldDefinition& Field) { return Field.bPhysics; });
+    const bool bHasPhysicsField = ActiveFields.ContainsByPredicate([](const FOrbitFieldDefinition& Field) { return (Field.bPhysics && Field.ChannelMask != 0u); });
     if (!Settings->bEnablePhysicsIntegration || !Settings->bAutomaticRigidBodyGravity || !bHasPhysicsField)
     {
         if (!ManagedBodies.IsEmpty()) { RestoreBodyGravity(); }
@@ -201,5 +335,5 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
         DiscoveryAccumulator = 0.0f;
         bNeedsInitialDiscovery = false;
     }
-    ApplyPhysicsForces();
+    ApplyPhysicsForces(DeltaTime);
 }

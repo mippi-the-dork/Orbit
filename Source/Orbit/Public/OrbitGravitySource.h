@@ -9,6 +9,7 @@ class USceneComponent;
 class USplineComponent;
 class UArrowComponent;
 class UBillboardComponent;
+struct FPropertyChangedEvent;
 
 /** Author one gravity field. The Spline component is editable directly in the level viewport. */
 UCLASS(Blueprintable, HideCategories=(Replication, Input, Collision))
@@ -39,6 +40,41 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
     EOrbitGravityDirection Direction = EOrbitGravityDirection::Inward;
 
+    /** Radial vortex modes only: signed tangent-to-radial acceleration ratio.
+     * +1 = clockwise at 45 degrees; -1 = counterclockwise at 45 degrees.
+     * Clockwise is viewed from the positive local axis toward its negative direction.
+     * Zero gives pure radial inward/outward gravity. Strength still sets the total acceleration.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward || Direction == EOrbitGravityDirection::VortexOutward", ClampMin="-10.0", ClampMax="10.0", UIMin="-3.0", UIMax="3.0"))
+    double VortexSpin = 1.0;
+
+    /** Determines behavior of physics-simulated bodies in Vortex Inward fields.
+     * Spiral Capture controls speed as radius decreases, preventing continuous-force ejection.
+     * The instantaneous gravity query and field-line previews remain acceleration-only.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward"))
+    EOrbitVortexPhysicsMode VortexPhysicsMode = EOrbitVortexPhysicsMode::SpiralCapture;
+
+    /** Desired rate of inward convergence (per second) for Spiral Capture. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex|Spiral Capture", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward", ClampMin="0.0", ClampMax="5.0", UIMin="0.0", UIMax="2.0"))
+    double VortexConvergenceRate = 0.5;
+
+    /** Desired rotation rate in degrees/second, multiplied by signed Vortex Spin. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex|Spiral Capture", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward", ClampMin="0.0", ClampMax="720.0", UIMin="0.0", UIMax="180.0", Units="deg/s"))
+    double VortexAngularRate = 63.0;
+
+    /** Response rate for steering simulated bodies toward the inward spiral. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex|Spiral Capture", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward", ClampMin="0.1", ClampMax="30.0", UIMin="1.0", UIMax="12.0"))
+    double VortexResponseRate = 6.0;
+
+    /** Caps the desired speed as a source-independent safety control. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex|Spiral Capture", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward", ClampMin="1.0", Units="cm/s"))
+    double VortexMaxFlowSpeed = 1500.0;
+
+    /** Caps steering acceleration as a multiple of current gravitational acceleration. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Vortex|Spiral Capture", meta=(EditCondition="Direction == EOrbitGravityDirection::VortexInward", ClampMin="0.1", ClampMax="20.0", UIMin="0.5", UIMax="6.0"))
+    double VortexMaxAccelerationFactor = 3.0;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(ClampMin="0.0", Units="cm/s^2"))
     double Strength = 980.0;
 
@@ -56,6 +92,10 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Combining")
     int32 Priority = 0;
+
+    /** Lighting-style mask. Sources affect receivers when any selected channel matches. Default: channel 0. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Channels")
+    FOrbitGravityChannels GravityChannels;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence")
     bool bEnabled = true;
@@ -102,12 +142,72 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug")
     bool bShowVolumeBounds = true;
 
-    /** Number of sample positions per axis. 5 = up to 125 arrows before shape masking. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview", ClampMin="2", ClampMax="7"))
-    int32 PreviewDensity = 5;
+    /** Visualizes the finite Max Distance boundary for Point, Axis, Spline and other sources.
+     *  Axis boundaries are infinite along the axis; the displayed tube length is a visual slice.
+     *  For Volume sources Max Distance is an additional sphere around the actor center.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug")
+    bool bShowMaxDistanceBoundary = true;
 
-    /** Preview half-extent for unbounded point, axis and directional gravity. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview", ClampMin="50.0", Units="cm"))
+    /** Expand the 3D preview to the entire finite Max Distance, instead of being capped by Preview Extent.
+     *  For unbounded sources (Max Distance = 0), Preview Extent still controls the visualization.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview || bShowStreamlines"))
+    bool bFitPreviewToMaxDistance = true;
+
+    /** Relative resolution of the WHOLE displayed region, not arrows per meter.
+     * 1 = sparse (3 samples per axis), 10 = detailed (12 samples per axis).
+     * High values create more debug arrows and can impact editor performance.
+     * Increasing Max Distance spreads samples over the new size rather than changing their count.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview", ClampMin="1", ClampMax="10", UIMin="1", UIMax="10"))
+    int32 PreviewDensity = 4;
+
+    /** Prevent excessive debug draw calls with dense visualizations. Candidate samples are
+     * distributed over the full region before thinning, never clustered in a corner.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview", ClampMin="64", ClampMax="2048"))
+    int32 PreviewMaxArrows = 2048;
+
+    /** Trace field lines through space. This is a normalized acceleration visualization,
+     * not a ballistic / momentum-aware prediction of rigid-body trajectories.
+     * Can be enabled independently of instantaneous vector arrows.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines")
+    bool bShowStreamlines = false;
+
+    /** Seed distribution and target line count across the complete displayed field:
+     * 1 sparse .. 10 dense. Line count is bounded by StreamlineMaxLines.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines", meta=(EditCondition="bShowStreamlines", ClampMin="1", ClampMax="10", UIMin="1", UIMax="10"))
+    int32 StreamlineDensity = 4;
+
+    /** Limit the number of independent streamlines; independent of arrow count. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines", meta=(EditCondition="bShowStreamlines", ClampMin="1", ClampMax="96", UIMin="1", UIMax="96"))
+    int32 StreamlineMaxLines = 32;
+
+    /** Integration steps for each streamline. Uses midpoint (RK2) spatial integration. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines", meta=(EditCondition="bShowStreamlines", ClampMin="8", ClampMax="128", UIMin="8", UIMax="128"))
+    int32 StreamlineSteps = 64;
+
+    /** Total traced distance as a multiple of the displayed field radius/extent.
+     * Higher values show longer spirals; traces stop on field boundaries.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines", meta=(EditCondition="bShowStreamlines", ClampMin="0.25", ClampMax="4.0", UIMin="0.25", UIMax="4.0"))
+    double StreamlineLength = 2.0;
+
+    /** Hard cap on all traced segments per source, regardless of density/steps. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines", meta=(EditCondition="bShowStreamlines", ClampMin="128", ClampMax="8192", UIMin="128", UIMax="8192"))
+    int32 StreamlineMaxSegments = 2048;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines", meta=(EditCondition="bShowStreamlines"))
+    bool bShowStreamlineDirectionMarkers = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Streamlines", meta=(EditCondition="bShowStreamlines", ClampMin="0.5", ClampMax="4.0", UIMin="0.5", UIMax="4.0"))
+    float StreamlineThickness = 1.5f;
+
+    /** Preview radius/half-extent when unlimited or when Auto Fit is off. Also controls the visible axial length for Axis sources. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview || bShowStreamlines", ClampMin="50.0", Units="cm"))
     double PreviewExtent = 900.0;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview", ClampMin="10.0", Units="cm"))
@@ -120,9 +220,20 @@ public:
     virtual void Tick(float DeltaSeconds) override;
 #if WITH_EDITOR
     virtual void PostRegisterAllComponents() override;
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 #if WITH_EDITOR
     virtual bool ShouldTickIfViewportsOnly() const override;
+#endif
+
+private:
+#if WITH_EDITOR
+    // Editor-only draw cache; non-persistent, never cooked or replicated.
+    TArray<TPair<FVector, FVector>> CachedStreamlineSegments;
+    TArray<TPair<FVector, FVector>> CachedStreamlineMarkers;
+    FTransform CachedStreamlineTransform = FTransform::Identity;
+    double LastStreamlineBuildSeconds = -1.0;
+    bool bStreamlinesCached = false;
 #endif
 
 protected:

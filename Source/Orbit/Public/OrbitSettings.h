@@ -28,6 +28,25 @@ public:
     UPROPERTY(EditAnywhere, Config, Category="Field")
     bool bUseWorldGravityOutsideFields = true;
 
+    /**
+     * Experimental single-rigid-body rest stabilization. Once a slow-moving
+     * object is supported by collision geometry, it may sleep, instead of
+     * continuously receiving force and rotating forever. Does not alter damping
+     * or restitution. Opt out per physics component with Orbit.NoRest.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(DisplayName="Stabilize Resting Rigid Bodies"))
+    bool bStabilizeRestingRigidBodies = true;
+
+    /** Required continuous supported time before sleeping a low-speed single-body object. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.1", ClampMax="5.0", Units="s"))
+    float RestTime = 0.65f;
+
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="50.0", Units="cm/s"))
+    float RestLinearSpeed = 5.0f;
+
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="1.0", Units="rad/s"))
+    float RestAngularSpeed = 0.08f;
+
     /** Global safety toggle; disable if another system is responsible for physical gravity. */
     UPROPERTY(EditAnywhere, Config, Category="Physics")
     bool bEnablePhysicsIntegration = true;

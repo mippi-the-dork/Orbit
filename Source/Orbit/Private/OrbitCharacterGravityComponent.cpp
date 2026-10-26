@@ -33,7 +33,7 @@ void UOrbitCharacterGravityComponent::TickComponent(float DeltaTime, ELevelTick 
     UOrbitWorldSubsystem* Gravity = World->GetSubsystem<UOrbitWorldSubsystem>();
     if (!Movement || !Gravity) { return; }
 
-    const FOrbitGravitySample Sample = Gravity->SampleGravity(Character->GetActorLocation(), EOrbitGravityChannel::Character);
+    const FOrbitGravitySample Sample = Gravity->SampleGravityForActor(Character, Character->GetActorLocation(), EOrbitGravityChannel::Character);
     if (!Sample.bHasInfluence && !bUseDefaultGravityOutsideFields) { return; }
     if (Sample.bHasValidDirection)
     {

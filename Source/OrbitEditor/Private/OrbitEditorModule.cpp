@@ -34,6 +34,8 @@ public:
             StyleSet->RootToContentDir(TEXT("Icons/OrbitActor_16"), TEXT(".svg")), Icon16));
         StyleSet->Set(TEXT("ClassIcon.OrbitCharacterGravityComponent"), new FSlateVectorImageBrush(
             StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
+        StyleSet->Set(TEXT("ClassIcon.OrbitGravityReceiverComponent"), new FSlateVectorImageBrush(
+            StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
 
         // A gravity source is a placeable actor, not a custom Content Browser
         // asset type. Its class/Blueprint thumbnail can still use the 64px

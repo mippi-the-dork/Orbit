@@ -12,6 +12,15 @@ FOrbitGravitySample UOrbitBlueprintLibrary::SampleOrbitGravity(const UObject* Wo
     return Gravity ? Gravity->SampleGravity(WorldPosition, Channel) : Empty;
 }
 
+FOrbitGravitySample UOrbitBlueprintLibrary::SampleOrbitGravityForActor(const UObject* WorldContextObject, const AActor* Actor, FVector WorldPosition, EOrbitGravityChannel Channel)
+{
+    FOrbitGravitySample Empty;
+    const UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull) : nullptr;
+    if (!World || !Actor) { return Empty; }
+    const UOrbitWorldSubsystem* Gravity = World->GetSubsystem<UOrbitWorldSubsystem>();
+    return Gravity ? Gravity->SampleGravityForActor(Actor, WorldPosition, Channel) : Empty;
+}
+
 FVector UOrbitBlueprintLibrary::ProjectOntoGravityPlane(FVector Vector, FVector Up)
 {
     if (Up.IsNearlyZero()) { return Vector; }
