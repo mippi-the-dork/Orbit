@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitGravityFrame.h"
 
 #include "Math/RotationMatrix.h"
@@ -53,6 +51,23 @@ bool FOrbitGravityFrame::MakeAlignedRotation(const FVector& Up, const FQuat& Cur
 
     OutRotation = FRotationMatrix::MakeFromXZ(TangentForward, NormalUp).ToQuat().GetNormalized();
     return !OutRotation.ContainsNaN();
+}
+
+bool FOrbitGravityFrame::TransportTangentHeading(const FVector& PreviousUp,
+    const FVector& PreviousForward, const FVector& NewUp, FVector& OutForward)
+{
+    OutForward = FVector::ZeroVector;
+    if (PreviousUp.ContainsNaN() || NewUp.ContainsNaN() || PreviousForward.ContainsNaN() ||
+        PreviousUp.IsNearlyZero() || NewUp.IsNearlyZero() || PreviousForward.IsNearlyZero())
+    {
+        return false;
+    }
+    const FVector FromUp = PreviousUp.GetSafeNormal();
+    const FVector ToUp = NewUp.GetSafeNormal();
+    const FQuat Transport = FQuat::FindBetweenNormals(FromUp, ToUp);
+    const FVector Transported = Transport.RotateVector(PreviousForward);
+    FVector Right;
+    return MakeTangentBasis(ToUp, Transported, OutForward, Right);
 }
 
 bool FOrbitGravityFrame::ShouldAttemptNearFloorLanding(bool bFalling, double VerticalVelocityUp,

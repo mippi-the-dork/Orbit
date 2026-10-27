@@ -561,3 +561,8 @@ The reported initial low-gravity spawn landing and mannequin gait changes belong
 ## Iteration 017 integration packaging update
 
 Orbit Mover gravity is now implemented inside the single Orbit plugin as an internal, runtime-optional `OrbitMover` module. No second plugin must be installed. The source actor's field parameters and gravity/receiver-channel evaluation are unchanged by this packaging work. See [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md) for the changed Mover update timing and supported scenarios.
+
+
+## Iteration 018 character and animation integration note
+
+The dedicated Gravity Source Actor, embedded Source Component, source competition, and Gravity Channels did not change in Iteration 018. The revised Character Controls/Character Gravity orientation contract consumes their sampled gravity normally. For the sphere-specific Manny/Quinn locomotion setup, see [ANIMATION_INTEGRATION.md](ANIMATION_INTEGRATION.md). No source-actor setting alone rewires a Third Person Animation Blueprint.

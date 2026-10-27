@@ -113,3 +113,8 @@ Run `Orbit.Mover.*` through Unreal's Automation Test interface:
 - [Iteration 017](ITERATION_017.md): implementation changes and consolidation acceptance criteria.
 
 **Build status:** Source and ZIP verification only. This release has not been compiled against the user's UE 5.8.3 installation.
+
+
+## Iteration 018 update scope
+
+No Mover adapter logic, build dependencies, or Mover Blueprint API changed in Iteration 018. Character-facing ownership and animation state apply to native Character Movement + Orbit Character Controls, **not** Epic Mover-driven pawns. The optional internal `OrbitMover` module remains in the same single Orbit plugin and requires its own runtime validation.

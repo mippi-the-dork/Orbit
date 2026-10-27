@@ -68,6 +68,16 @@ The underlying gravity *magnitude* remains sampled directly; the smoothed direct
 
 See [ITERATION_016.md](ITERATION_016.md) for a two-planet test that compares the three settings.
 
+## Iteration 018: character facing, animation diagnostics, native rotation ownership
+
+When **Orbit Character Controls** has **Face Movement Direction** enabled on a locally controlled Character, it owns the character's **final** orientation. The Gravity component still updates native Character Movement gravity before movement but skips its independent actor rotation. Controls then calculates one gravity-aligned pose on Character Movement's post-movement delegate, combining native Up and a tangent Forward with parallel-transported heading even when the input is idle. This prevents the earlier two-rotation conflict. Characters without Controls owning facing keep the original Gravity actor alignment behavior.
+
+`Disable Competing Native Rotation` defaults to true. Orbit temporarily disables native `Orient Rotation to Movement`, `Use Controller Desired Rotation` and Character `Use Controller Rotation Yaw` and restores the original values when it no longer owns facing or on EndPlay. Third-party Blueprint Set Actor Rotation nodes, root-motion orientation, and other custom systems can still compete and should be disabled or deliberately coordinated.
+
+`Draw Locomotion Debug` shows four vectors (Up white, requested input blue, tangent velocity green, actor forward yellow); `Last Velocity to Facing Angle Degrees`, `Last Capsule Up Error Degrees`, `Last Gravity Relative Ground Speed`, `Last World XY Speed` and `Last Gravity Relative Direction Degrees` are visible instance-only diagnostics. World XY speed varying around a planet while gravity-relative speed remains consistent is **expected** and reveals unsuitable world-XY animation math.
+
+New pure node **Get Orbit Gravity Animation State (Character, Min Ground Speed=3, Min Acceleration=0.1)** returns `FOrbitGravityAnimationState`: Valid, Is Falling, Is Moving On Ground, Has Acceleration, Should Move, Ground Speed, Forward Speed, Right Speed, Movement Direction Degrees, Tangent Acceleration Magnitude, Gravity Up/Down, native Floor Normal, Tangent Velocity, World Tangent Move Direction, Tangent Acceleration and World XY Speed (diagnostic only). Query on the AnimBP's **game-thread Event Blueprint Update Animation**, cache the values into AnimBP variables, and connect those variables to the Blend Space / locomotion graph. This does **not** modify the AnimBP graph automatically. See [ANIMATION_INTEGRATION.md](ANIMATION_INTEGRATION.md).
+
 ## 1. How Orbit is organized
 
 Orbit currently exposes:
@@ -574,7 +584,7 @@ These are **authored Blueprint-callable/pure functions**, not automatically gene
 
 **Component Target vs Actor Self:** Nodes 16/17 must target an **Orbit Character Controls Component reference**. The static convenience nodes 22/23 accept a **Character** reference and default that pin to `Self` inside a Character Blueprint. They require an Orbit Character Controls component installed on that Character and do nothing without it. Use one input path, not both. 
 
-*Documentation audited against Orbit v0.2.5 source, not proof of UE compilation or in-editor behavior.*
+*Documentation updated against Orbit v0.2.7 source, not proof of UE compilation or in-editor behavior.*
 
 ---
 
@@ -600,6 +610,14 @@ This is one of the **five base Orbit components**, alongside Character Gravity, 
 | Velocity Facing Threshold | 30 cm/s | Below this speed use input-facing fallback. |
 | Facing Response Rate | 12 | Smooth quaternion response; 0 snaps |
 | Facing Input Threshold | 0.1 | Ignore tiny input; keep heading without movement |
+| Disable Competing Native Rotation | true | Temporarily disable native movement/controller yaw rotation while Controls owns facing; restore original values when released |
+| Draw Locomotion Debug | false | Draw requested input, actual velocity, capsule Forward and gravity Up arrows; no debug draw cost while disabled |
+| Debug Vector Length | 120 cm | Debug arrow length |
+| Last Velocity to Facing Angle Degrees | runtime | Mismatch between actual gravity-tangent velocity and Actor forward |
+| Last Capsule Up Error Degrees | runtime | Error between Actor local +Z and Movement gravity Up |
+| Last Gravity Relative Ground Speed | runtime | Correct tangent-plane locomotion speed |
+| Last World XY Speed | runtime | Debug comparison for world-horizontal graph bugs |
+| Last Gravity Relative Direction Degrees | runtime | Signed gravity-local movement direction |
 | Last Facing Direction | runtime | Read-only world-space target direction of last facing update |
 | Last Gravity Up | runtime | Read-only sampled movement Up |
 | Last Move Forward / Right | runtime | Read-only tangent input basis for PIE debugging |
@@ -613,7 +631,9 @@ This is one of the **five base Orbit components**, alongside Character Gravity, 
 | 16 | **Apply Gravity Relative Move** | Orbit Character Controls Component | Move Axis (Vector2D), X right / Y forward | Applies forward/right movement **tangent to current gravity Up** through native `AddMovementInput` |
 | 17 | **Apply Gravity Relative Look** | Orbit Character Controls Component | Look Axis (Vector2D), X yaw / Y pitch | Maintains gravity-local camera heading and pitch. Prefers quaternion-driven Spring Arm; uses Controller Rotation only as fallback |
 
-The base `Orbit` plugin now authors **24 Blueprint-callable/pure functions**, plus the two built-in `OrbitMover` module functions documented in [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md). Normal UObject property setters, Blueprint Make/Break struct nodes, and engine-native nodes are not included in these counts.
+The base `Orbit` plugin now authors **25 Blueprint-callable/pure functions**, plus the two built-in `OrbitMover` module functions documented in [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md). Normal UObject property setters, Blueprint Make/Break struct nodes, and engine-native nodes are not included in these counts.
+
+**Iteration 018 additional Blueprint node:** `Get Orbit Gravity Animation State`, declared by `UOrbitBlueprintLibrary`, category `Orbit | Animation`, pure, input `Character`, `Min Ground Speed` (3), `Min Acceleration` (0.1), output `FOrbitGravityAnimationState` with 17 readable properties. This extends the prior 24 base functions to **25**. It is also documented in [ANIMATION_INTEGRATION.md](ANIMATION_INTEGRATION.md).
 
 ### Additional Orbit Character Gravity component settings
 
@@ -661,7 +681,7 @@ In addition to **Last Walkable Floor Distance** and **Landing Assist Count**, th
 
 ### Facing a direction on curved surfaces
 
-The Orbit Character Controls component now defaults **Face Movement Direction = true**. It uses the most recent nontrivial movement input direction projected into the gravity tangent plane, interpolating the Actor/capsule rotation with a quaternion. **Facing Response Rate = 12**, **Facing Input Threshold = 0.1**. The camera remains independently oriented through its Spring Arm. It does not modify third-person animation selections or control custom character controllers. Disable native Character Movement's `Orient Rotation to Movement` and the Character's `Use Controller Rotation Yaw/Pitch/Roll` for this test. If a custom locomotion system controls rotation, turn Orbit facing off.
+The Orbit Character Controls component now defaults **Face Movement Direction = true**. As of Iteration 018, it is the sole final character-rotation owner when locally controlling facing. It uses the most recent nontrivial movement input direction projected into the gravity tangent plane, interpolating the Actor/capsule rotation with a quaternion. **Facing Response Rate = 12**, **Facing Input Threshold = 0.1**. The camera remains independently oriented through its Spring Arm. It does not modify third-person animation selections or control custom character controllers. Its `Disable Competing Native Rotation` option (default true) now temporarily handles native Character Movement and Controller Yaw settings, restoring them when control ends. Still turn off custom Blueprint, root-motion or third-party actor rotation. If a custom locomotion system controls rotation, turn Orbit facing off.
 
 ### Gravity frame construction and transform conversions
 

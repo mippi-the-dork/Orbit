@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -38,6 +36,69 @@ struct ORBIT_API FOrbitGravityRelativeLocomotion
     /** Signed degrees relative to the actor's gravity-tangent forward: 0 forward, +90 right, -90 left, +/-180 backward. */
     UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
     float MovementDirectionDegrees = 0.0f;
+};
+
+/** Animation Blueprint-compatible locomotion state. Read on the game thread during
+ * Event Blueprint Update Animation; cache fields for the AnimGraph. Merely adding
+ * Orbit to a character does not rewrite the existing template Animation Blueprint. */
+USTRUCT(BlueprintType)
+struct ORBIT_API FOrbitGravityAnimationState
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bValid = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bIsFalling = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bIsMovingOnGround = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bHasAcceleration = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bShouldMove = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float GroundSpeed = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float ForwardSpeed = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float RightSpeed = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float MovementDirectionDegrees = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float TangentAccelerationMagnitude = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector GravityUp = FVector::UpVector;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector GravityDown = FVector::DownVector;
+
+    /** World-space floor normal from native CurrentFloor when grounded, otherwise GravityUp. */
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector FloorNormal = FVector::UpVector;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector TangentVelocity = FVector::ZeroVector;
+
+    /** World-space normalized tangent travel direction for compatible Orientation Warping nodes. */
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector WorldTangentMoveDirection = FVector::ZeroVector;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector TangentAcceleration = FVector::ZeroVector;
+
+    /** Debug comparison only; NOT suitable for planetary locomotion Blend Spaces. */
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float WorldXYSpeed = 0.0f;
 };
 
 UCLASS()
@@ -117,6 +178,13 @@ public:
      *  Use the result instead of VectorLengthXY / world-Z CalculateDirection. */
     UFUNCTION(BlueprintPure, Category="Orbit|Animation", meta=(DefaultToSelf="Character"))
     static FOrbitGravityRelativeLocomotion GetGravityRelativeLocomotion(const ACharacter* Character);
+
+    /** One-node Manny/Quinn-style animation state: gravity-local GroundSpeed,
+     * direction, Acceleration, ShouldMove, and Falling. Existing AnimBP graphs must
+     * read this node on the game thread and replace world-XY calculations explicitly. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Animation", meta=(DefaultToSelf="Character"))
+    static FOrbitGravityAnimationState GetOrbitGravityAnimationState(const ACharacter* Character,
+        float MinGroundSpeed = 3.0f, float MinAcceleration = 0.1f);
 
     /** Convenient Character Blueprint call (no Orbit Controls component target pin). */
     UFUNCTION(BlueprintCallable, Category="Orbit|Controls|Input", meta=(DefaultToSelf="Character", DisplayName="Apply Orbit Gravity Relative Look"))

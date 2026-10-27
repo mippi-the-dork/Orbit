@@ -1,3 +1,16 @@
+## 0.2.7 - Iteration 018 - Unified Character Orientation and Animation Bridge
+
+- Give Orbit Character Controls sole ownership of the final locally controlled character rotation when movement-facing is enabled. Orbit Character Gravity continues applying gravity before native movement, but no longer applies its own competing actor rotation in that configuration. Characters without active Controls facing retain the original Gravity alignment path.
+- Parallel-transport heading over curved gravity surfaces, including at idle when there is no recent move input; combine local Up and facing into one quaternion rotation.
+- Optionally suspend native `OrientRotationToMovement`, `UseControllerDesiredRotation` and `UseControllerRotationYaw` while Orbit Controls owns facing; capture and restore their original values.
+- Add gravity-local movement diagnostics and optional requested input / velocity / facing / Up debug arrows in PIE.
+- Add `Get Orbit Gravity Animation State` Blueprint-pure node with gravity-local Ground Speed, Forward/Right speed, signed direction, tangent acceleration, Should Move, Falling and world-XY diagnostic speed.
+- Add `Docs/ANIMATION_INTEGRATION.md` with direct Manny/Quinn AnimBP hookup instructions and explicit warning that plugin code alone cannot repair existing asset graphs or orientation-warp nodes.
+- Add 4 authored orientation/animation math automation tests; 34 core tests + 4 optional internal Mover tests, uncompiled.
+- Preserve internal optional OrbitMover module without functional changes; all prior field and physics logic retained.
+
+**Validation:** Static ZIP checks only. UE 5.8.3 compile, PIE, animation graph and Mover smoke tests remain necessary.
+
 ## 0.2.6 - Iteration 017 - Single Plugin Consolidation
 
 - Consolidated the separate `OrbitMover` plugin source into the main `Orbit` plugin as its third internal module. The release now has only `Orbit/Orbit.uplugin` and installs as one folder.

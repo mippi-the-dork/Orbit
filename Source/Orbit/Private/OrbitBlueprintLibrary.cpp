@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitBlueprintLibrary.h"
 #include "OrbitWorldSubsystem.h"
 #include "OrbitGravityReceiverComponent.h"
@@ -149,6 +147,39 @@ FOrbitGravityRelativeLocomotion UOrbitBlueprintLibrary::GetGravityRelativeLocomo
     return Out;
 }
 
+
+FOrbitGravityAnimationState UOrbitBlueprintLibrary::GetOrbitGravityAnimationState(
+    const ACharacter* Character, float MinGroundSpeed, float MinAcceleration)
+{
+    FOrbitGravityAnimationState State;
+    if (!IsValid(Character)) { return State; }
+    const UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+    if (!Movement) { return State; }
+
+    const FOrbitGravityRelativeLocomotion Locomotion = GetGravityRelativeLocomotion(Character);
+    if (!Locomotion.bValid) { return State; }
+    const FVector Acceleration = Movement->GetCurrentAcceleration();
+    if (Acceleration.ContainsNaN()) { return State; }
+    State.bValid = true;
+    State.GravityUp = Locomotion.GravityUp;
+    State.GravityDown = -State.GravityUp;
+    State.FloorNormal = Movement->IsMovingOnGround() && Movement->CurrentFloor.IsWalkableFloor()
+        ? Movement->CurrentFloor.HitResult.ImpactNormal.GetSafeNormal() : State.GravityUp;
+    State.TangentVelocity = Locomotion.TangentVelocity;
+    State.WorldTangentMoveDirection = Locomotion.TangentVelocity.GetSafeNormal();
+    State.GroundSpeed = Locomotion.GroundSpeed;
+    State.ForwardSpeed = Locomotion.ForwardSpeed;
+    State.RightSpeed = Locomotion.RightSpeed;
+    State.MovementDirectionDegrees = Locomotion.MovementDirectionDegrees;
+    State.TangentAcceleration = FVector::VectorPlaneProject(Acceleration, State.GravityUp);
+    State.TangentAccelerationMagnitude = static_cast<float>(State.TangentAcceleration.Size());
+    State.bHasAcceleration = State.TangentAccelerationMagnitude > FMath::Max(0.0f, MinAcceleration);
+    State.bShouldMove = State.GroundSpeed > FMath::Max(0.0f, MinGroundSpeed) && State.bHasAcceleration;
+    State.bIsFalling = Movement->IsFalling();
+    State.bIsMovingOnGround = Movement->IsMovingOnGround();
+    State.WorldXYSpeed = static_cast<float>(FVector(Movement->Velocity.X, Movement->Velocity.Y, 0.0).Size());
+    return State;
+}
 
 bool UOrbitBlueprintLibrary::GetOrbitGravityUpForActor(const AActor* Actor, FVector WorldPosition,
     const UObject* SpecificSource, FVector& Up)

@@ -1,8 +1,7 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitCharacterGravityComponent.h"
 
 #include "OrbitGravityFrame.h"
+#include "OrbitCharacterControlsComponent.h"
 #include "OrbitWorldSubsystem.h"
 #include "OrbitSettings.h"
 #include "GameFramework/Character.h"
@@ -171,6 +170,13 @@ void UOrbitCharacterGravityComponent::AlignCharacterToUp(const FVector& Up, floa
 {
     ACharacter* Character = Cast<ACharacter>(GetOwner());
     if (!Character || !bAlignActorToGravity || Up.IsNearlyZero()) { return; }
+    // Controls owns final actor orientation (Up + tangent facing) after movement.
+    // Running both independently caused orientation/animation disagreement.
+    if (const UOrbitCharacterControlsComponent* Controls =
+        Character->FindComponentByClass<UOrbitCharacterControlsComponent>())
+    {
+        if (Controls->IsManagingCharacterOrientation()) { return; }
+    }
 
     const FQuat Current = Character->GetActorQuat();
     FQuat Target;

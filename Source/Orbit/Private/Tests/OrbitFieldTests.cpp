@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitGravityTypes.h"
 #include <limits>
 
@@ -837,6 +835,104 @@ bool FOrbitEmbeddedSourceDefinitionTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Embedded strength copied"), FMath::IsNearlyEqual(Field.Strength, 350.0));
     TestEqual(TEXT("Embedded source uses its own unique ID"), Field.SourceId, Component->GetUniqueID());
     TestEqual(TEXT("Embedded channels copied"), Field.ChannelMask, static_cast<uint8>(4u));
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPlanetaryGaitInvarianceTest,
+    "Orbit.Character.Animation.PlanetaryGroundSpeedInvariance",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitPlanetaryGaitInvarianceTest::RunTest(const FString& Parameters)
+{
+    struct FCase { FVector Up; FVector Forward; FVector Velocity; };
+    // Forward running is the SAME animation state on any side of the sphere,
+    // including when the running velocity is vertical in world coordinates.
+    const FCase Cases[] = {
+        { FVector::UpVector, FVector::ForwardVector, FVector(300, 0, 0) },
+        { FVector::ForwardVector, FVector::UpVector, FVector(0, 0, 300) },
+        { -FVector::ForwardVector, FVector::UpVector, FVector(0, 0, 300) },
+        { FVector::RightVector, FVector::UpVector, FVector(0, 0, 300) },
+        { -FVector::RightVector, FVector::UpVector, FVector(0, 0, 300) },
+        { -FVector::UpVector, FVector::ForwardVector, FVector(300, 0, 0) }
+    };
+    for (const FCase& Case : Cases)
+    {
+        double Speed, ForwardSpeed, RightSpeed, Degrees;
+        TestTrue(TEXT("Valid gravity-local running frame"),
+            FOrbitGravityFrame::CalculateGravityRelativeLocomotion(Case.Velocity, Case.Up,
+                Case.Forward, Speed, ForwardSpeed, RightSpeed, Degrees));
+        TestTrue(TEXT("Ground Speed 300 independent of world up"), FMath::IsNearlyEqual(Speed, 300.0, 0.001));
+        TestTrue(TEXT("Forward gait speed 300"), FMath::IsNearlyEqual(ForwardSpeed, 300.0, 0.001));
+        TestTrue(TEXT("Zero strafe in forward gait"), FMath::IsNearlyZero(RightSpeed, 0.001));
+        TestTrue(TEXT("Zero signed forward gait direction"), FMath::IsNearlyZero(Degrees, 0.001));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPlanetarySidewaysGaitTest,
+    "Orbit.Character.Animation.SignedStrafeAndBackwards",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitPlanetarySidewaysGaitTest::RunTest(const FString& Parameters)
+{
+    double Speed, Forward, Side, Direction;
+    const FVector Up = FVector::ForwardVector;
+    const FVector Heading = FVector::UpVector;
+    const FVector Right = FVector::CrossProduct(Up, Heading);
+    TestTrue(TEXT("Right is valid on a sphere equator"),
+        FOrbitGravityFrame::CalculateGravityRelativeLocomotion(Right * 180.0, Up, Heading,
+            Speed, Forward, Side, Direction));
+    TestTrue(TEXT("Rightward animation is +90"), FMath::IsNearlyEqual(Direction, 90.0, 0.001));
+    TestTrue(TEXT("Side speed is positive"), FMath::IsNearlyEqual(Side, 180.0, 0.001));
+    TestTrue(TEXT("Leftward animation sample"),
+        FOrbitGravityFrame::CalculateGravityRelativeLocomotion(-Right * 180.0, Up, Heading,
+            Speed, Forward, Side, Direction));
+    TestTrue(TEXT("Leftward animation is -90"), FMath::IsNearlyEqual(Direction, -90.0, 0.001));
+    TestTrue(TEXT("Backwards animation sample"),
+        FOrbitGravityFrame::CalculateGravityRelativeLocomotion(-Heading * 180.0, Up, Heading,
+            Speed, Forward, Side, Direction));
+    TestTrue(TEXT("Backwards angle magnitude is 180"), FMath::IsNearlyEqual(FMath::Abs(Direction), 180.0, 0.001));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPlanetaryOrientationTransportTest,
+    "Orbit.Character.Orientation.TransportAroundSphere",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitPlanetaryOrientationTransportTest::RunTest(const FString& Parameters)
+{
+    FVector Up = FVector::ForwardVector;
+    FVector Heading = FVector::UpVector;
+    for (int32 Index = 1; Index <= 72; ++Index)
+    {
+        const double Angle = static_cast<double>(Index) * 2.0 * PI / 72.0;
+        const FVector NextUp(FMath::Cos(Angle), FMath::Sin(Angle), 0.0);
+        FVector NextHeading;
+        TestTrue(TEXT("Transport succeeded on planet orbit"),
+            FOrbitGravityFrame::TransportTangentHeading(Up, Heading, NextUp, NextHeading));
+        TestTrue(TEXT("Transported heading is a unit vector"), FMath::IsNearlyEqual(NextHeading.Size(), 1.0, 0.001));
+        TestTrue(TEXT("Transported heading remains tangent"), FMath::IsNearlyZero(FVector::DotProduct(NextHeading, NextUp), 0.001));
+        TestTrue(TEXT("No sudden heading reversal as local Up changes"), FVector::DotProduct(Heading, NextHeading) > 0.99);
+        Up = NextUp;
+        Heading = NextHeading;
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPlanetaryOrientationAntipodalTest,
+    "Orbit.Character.Orientation.AntipodalTransport",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitPlanetaryOrientationAntipodalTest::RunTest(const FString& Parameters)
+{
+    FVector Heading;
+    TestTrue(TEXT("Even exact opposing gravity Up directions produce a valid tangent frame"),
+        FOrbitGravityFrame::TransportTangentHeading(FVector::UpVector, FVector::ForwardVector,
+            FVector::DownVector, Heading));
+    TestFalse(TEXT("No NaN for opposing Up vectors"), Heading.ContainsNaN());
+    TestTrue(TEXT("Antipodal heading remains tangent"),
+        FMath::IsNearlyZero(FVector::DotProduct(Heading, FVector::DownVector), 0.001));
+    TestFalse(TEXT("Invalid zero gravity up is rejected"),
+        FOrbitGravityFrame::TransportTangentHeading(FVector::UpVector, FVector::ForwardVector,
+            FVector::ZeroVector, Heading));
     return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS

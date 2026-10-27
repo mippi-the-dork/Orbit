@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -22,6 +20,11 @@ public:
     static bool CalculateGravityRelativeLocomotion(const FVector& Velocity, const FVector& Up,
         const FVector& ActorForward, double& OutSpeed, double& OutForwardSpeed,
         double& OutRightSpeed, double& OutDirectionDegrees);
+
+    /** Parallel-transports a tangent heading between changing gravity Up vectors without
+     * re-extracting world yaw. Handles vertical, sideways and antiparallel Up changes. */
+    static bool TransportTangentHeading(const FVector& PreviousUp, const FVector& PreviousForward,
+        const FVector& NewUp, FVector& OutForward);
 
     /** Safe test of whether native near-floor landing assistance can even be considered.
      *  The movement component MUST still validate a collision sweep and walkable landing hit. */

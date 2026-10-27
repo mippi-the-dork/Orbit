@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -62,6 +60,12 @@ public:
         meta=(EditCondition="bFaceMovementDirection && bFaceVelocityWhenMoving", ClampMin="0.0", Units="cm/s"))
     float VelocityFacingThreshold = 30.0f;
 
+    /** When this component manages character facing, temporarily disable native
+     * OrientRotationToMovement / ControllerDesiredRotation / ControllerYaw ownership.
+     * Previous native values are restored when Orbit stops owning facing. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing")
+    bool bDisableCompetingNativeRotation = true;
+
     /** Response rate for changing facing direction, in inverse seconds. Zero snaps. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
         meta=(EditCondition="bFaceMovementDirection", ClampMin="0.0", UIMin="0.0", UIMax="25.0"))
@@ -82,6 +86,33 @@ public:
     UFUNCTION(BlueprintCallable, Category="Orbit|Controls|Input")
     void ApplyGravityRelativeLook(FVector2D LookAxis);
 
+    /** Draw gravity Up (white), requested input (blue), actual velocity (green),
+     * and actor forward (yellow) for debugging locomotion around planets. PIE only. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Debug")
+    bool bDrawLocomotionDebug = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Debug",
+        meta=(EditCondition="bDrawLocomotionDebug", ClampMin="10.0", Units="cm"))
+    float DebugVectorLength = 120.0f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastVelocityToFacingAngleDegrees = 0.0f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastCapsuleUpErrorDegrees = 0.0f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastGravityRelativeGroundSpeed = 0.0f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastWorldXYSpeed = 0.0f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastGravityRelativeDirectionDegrees = 0.0f;
+
+    /** Used by Orbit Character Gravity to avoid independently rotating the same Actor. */
+    bool IsManagingCharacterOrientation() const;
+
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
     FVector LastGravityUp = FVector::UpVector;
 
@@ -100,6 +131,11 @@ protected:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
+    /** Native Character Movement post-movement delegate; orientation updates here
+     * so locomotion AnimBP updates see the same-frame gravity-relative facing. */
+    UFUNCTION()
+    void OnNativeMovementFinished(float DeltaSeconds, FVector OldLocation, FVector OldVelocity);
+
     bool bInitializedCameraFrame = false;
     bool bOwnsSpringArmRotation = false;
     bool bSavedBoomUsePawnControlRotation = false;
@@ -109,6 +145,16 @@ private:
     FVector CameraFrameUp = FVector::UpVector;
     float CameraPitch = 0.0f;
     FVector RequestedFacingDirection = FVector::ZeroVector;
+    FVector OrientationFrameUp = FVector::UpVector;
+    FVector OrientationFrameForward = FVector::ForwardVector;
+    bool bOrientationFrameInitialized = false;
+    bool bOwnsNativeRotation = false;
+    bool bSavedOrientRotationToMovement = false;
+    bool bSavedUseControllerDesiredRotation = false;
+    bool bSavedUseControllerRotationYaw = false;
+    void UpdateNativeRotationOwnership();
+    void RestoreNativeRotationOwnership();
+    void DrawLocomotionDebug() const;
     double LastFacingInputSeconds = -1.0;
     void UpdateCharacterFacing(float DeltaTime);
 

@@ -1,0 +1,82 @@
+# Orbit | Gravity-relative Character Animation Integration
+
+**Plugin:** Orbit 0.2.7, Iteration 018  
+**Target:** UE 5.8.3 Third Person native `ACharacter` with Manny/Quinn animation setup  
+**Scope:** Correct gravity-local locomotion parameters, not automatic mutation of existing Animation Blueprints
+
+## Why forward movement appears to strafe on a planet
+
+Gravity-relative movement can be correct while an existing AnimBP or warping node interprets the velocity in **world XY**. Running along world Z at a planet's equator produces almost zero `Vector Length XY` even if the gravity-tangent ground speed is 300 cm/s. World yaw or world-Z `Calculate Direction` likewise ceases to match the character's local movement frame. The original GIFs showed gait transitions while holding only W or S; the exact AnimBP node responsible is **not proven** without inspecting that asset graph.
+
+Iteration 018 addresses a second suspected contributor: Orbit Gravity no longer applies a competing actor rotation when Orbit Controls is responsible for character facing, and Controls now parallel-transports its facing heading over curved surfaces. Orbit can optionally disable and restore native character rotation owners. The final orientation update runs on Character Movement's completed-movement delegate, rather than waiting for a separate late controls tick. These changes alone cannot correct an Animation Blueprint that consumes incompatible values.
+
+## Required Character setup
+
+1. Add **Orbit Character Gravity** and **Orbit Character Controls** to your Third Person Character.
+2. Orbit Character Gravity: enable **Align Actor to Gravity** and **Match Gravity Magnitude**. Keep the desired gravity smoothing enabled for smooth planet transitions.
+3. Orbit Character Controls: enable **Face Movement Direction**, **Face Velocity When Moving**, **Disable Competing Native Rotation**, and **Orient Camera to Gravity**.
+4. Forward Enhanced Input IA_Move and IA_Look Vector2D values to Orbit's input functions **instead of** the existing template movement/look branches. If both run, movement may be doubled or rotate unpredictably.
+5. Avoid simultaneous `SetActorRotation` code in the Character Event Graph, `Use Controller Rotation Pitch/Roll`, root motion that controls actor rotation, or any other Actor-facing system, unless deliberately coordinated.
+
+## Gravity-local animation node hookup (manual and explicit)
+
+**A. Locate the actual locomotion graph.** Open the Animation Blueprint(s) used by your character's Skeletal Mesh. Manny and Quinn may use separate AnimBP instances, linked animation layers, and motion-warp/locomotion graphs depending on the Third Person template. Inspect the actual active graph. Do not guess an asset name or rely on only one display-name value.
+
+**B. Gather state on the game thread.** In the Animation Blueprint's **Event Blueprint Update Animation**:
+
+```text
+Event Blueprint Update Animation
+  -> Try Get Pawn Owner
+  -> Cast to Character (or use the known Character reference)
+  -> Get Orbit Gravity Animation State
+       Character = pawn
+       Min Ground Speed = 3
+       Min Acceleration = 0.1
+  -> Break Orbit Gravity Animation State
+  -> Cache outputs into AnimBP variables
+```
+
+Use the **game-thread Event Graph** rather than directly calling arbitrary Character/World Blueprint functions inside a thread-safe animation worker evaluation. If your AnimBP uses a thread-safe update/property-access pattern, write into variables on the game thread, and use those cached variables within the animation evaluation thread according to the AnimBP's setup.
+
+**C. Replace incompatible data producers** wherever the active locomotion graph uses them:
+
+| Typical input / computation | Replace with Orbit state |
+| --- | --- |
+| `Vector Length XY` of World Velocity | **Ground Speed** |
+| World-Z `Calculate Direction` or world yaw projection | **Movement Direction Degrees** (0 forward, +90 right, -90 left, ±180 back) |
+| World XY `Velocity` used to classify running/strafing | **Forward Speed / Right Speed**, or **Tangent Velocity** if a vector is needed |
+| World XY acceleration / `Is Acceleration` | **Has Acceleration** or **Tangent Acceleration Magnitude** |
+| Moving/idle gate built from ground speed + acceleration | **Should Move** (thresholds configurable on node) |
+| Native Character Movement `Is Falling` | **Is Falling** (same movement mode, exposed for convenience) |
+
+`World XY Speed` is supplied for diagnostics only. **Do not use it to drive locomotion on planets.** Preserve animation-design intent: a graph may expect velocity in mesh-local axes or a normalized gait parameter, not speed in cm/s. Adapt units and ranges accordingly.
+
+**D. Check UE 5.8 Animation Warping gravity-vector inputs.** Unreal's `FAnimNode_StrideWarping` has a `GravityDirection` vector that defaults to **world (0,0,-1)**, and a `FloorNormalDirection` that defaults to **world (0,0,1)**. These defaults are inappropriate on the sides and underside of a planet. If your AnimGraph contains this node, configure the exposed inputs, where supported, to use **Gravity Down** and **Floor Normal** from Orbit Gravity Animation State rather than constant world-Z. `Floor Normal` uses Character Movement's native CurrentFloor surface normal when walkable, otherwise local Gravity Up. `Gravity Up`, `Gravity Down`, `Floor Normal` and `World Tangent Move Direction` are vectors in **world space**; match each animation node's expected vector space and representation (e.g., `FWarpingVectorValue`) instead of connecting mismatched spaces.
+
+`FAnimNode_OrientationWarping` in UE 5.8 can accept a **world-space LocomotionDirection** or an angle calculated from an animation-local rotation frame. Where that is exposed, supply Orbit's **World Tangent Move Direction** or **Movement Direction Degrees**, respectively, accounting for mesh-to-actor facing offsets and the node's chosen Rotation Axis. Check warping evaluation mode and root-motion requirements; do not blindly supply both an angle and a direction if the node chooses one path. These are supported node interfaces, **not automatically wired by Orbit**.
+
+**E. Validate any orientation/stride warping separately.** Unreal's warping nodes or the template's locomotion graph may calculate direction internally from World Velocity, Controller Yaw, mesh root, or a fixed world Up. If the Blend Space and cached state are correct but legs still cross-step, inspect that portion of the AnimGraph next, especially whether Stride Warping still uses world-down gravity or Orientation Warping still receives world-yaw-derived direction. Depending on the chosen animation assets, warping may require a gravity-frame input, a custom node, or disabling warping as a **diagnostic**. Orbit 0.2.7 does **not** claim full Manny/Quinn warping compatibility or automatically modify warping nodes.
+
+## Practical Planet A + Sphere test
+
+1. Center a spherical mesh and Point/Inward gravity source on `(0,0,2000)`. Place the player along +X or at the top for comparison.
+2. In Orbit Character Controls, enable **Draw Locomotion Debug** and inspect its PIE runtime Details.
+3. Hold W and do not move the mouse. The debug colors are **Up white**, **requested input blue**, **actual tangent velocity green**, **Actor forward yellow**. Request, velocity and facing should have a sensible relationship as local Up rotates.
+4. Compare `Last Gravity Relative Ground Speed` versus `Last World XY Speed`. On near-vertical stretches, the world XY reading can approach zero despite continuous running. Only gravity-relative speed belongs in a ground locomotion graph.
+5. Inspect `Last Velocity to Facing Angle Degrees` and `Last Capsule Up Error Degrees`: unexplained large offsets indicate actor orientation drift, independent of the gait graph.
+6. Feed the node into the active AnimBP, and verify cached `Movement Direction Degrees` remains near 0 while facing and moving forward. If it does but the character semi-strafes, **the remaining fault is downstream in the animation graph** and merits a capture of its BlendSpace/warping nodes.
+7. Repeat at poles, underside, between two overlapping sources, idle, and with S held. Backward input may intentionally turn the character to face its travel direction when `Face Movement Direction` is enabled. If your game specifically wants backwards locomotion rather than turning, disable facing for that mode and drive the AnimBP's backwards gait with the signed direction.
+
+## Limitations and diagnostic boundaries
+
+- The node returns motion state for **native Character Movement**. It is not a Mover simulation data API.
+- No existing `.uasset` is patched. An Animation Blueprint cannot be corrected merely by including the plugin, and its internal Orientation Warping and Stride Warping settings remain unchanged.
+- The plugin does not invent or transform native physics velocity to fool world-horizontal animation graphs.
+- The debug arrows and diagnostics are opt-in and intended for PIE. Native third-party camera, rotation or root-motion systems may still interfere.
+- Character rotation work is tested mathematically only until your UE 5.8.3 PIE test confirms there is no foot sliding, unwanted yaw, unwanted capsule tilt, or replication issue.
+
+## Epic UE 5.8 source references
+
+- [FAnimNode_StrideWarping API](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Plugins/AnimationWarpingRuntime/FAnimNode_StrideWarping): GravityDirection, FloorNormalDirection, LocomotionSpeed, StrideDirection.
+- [FAnimNode_OrientationWarping API](https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/AnimationWarpingRuntime/FAnimNode_OrientationWarping): LocomotionDirection (world-space), LocomotionAngle, RotationAxis, evaluation mode.
+- [Pose Warping in UE 5.8](https://dev.epicgames.com/documentation/unreal-engine/pose-warping-in-unreal-engine): example graphs and native warping debug display.

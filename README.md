@@ -2,12 +2,24 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.6 (Iteration 017, experimental)  
+**Current version:** 0.2.7 (Iteration 018, experimental)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
 **Status:** Source package prepared; compile, PIE and packaged-game validation are pending.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+
+## Iteration 018: Character facing and gravity-relative animation bridge
+
+- **One character-rotation owner:** when `Orbit Character Controls` owns locally controlled movement facing, `Orbit Character Gravity` stops independently rotating that Actor. Gravity still drives the native gravity direction and magnitude pre-movement; Controls applies ONE aligned Up + tangent Forward pose on native Character Movement's completed-movement delegate. Without Orbit Controls owning facing, Gravity retains its independent alignment behavior.
+- **Stable idle heading:** the Controls facing frame parallel-transports across curved terrain, including equators and poles, rather than extracting world yaw or stopping Up alignment when movement input ends.
+- **Native rotation conflict prevention:** when enabled (default), Orbit Controls temporarily disables Character Movement `Orient Rotation to Movement`, `Use Controller Desired Rotation`, and the Character's `Use Controller Rotation Yaw` while owning orientation. It restores the previous values on release/end play. This does **not** disable rotation from third-party systems.
+- **Animation Blueprint data:** new `Get Orbit Gravity Animation State` pure Blueprint node returns gravity-tangent Ground Speed, signed relative direction, forward/side speed, acceleration, Should Move, Falling, gravity Up/Down, floor normal and world-space tangent movement heading. The older `Get Gravity Relative Locomotion` remains available.
+- **Locomotion debug:** opt-in arrows for gravitational Up (white), input intent (blue), actual tangent velocity (green), and actor forward (yellow); angle/speed diagnostics in component Details.
+- **Important:** Existing Manny/Quinn Animation Blueprints are **NOT automatically rewritten**. If they still use world XY `Vector Length XY` or world-yaw movement direction, the visible semi-strafe can remain. Apply the graph wiring described in [Animation Integration](Docs/ANIMATION_INTEGRATION.md). Also inspect orientation warping and stride warping if the gait still changes with consistent gravity-relative inputs.
+- **Testing:** four new math regressions for forward-running invariance across all 6 cardinal Up directions, lateral/backward direction, full sphere heading transport, and opposing Up. No UE runtime tests were run in this environment.
+
+See [Iteration 018](Docs/ITERATION_018.md), [Animation Integration](Docs/ANIMATION_INTEGRATION.md) and [Components and Blueprint API](Docs/COMPONENTS_AND_BLUEPRINT_API.md).
 
 ## Iteration 017: one Orbit plugin, internal optional Mover module
 
@@ -49,12 +61,12 @@ These are experimental source changes, **not** a claim of a successful UE 5.8.3 
 | Optional Character Movement direction/strength bridge, native-gravity restoration and opt-in actor alignment | **Experimental**, supports tested-source path with UE PIE validation pending |
 | Post-movement native FindFloor landing assist, live PIE property mirroring and runtime Strength diagnostics | **Experimental**; subject to UE floor sweep and landing validation |
 | Optional gravity-relative input, actual-velocity facing and quaternion Spring Arm camera (native Character Movement) | **Experimental**; manual Enhanced Input Blueprint hookup required |
-| Gravity-relative animation locomotion query (full 3D tangent speed, signed direction) | Implemented; requires Animation Blueprint wiring |
+| Gravity-relative animation locomotion + animation state query (speed, acceleration, direction, falling), stable heading transport and single character-rotation owner | Implemented in source; existing Animation Blueprint must be rewired |
 | Gravity-frame creation and relative/world transform conversion Blueprint nodes | Implemented; pending UE test |
 | Editor volumetric field arrows and purple streamlines, relative density (1–10), influence wireframes | Implemented; pending UE test |
 | Actor viewport billboard from supplied Orbit artwork | Implemented with Editor-only transient texture; pending UE visual test |
 | Orbit editor icons | Registered for plugin browser, gravity-source actor, character gravity component and class thumbnail; pending UE visual test |
-| Field math and Mover policy automated tests | 30 base Orbit field/character tests plus 4 internal OrbitMover tests authored; pending UE 5.8.3 verification |
+| Field math and Mover policy automated tests | 34 base Orbit field/character tests plus 4 internal OrbitMover tests authored; pending UE 5.8.3 verification |
 | Built-in optional kinematic Mover adapter (internal `OrbitMover` module) | **Experimental**, uses reflection and game-thread pre-physics updates; Chaos/async excluded |
 | Chaos solver callbacks and per-body substep gravity | **Not yet implemented** |
 | Gravity-aware NavMesh, EQS, AI MoveTo | **Not yet implemented** |
