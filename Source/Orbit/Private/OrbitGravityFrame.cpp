@@ -70,6 +70,34 @@ bool FOrbitGravityFrame::TransportTangentHeading(const FVector& PreviousUp,
     return MakeTangentBasis(ToUp, Transported, OutForward, Right);
 }
 
+bool FOrbitGravityFrame::ChooseGravityRelativeFacing(const FVector& Up, const FVector& Velocity,
+    const FVector& RequestedHeading, bool bHasRecentInput, bool bPreferVelocity,
+    double VelocityThreshold, FVector& OutHeading)
+{
+    OutHeading = FVector::ZeroVector;
+    if (Up.ContainsNaN() || Up.IsNearlyZero() || Velocity.ContainsNaN() ||
+        RequestedHeading.ContainsNaN() || !FMath::IsFinite(VelocityThreshold))
+    {
+        return false;
+    }
+    const FVector NormalUp = Up.GetSafeNormal();
+    if (bPreferVelocity)
+    {
+        const FVector TangentVelocity = FVector::VectorPlaneProject(Velocity, NormalUp);
+        if (TangentVelocity.SizeSquared() > FMath::Square(FMath::Max(0.0, VelocityThreshold)))
+        {
+            OutHeading = TangentVelocity.GetSafeNormal();
+            return !OutHeading.IsNearlyZero();
+        }
+    }
+    if (bHasRecentInput)
+    {
+        OutHeading = FVector::VectorPlaneProject(RequestedHeading, NormalUp).GetSafeNormal();
+        return !OutHeading.IsNearlyZero();
+    }
+    return false;
+}
+
 bool FOrbitGravityFrame::ShouldAttemptNearFloorLanding(bool bFalling, double VerticalVelocityUp,
     double HorizontalSpeed, double MaxApproachSpeed, double FloorDistance, double MaxLandingDistance)
 {

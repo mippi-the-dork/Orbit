@@ -935,4 +935,43 @@ bool FOrbitPlanetaryOrientationAntipodalTest::RunTest(const FString& Parameters)
             FVector::ZeroVector, Heading));
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitFacingVelocityWithoutInputTest,
+    "Orbit.Character.Facing.VelocityWithoutOrbitInput",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitFacingVelocityWithoutInputTest::RunTest(const FString& Parameters)
+{
+    FVector Heading;
+    const FVector Up = FVector::ForwardVector; // planet's +X equator
+    TestTrue(TEXT("Native input movement can steer facing without an Orbit input callback"),
+        FOrbitGravityFrame::ChooseGravityRelativeFacing(Up, FVector(0, 200, 0),
+            FVector::ZeroVector, false, true, 30.0, Heading));
+    TestTrue(TEXT("Facing chooses actual velocity in gravity tangent plane"),
+        Heading.Equals(FVector::RightVector, 0.0001));
+    TestTrue(TEXT("Vertical gravity velocity does not count as tangent motion"),
+        !FOrbitGravityFrame::ChooseGravityRelativeFacing(Up, FVector(300, 0, 0),
+            FVector::ZeroVector, false, true, 30.0, Heading));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitFacingFallbackToInputTest,
+    "Orbit.Character.Facing.RequestedInputAndIdle",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitFacingFallbackToInputTest::RunTest(const FString& Parameters)
+{
+    FVector Heading;
+    const FVector Up = FVector::UpVector;
+    TestTrue(TEXT("Recently received input supplies facing when velocity is too low"),
+        FOrbitGravityFrame::ChooseGravityRelativeFacing(Up, FVector::ZeroVector,
+            -FVector::ForwardVector, true, true, 30.0, Heading));
+    TestTrue(TEXT("Requested input preserves backward yaw"), Heading.Equals(-FVector::ForwardVector, 0.0001));
+    TestTrue(TEXT("Velocity overrides input when speed exceeds threshold"),
+        FOrbitGravityFrame::ChooseGravityRelativeFacing(Up, FVector(250, 0, 300),
+            -FVector::ForwardVector, true, true, 30.0, Heading));
+    TestTrue(TEXT("Gravity-axis velocity is projected away before choosing heading"),
+        Heading.Equals(FVector::ForwardVector, 0.0001));
+    TestFalse(TEXT("No input or lateral velocity retains transported heading"),
+        FOrbitGravityFrame::ChooseGravityRelativeFacing(Up, FVector::ZeroVector,
+            FVector::ZeroVector, false, true, 30.0, Heading));
+    return true;
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

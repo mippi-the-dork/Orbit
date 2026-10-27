@@ -95,6 +95,26 @@ public:
         meta=(EditCondition="bDrawLocomotionDebug", ClampMin="10.0", Units="cm"))
     float DebugVectorLength = 120.0f;
 
+    /** In-PIE diagnostics. If this stays at zero, the component is not ticking. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 DebugTickCount = 0;
+
+    /** Increments when UE Character Movement broadcasts its completed-movement callback. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 NativeMovementCallbackCount = 0;
+
+    /** Increments when the controls tick handles facing because no native callback arrived. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 TickFacingFallbackCount = 0;
+
+    /** Increments when the Orbit movement input function receives a valid action value. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 OrbitMoveInputCount = 0;
+
+    /** Explains why the component currently can or cannot own facing. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    FString LastFacingDebugStatus = TEXT("Waiting for BeginPlay");
+
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
     float LastVelocityToFacingAngleDegrees = 0.0f;
 
@@ -136,6 +156,7 @@ private:
     UFUNCTION()
     void OnNativeMovementFinished(float DeltaSeconds, FVector OldLocation, FVector OldVelocity);
 
+    bool bReceivedMovementCallbackSinceLastTick = false;
     bool bInitializedCameraFrame = false;
     bool bOwnsSpringArmRotation = false;
     bool bSavedBoomUsePawnControlRotation = false;
@@ -155,6 +176,7 @@ private:
     void UpdateNativeRotationOwnership();
     void RestoreNativeRotationOwnership();
     void DrawLocomotionDebug() const;
+    void RefreshFacingDebugStatus();
     double LastFacingInputSeconds = -1.0;
     void UpdateCharacterFacing(float DeltaTime);
 

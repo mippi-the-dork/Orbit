@@ -118,3 +118,8 @@ Run `Orbit.Mover.*` through Unreal's Automation Test interface:
 ## Iteration 018 update scope
 
 No Mover adapter logic, build dependencies, or Mover Blueprint API changed in Iteration 018. Character-facing ownership and animation state apply to native Character Movement + Orbit Character Controls, **not** Epic Mover-driven pawns. The optional internal `OrbitMover` module remains in the same single Orbit plugin and requires its own runtime validation.
+
+
+## Iteration 019 scope
+
+v0.2.8 changes the **native Character Controls** facing and diagnostic behavior only. The internal OrbitMover adapter, reflected Mover gravity/up calls, load behavior and synchronous kinematic support boundaries are unchanged. The new Character Controls fallback must not be interpreted as adding ChaosMover, async or rollback support.

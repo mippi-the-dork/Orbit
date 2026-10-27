@@ -258,6 +258,12 @@ This uses game-thread `UPrimitiveComponent::AddForce(..., bAccelChange=true)` on
 - `Source/Orbit/Private/Tests/OrbitFieldTests.cpp`: 30 authored base Unreal automation tests under `Orbit.Field.*`.
 - `Source/OrbitMover/Private/Tests/OrbitMoverTests.cpp`: four internal Mover tests under `Orbit.Mover.*`.
 
+## Character orientation regression diagnostics (v0.2.8)
+
+If the Character stops turning after enabling Orbit Controls facing, select the **runtime Character instance during PIE**, then select **Orbit Character Controls** and enable `Draw Locomotion Debug` in its live Details. Read `Last Facing Debug Status`, `Debug Tick Count`, `Native Movement Callback Count`, `Tick Facing Fallback Count`, and `Orbit Move Input Count`. Debug arrows now draw even when facing ownership is not active. White indicates gravity Up; blue shows the requested Orbit input; green shows tangent velocity; yellow shows Character forward. Missing blue with increasing green indicates movement that did not pass through Orbit's input bridge, in which case the v0.2.8 velocity-facing fallback should still face the actor (if locally controlled). A zero `Debug Tick Count` indicates that the component is not ticking or that the runtime component is not the instance being inspected.
+
+This does not automatically rewire Manny/Quinn's Animation Blueprint: consult [`Docs/ANIMATION_INTEGRATION.md`](Docs/ANIMATION_INTEGRATION.md).
+
 ## Release status
 
 This is an **experimental source-first developer iteration**. The host environment does not contain the Unreal 5.8.3 SDK or UnrealBuildTool, so no actual Unreal compilation or runtime test has been performed here. Please provide the full Unreal build log if you encounter a compile error, and we can resolve it against the actual 5.8.3 engine headers.

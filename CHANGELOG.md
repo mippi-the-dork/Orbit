@@ -1,3 +1,14 @@
+## 0.2.8 - Iteration 019 - Character Facing and Debug Visibility Regression Fix
+
+- Fix debug arrows being hidden when the facing-ownership predicate is false. Drawing now depends on the explicit `Draw Locomotion Debug` setting and a ticking Controls component, rather than on successful facing ownership.
+- Add PIE component diagnostics: `Debug Tick Count`, `Native Movement Callback Count`, `Tick Facing Fallback Count`, `Orbit Move Input Count`, and `Last Facing Debug Status`. This identifies inactive components, locally-uncontrolled pawns, missing input wiring, and absent native callbacks.
+- Add an orientation-update fallback on the Controls post-update tick **only when** the native Character Movement callback did not arrive. Avoid applying the same rotation twice when the native callback did arrive.
+- Allow velocity-based facing to use actual gravity-tangent Character Movement velocity even when no recent Orbit-specific input event was recorded. This also helps characters using the ordinary AddMovementInput path, though Orbit's gravity-relative input functions remain preferred for accurate camera-relative controls.
+- Add 2 unit tests for velocity-driven facing without Orbit input and requested-heading fallback/idle behavior (36 base + 4 internal Mover authored tests).
+- Preserve one final actor rotation owner, embedded source components, multi-planet competition, Mover adapter, and existing Blueprint APIs.
+
+**Validation:** Source/static checks only. Compile and PIE tests in UE 5.8.3 still required; animation asset wiring is unchanged.
+
 ## 0.2.7 - Iteration 018 - Unified Character Orientation and Animation Bridge
 
 - Give Orbit Character Controls sole ownership of the final locally controlled character rotation when movement-facing is enabled. Orbit Character Gravity continues applying gravity before native movement, but no longer applies its own competing actor rotation in that configuration. Characters without active Controls facing retain the original Gravity alignment path.

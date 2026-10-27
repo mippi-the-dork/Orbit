@@ -744,3 +744,8 @@ No Orbit-authored Blueprint nodes or components are added/removed in v0.2.5. All
 ## Iteration 017: single-plugin consolidation (v0.2.6)
 
 The `OrbitMover` code is now inside `Orbit/Source/OrbitMover/` and its component and two functions ship in the **one Orbit plugin**. You do not install, enable or distribute a separate `OrbitMover.uplugin`. The engine's Experimental Mover can remain disabled unless the project uses Mover. The adapter uses runtime reflection and game-thread pre-physics ticking rather than a typed Mover pre-simulation callback, so independent simulation timing and rollback remain unverified. See [MOVER_INTEGRATION.md](MOVER_INTEGRATION.md).
+
+
+## Orbit Character Controls v0.2.8 diagnostics
+
+When debugging a Character with fixed gravity-relative yaw or missing debug arrows, inspect **the spawned PIE actor's** Orbit Character Controls component. `Draw Locomotion Debug` now works even when Orbit does not own orientation, provided the component ticks. Runtime read-only fields: `Debug Tick Count`, `Native Movement Callback Count`, `Tick Facing Fallback Count`, `Orbit Move Input Count`, `Last Facing Debug Status`. A zero Tick Count indicates that the component did not tick; the status field distinguishes control and facing-ownership conditions. Rotation falls back to the Controls tick when no native movement callback arrived, and tangent velocity can steer facing without the Orbit-specific input bridge if Face Velocity When Moving is enabled. The Blueprint nodes and native component interfaces are unchanged. See `ITERATION_019.md` and `ANIMATION_INTEGRATION.md`.

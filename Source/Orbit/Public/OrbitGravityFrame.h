@@ -26,6 +26,13 @@ public:
     static bool TransportTangentHeading(const FVector& PreviousUp, const FVector& PreviousForward,
         const FVector& NewUp, FVector& OutForward);
 
+    /** Choose velocity-facing when moving (even without Orbit input), otherwise
+     * use the recent requested heading. Both are projected into the gravity plane.
+     * A false return means preserve the existing parallel-transported heading. */
+    static bool ChooseGravityRelativeFacing(const FVector& Up, const FVector& Velocity,
+        const FVector& RequestedHeading, bool bHasRecentInput, bool bPreferVelocity,
+        double VelocityThreshold, FVector& OutHeading);
+
     /** Safe test of whether native near-floor landing assistance can even be considered.
      *  The movement component MUST still validate a collision sweep and walkable landing hit. */
     static bool ShouldAttemptNearFloorLanding(bool bFalling, double VerticalVelocityUp,

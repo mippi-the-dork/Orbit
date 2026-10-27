@@ -32,6 +32,7 @@ void UOrbitCharacterControlsComponent::BeginPlay()
     }
     UpdateCameraOwnership();
     UpdateNativeRotationOwnership();
+    RefreshFacingDebugStatus();
 }
 
 void UOrbitCharacterControlsComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -208,6 +209,7 @@ void UOrbitCharacterControlsComponent::TickComponent(float DeltaTime, ELevelTick
     FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+    ++DebugTickCount;
     UpdateCameraOwnership();
     UpdateNativeRotationOwnership();
     if (bOrientCameraToGravity)
@@ -215,8 +217,21 @@ void UOrbitCharacterControlsComponent::TickComponent(float DeltaTime, ELevelTick
         RefreshCameraFrame(GetCurrentUp());
         ApplyCameraRotation();
     }
-    // Native movement invokes OnNativeMovementFinished after the movement scope;
-    // don't also rotate the actor here or introduce a second orientation update.
+    // Character Movement may skip its update delegate for a frame (e.g. movement
+    // disabled/paused). The old code had no fallback, so native facing could be
+    // suspended indefinitely without Orbit applying a replacement rotation.
+    // This component ticks AFTER Character Movement. Only use the fallback when
+    // a post-movement facing update did not already happen since our last tick.
+    if (!bReceivedMovementCallbackSinceLastTick && IsManagingCharacterOrientation())
+    {
+        ++TickFacingFallbackCount;
+        UpdateCharacterFacing(DeltaTime);
+    }
+    bReceivedMovementCallbackSinceLastTick = false;
+    RefreshFacingDebugStatus();
+    // Always draw when requested, even if facing ownership is inactive. Making
+    // the drawing conditional on IsManagingCharacterOrientation() concealed the
+    // exact failure that debug drawing was supposed to diagnose.
     if (bDrawLocomotionDebug) { DrawLocomotionDebug(); }
 }
 
@@ -225,6 +240,8 @@ void UOrbitCharacterControlsComponent::OnNativeMovementFinished(
 {
     // This callback occurs after native movement, not during a physics sweep.
     // Native gravity was installed by the Orbit Gravity component before movement.
+    ++NativeMovementCallbackCount;
+    bReceivedMovementCallbackSinceLastTick = true;
     UpdateCharacterFacing(DeltaSeconds);
 }
 
@@ -268,6 +285,7 @@ void UOrbitCharacterControlsComponent::ApplyGravityRelativeMove(FVector2D MoveAx
     {
         return;
     }
+    ++OrbitMoveInputCount;
     LastGravityUp = Up;
     LastMoveForward = Forward;
     LastMoveRight = Right;
@@ -314,25 +332,16 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
     const bool bHasRecentInput = !RequestedFacingDirection.IsNearlyZero() &&
         LastFacingInputSeconds >= 0.0 &&
         World->GetTimeSeconds() - LastFacingInputSeconds <= 0.15;
-    FVector DesiredHeading = FVector::ZeroVector;
-    if (bHasRecentInput)
-    {
-        DesiredHeading = RequestedFacingDirection;
-        if (bFaceVelocityWhenMoving)
-        {
-            const UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
-            if (Movement)
-            {
-                const FVector TangentVelocity = FVector::VectorPlaneProject(Movement->Velocity, Up);
-                if (TangentVelocity.SizeSquared() >= FMath::Square(VelocityFacingThreshold))
-                {
-                    DesiredHeading = TangentVelocity.GetSafeNormal();
-                }
-            }
-        }
-        const FVector RequestedTangent = FVector::VectorPlaneProject(DesiredHeading, Up).GetSafeNormal();
-        if (!RequestedTangent.IsNearlyZero()) { OrientationFrameForward = RequestedTangent; }
-    }
+    // Native AddMovementInput paths can move the Character without ever calling
+    // ApplyGravityRelativeMove. Actual gravity-tangent velocity is still enough
+    // to determine facing; it must not be gated on recently cached Orbit input.
+    const UCharacterMovementComponent* FacingMovement = Character->GetCharacterMovement();
+    const FVector FacingVelocity = FacingMovement ? FacingMovement->Velocity : FVector::ZeroVector;
+    FVector DesiredHeading;
+    const bool bHasFacingHeading = FOrbitGravityFrame::ChooseGravityRelativeFacing(
+        Up, FacingVelocity, RequestedFacingDirection, bHasRecentInput,
+        bFaceVelocityWhenMoving, VelocityFacingThreshold, DesiredHeading);
+    if (bHasFacingHeading) { OrientationFrameForward = DesiredHeading; }
 
     if (!FOrbitGravityFrame::MakeTangentBasis(Up, OrientationFrameForward, Forward, Right)) { return; }
     const FQuat Target = FRotationMatrix::MakeFromXZ(Forward, Up).ToQuat();
@@ -342,7 +351,7 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
     // still sets the native movement gravity direction before movement but skips
     // its independent actor rotation. During idle, follow its alignment rate.
     float ResponseRate = FacingResponseRate;
-    if (!bHasRecentInput)
+    if (!bHasFacingHeading)
     {
         if (const UOrbitCharacterGravityComponent* Gravity =
             Character->FindComponentByClass<UOrbitCharacterGravityComponent>())
@@ -376,11 +385,52 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
             FVector::DotProduct(ActualHeading, TangentVelocity.GetSafeNormal()), -1.0, 1.0))));
 }
 
+void UOrbitCharacterControlsComponent::RefreshFacingDebugStatus()
+{
+    const ACharacter* Character = Cast<ACharacter>(GetOwner());
+    if (!Character)
+    {
+        LastFacingDebugStatus = TEXT("Owner is not an ACharacter");
+    }
+    else if (!IsActive())
+    {
+        LastFacingDebugStatus = TEXT("Controls component is not active");
+    }
+    else if (!IsComponentTickEnabled())
+    {
+        LastFacingDebugStatus = TEXT("Controls component tick is disabled");
+    }
+    else if (!bFaceMovementDirection)
+    {
+        LastFacingDebugStatus = TEXT("Face Movement Direction is disabled");
+    }
+    else if (!Character->IsLocallyControlled())
+    {
+        LastFacingDebugStatus = TEXT("Character is not locally controlled; Orbit does not own its facing");
+    }
+    else if (NativeMovementCallbackCount > 0)
+    {
+        LastFacingDebugStatus = OrbitMoveInputCount > 0
+            ? TEXT("Facing active: native movement callback + Orbit input")
+            : TEXT("Facing active: native movement callback; no Orbit move input observed");
+    }
+    else if (TickFacingFallbackCount > 0)
+    {
+        LastFacingDebugStatus = OrbitMoveInputCount > 0
+            ? TEXT("Facing active: tick fallback + Orbit input; native callback absent")
+            : TEXT("Facing active: tick fallback; no Orbit move input observed");
+    }
+    else
+    {
+        LastFacingDebugStatus = TEXT("Facing eligible; waiting for the first movement update");
+    }
+}
+
 void UOrbitCharacterControlsComponent::DrawLocomotionDebug() const
 {
     const ACharacter* Character = Cast<ACharacter>(GetOwner());
     const UWorld* World = GetWorld();
-    if (!Character || !World || !IsManagingCharacterOrientation()) { return; }
+    if (!Character || !World) { return; }
     const FVector Up = GetCurrentUp();
     const FVector Start = Character->GetActorLocation() + Up * 85.0;
     const float Length = FMath::Max(10.0f, DebugVectorLength);

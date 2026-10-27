@@ -1,6 +1,6 @@
 # Orbit | Gravity-relative Character Animation Integration
 
-**Plugin:** Orbit 0.2.7, Iteration 018  
+**Plugin:** Orbit 0.2.8, Iteration 019  
 **Target:** UE 5.8.3 Third Person native `ACharacter` with Manny/Quinn animation setup  
 **Scope:** Correct gravity-local locomotion parameters, not automatic mutation of existing Animation Blueprints
 
@@ -80,3 +80,8 @@ Use the **game-thread Event Graph** rather than directly calling arbitrary Chara
 - [FAnimNode_StrideWarping API](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Plugins/AnimationWarpingRuntime/FAnimNode_StrideWarping): GravityDirection, FloorNormalDirection, LocomotionSpeed, StrideDirection.
 - [FAnimNode_OrientationWarping API](https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/AnimationWarpingRuntime/FAnimNode_OrientationWarping): LocomotionDirection (world-space), LocomotionAngle, RotationAxis, evaluation mode.
 - [Pose Warping in UE 5.8](https://dev.epicgames.com/documentation/unreal-engine/pose-warping-in-unreal-engine): example graphs and native warping debug display.
+
+
+## v0.2.8 facing/debug visibility correction
+
+In v0.2.7 the debug arrows were incorrectly gated on active facing ownership. If the character was not locally controlled or the component was inactive, the debug display silently disappeared. v0.2.8 draws when requested (provided the component ticks) and adds PIE-visible `Last Facing Debug Status`, `Debug Tick Count`, `Native Movement Callback Count`, `Tick Facing Fallback Count` and `Orbit Move Input Count`. When native Character Movement does not emit a callback for a frame, a post-update Controls tick can perform the facing update. With Face Velocity When Moving enabled, actual gravity-tangent velocity can select a facing heading even if the Orbit IA_Move bridge did not supply a recent input vector. This does **not** alter Animation Blueprint locomotion Blend Spaces or Warping nodes; the manual gravity-relative animation hookup above remains necessary.

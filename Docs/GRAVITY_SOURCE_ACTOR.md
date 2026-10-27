@@ -566,3 +566,8 @@ Orbit Mover gravity is now implemented inside the single Orbit plugin as an inte
 ## Iteration 018 character and animation integration note
 
 The dedicated Gravity Source Actor, embedded Source Component, source competition, and Gravity Channels did not change in Iteration 018. The revised Character Controls/Character Gravity orientation contract consumes their sampled gravity normally. For the sphere-specific Manny/Quinn locomotion setup, see [ANIMATION_INTEGRATION.md](ANIMATION_INTEGRATION.md). No source-actor setting alone rewires a Third Person Animation Blueprint.
+
+
+## Character orientation interaction (0.2.8)
+
+A Character inside a Gravity Source may have its orientation governed by Orbit Character Controls rather than the source itself. The v0.2.8 fix for frozen character-relative yaw and debug visibility does **not** change source sampling, Point/Axis/Volume/Spline falloff, field strength, Priority, or multi-source arbitration. Consult `ITERATION_019.md` and the Character Controls section of `COMPONENTS_AND_BLUEPRINT_API.md` for the runtime-facing diagnostics.
