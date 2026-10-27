@@ -1,3 +1,5 @@
+﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
+
 using UnrealBuildTool;
 
 // This module intentionally has NO build-time dependency on Epic's Experimental Mover.

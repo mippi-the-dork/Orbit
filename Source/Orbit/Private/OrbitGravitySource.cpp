@@ -1,3 +1,5 @@
+﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
+
 #include "OrbitGravitySource.h"
 #include "OrbitWorldSubsystem.h"
 #include "Components/SceneComponent.h"
