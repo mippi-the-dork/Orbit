@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "OrbitGravityTypes.h"
 #include "OrbitSettings.generated.h"
 
 /** Project Settings > Plugins > Orbit. Settings apply to new and existing play worlds. */
@@ -27,6 +28,15 @@ public:
     /** Use normal WorldSettings gravity outside all Orbit sources; otherwise unused regions are zero-g. */
     UPROPERTY(EditAnywhere, Config, Category="Field")
     bool bUseWorldGravityOutsideFields = true;
+
+    /** Equal-priority Override field resolution. Higher Priority always wins first. */
+    UPROPERTY(EditAnywhere, Config, BlueprintReadOnly, Category="Field|Competition")
+    EOrbitOverrideResolution OverrideResolution = EOrbitOverrideResolution::StrongestInfluence;
+
+    /** A character keeps its previous strongest source until its challenger exceeds it by this fraction. */
+    UPROPERTY(EditAnywhere, Config, BlueprintReadOnly, Category="Field|Competition",
+        meta=(ClampMin="0.0", ClampMax="1.0", UIMin="0.0", UIMax="0.5"))
+    double CharacterSwitchHysteresis = 0.15;
 
     /**
      * Experimental single-rigid-body rest stabilization. Once a slow-moving

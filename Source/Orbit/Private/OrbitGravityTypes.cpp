@@ -248,59 +248,145 @@ bool FOrbitFieldEvaluator::EvaluateForBody(const FOrbitFieldDefinition& Field,
     return !OutAcceleration.ContainsNaN();
 }
 
+// Distance weighting is intentionally separate from the authored falloff: even
+// Constant fields need a meaningful spatial influence score for planet handoffs.
+// This affects *competition*, not the single-source acceleration magnitude.
+static double OrbitCompetitionDistance(const FOrbitFieldDefinition& Field, const FVector& Position)
+{
+    if (Field.Shape == EOrbitGravityShape::Axis)
+    {
+        const FVector Axis = Field.Axis.GetSafeNormal();
+        const FVector Offset = Position - Field.Center;
+        return (Offset - Axis * FVector::DotProduct(Offset, Axis)).Size();
+    }
+    if (Field.Shape == EOrbitGravityShape::Spline)
+    {
+        int32 Segment = INDEX_NONE;
+        double Alpha = 0.0;
+        const FVector Closest = FOrbitFieldEvaluator::ClosestOnCurve(Field.Curve, Position, Segment, Alpha);
+        return Segment == INDEX_NONE ? TNumericLimits<double>::Max() : FVector::Dist(Position, Closest);
+    }
+    return FVector::Dist(Position, Field.Center);
+}
+
+static double OrbitInfluenceScore(const FOrbitFieldDefinition& Field, const FVector& Position, const FVector& Acceleration)
+{
+    const double Distance = OrbitCompetitionDistance(Field, Position);
+    // A finite extent provides an intuitive normalized distance. Unbounded
+    // fields use ReferenceDistance as a sensible proximity length scale.
+    const double Scale = Field.MaxDistance > 0.0 ? Field.MaxDistance : FMath::Max(1.0, Field.ReferenceDistance);
+    const double Proximity = Scale / (Scale + Distance);
+    return Acceleration.Size() * Proximity;
+}
+
 static FOrbitGravitySample CombineFieldsInternal(const TArray<FOrbitFieldDefinition>& Fields, const FVector& Position,
-    EOrbitGravityChannel Channel, uint8 ReceiverMask, const FVector* BodyVelocity)
+    EOrbitGravityChannel Channel, uint8 ReceiverMask, const FVector* BodyVelocity,
+    EOrbitOverrideResolution Resolution, int32 PreferredSourceId, double SwitchHysteresis)
 {
     FOrbitGravitySample Result;
     FVector Additive = FVector::ZeroVector;
     FVector Override = FVector::ZeroVector;
-    int32 OverridePriority = TNumericLimits<int32>::Lowest();
-    int32 BestId = INDEX_NONE;
-    double BestMagnitudeSq = -1.0;
-    bool bOverrideFound = false;
+    int32 HighestOverridePriority = TNumericLimits<int32>::Lowest();
     bool bAny = false;
+    bool bOverrideFound = false;
+    double BestScore = -1.0;
+    double PreferredScore = -1.0;
+    int32 BestId = INDEX_NONE;
+    double LegacyPointDistanceSq = TNumericLimits<double>::Max();
+    EOrbitGravityShape LegacyShape = EOrbitGravityShape::Directional;
+    double WeightSum = 0.0;
+    FVector WeightedAcceleration = FVector::ZeroVector;
 
-    // An overriding field suppresses additive fields at the same or lower priority.
+    // First determine the highest *influencing* Override priority. A zero
+    // strength source may still deliberately claim the area as zero gravity.
+    for (const FOrbitFieldDefinition& Field : Fields)
+    {
+        if (Field.Combine != EOrbitGravityCombine::Override ||
+            (Field.ChannelMask & ReceiverMask) == 0u ||
+            (Channel == EOrbitGravityChannel::Physics && !Field.bPhysics) ||
+            (Channel == EOrbitGravityChannel::Character && !Field.bCharacters)) { continue; }
+        FVector Acceleration;
+        if (!(BodyVelocity ? FOrbitFieldEvaluator::EvaluateForBody(Field, Position, *BodyVelocity, Acceleration)
+                            : FOrbitFieldEvaluator::Evaluate(Field, Position, Acceleration))) { continue; }
+        bOverrideFound = true;
+        HighestOverridePriority = FMath::Max(HighestOverridePriority, Field.Priority);
+    }
+
+    // Resolve only the top-priority Override group, then add higher-priority
+    // Additive contributions. Preserve unmatched channels and filters.
     for (const FOrbitFieldDefinition& Field : Fields)
     {
         if ((Field.ChannelMask & ReceiverMask) == 0u ||
             (Channel == EOrbitGravityChannel::Physics && !Field.bPhysics) ||
-            (Channel == EOrbitGravityChannel::Character && !Field.bCharacters)) { continue; }
+            (Channel == EOrbitGravityChannel::Character && !Field.bCharacters) ||
+            (Field.Combine == EOrbitGravityCombine::Override && Field.Priority != HighestOverridePriority) ||
+            (Field.Combine == EOrbitGravityCombine::Additive && bOverrideFound && Field.Priority <= HighestOverridePriority)) { continue; }
         FVector Acceleration;
         if (!(BodyVelocity ? FOrbitFieldEvaluator::EvaluateForBody(Field, Position, *BodyVelocity, Acceleration)
                             : FOrbitFieldEvaluator::Evaluate(Field, Position, Acceleration))) { continue; }
         bAny = true;
-        if (Field.Combine == EOrbitGravityCombine::Override)
+        const double Score = OrbitInfluenceScore(Field, Position, Acceleration);
+        if (Field.Combine == EOrbitGravityCombine::Additive)
         {
-            if (!bOverrideFound || Field.Priority > OverridePriority)
+            Additive += Acceleration;
+            if (!bOverrideFound && Score > BestScore) { BestScore = Score; BestId = Field.SourceId; }
+            continue;
+        }
+        if (Resolution == EOrbitOverrideResolution::PriorityOverride)
+        {
+            const double DistanceSq = Field.Shape == EOrbitGravityShape::Point
+                ? FVector::DistSquared(Position, Field.Center) : TNumericLimits<double>::Max();
+            if (BestId == INDEX_NONE || (Field.Shape == EOrbitGravityShape::Point &&
+                LegacyShape == EOrbitGravityShape::Point && DistanceSq < LegacyPointDistanceSq))
             {
-                OverridePriority = Field.Priority;
                 Override = Acceleration;
+                LegacyPointDistanceSq = DistanceSq;
+                LegacyShape = Field.Shape;
                 BestId = Field.SourceId;
-                bOverrideFound = true;
+            }
+            continue;
+        }
+        if (Score > BestScore)
+        {
+            BestScore = Score;
+            BestId = Field.SourceId;
+            Override = Acceleration;
+        }
+        if (Field.SourceId == PreferredSourceId) { PreferredScore = Score; }
+        if (Resolution == EOrbitOverrideResolution::BlendedInfluence)
+        {
+            WeightedAcceleration += Acceleration * Score;
+            WeightSum += Score;
+        }
+    }
+
+    if (bOverrideFound && Resolution != EOrbitOverrideResolution::PriorityOverride)
+    {
+        if (Resolution == EOrbitOverrideResolution::BlendedInfluence)
+        {
+            // A zero-weight group still claims influence as a valid zero-g zone.
+            Override = WeightSum > UE_DOUBLE_SMALL_NUMBER ? WeightedAcceleration / WeightSum : FVector::ZeroVector;
+        }
+        else if (PreferredSourceId != INDEX_NONE && PreferredSourceId != BestId &&
+                 PreferredScore >= 0.0 && PreferredScore * (1.0 + FMath::Max(0.0, SwitchHysteresis)) >= BestScore)
+        {
+            // Do not have the previous source win merely because it existed:
+            // compare current influence at THIS position every update.
+            for (const FOrbitFieldDefinition& Field : Fields)
+            {
+                if (Field.SourceId != PreferredSourceId || Field.Combine != EOrbitGravityCombine::Override ||
+                    Field.Priority != HighestOverridePriority) { continue; }
+                FVector Candidate;
+                if (BodyVelocity ? FOrbitFieldEvaluator::EvaluateForBody(Field, Position, *BodyVelocity, Candidate)
+                                 : FOrbitFieldEvaluator::Evaluate(Field, Position, Candidate))
+                {
+                    Override = Candidate;
+                    BestId = PreferredSourceId;
+                }
+                break;
             }
         }
     }
-
-    for (const FOrbitFieldDefinition& Field : Fields)
-    {
-        if (Field.Combine != EOrbitGravityCombine::Additive ||
-            (Field.ChannelMask & ReceiverMask) == 0u ||
-            (bOverrideFound && Field.Priority <= OverridePriority) ||
-            (Channel == EOrbitGravityChannel::Physics && !Field.bPhysics) ||
-            (Channel == EOrbitGravityChannel::Character && !Field.bCharacters)) { continue; }
-        FVector Acceleration;
-        if (!(BodyVelocity ? FOrbitFieldEvaluator::EvaluateForBody(Field, Position, *BodyVelocity, Acceleration)
-                            : FOrbitFieldEvaluator::Evaluate(Field, Position, Acceleration))) { continue; }
-        Additive += Acceleration;
-        const double MagnitudeSq = Acceleration.SizeSquared();
-        if (!bOverrideFound && MagnitudeSq > BestMagnitudeSq)
-        {
-            BestMagnitudeSq = MagnitudeSq;
-            BestId = Field.SourceId;
-        }
-    }
-
     Result.bHasInfluence = bAny;
     Result.Acceleration = Additive + (bOverrideFound ? Override : FVector::ZeroVector);
     Result.Magnitude = Result.Acceleration.Size();
@@ -311,17 +397,19 @@ static FOrbitGravitySample CombineFieldsInternal(const TArray<FOrbitFieldDefinit
     return Result;
 }
 
-
 FOrbitGravitySample FOrbitFieldEvaluator::Combine(const TArray<FOrbitFieldDefinition>& Fields,
-    const FVector& Position, EOrbitGravityChannel Channel, uint8 ReceiverMask)
+    const FVector& Position, EOrbitGravityChannel Channel, uint8 ReceiverMask,
+    EOrbitOverrideResolution Resolution, int32 PreferredSourceId, double SwitchHysteresis)
 {
-    return CombineFieldsInternal(Fields, Position, Channel, ReceiverMask, nullptr);
+    return CombineFieldsInternal(Fields, Position, Channel, ReceiverMask, nullptr,
+        Resolution, PreferredSourceId, SwitchHysteresis);
 }
 
 FOrbitGravitySample FOrbitFieldEvaluator::CombineForBody(const TArray<FOrbitFieldDefinition>& Fields,
-    const FVector& Position, const FVector& Velocity, uint8 ReceiverMask)
+    const FVector& Position, const FVector& Velocity, uint8 ReceiverMask, EOrbitOverrideResolution Resolution)
 {
-    return CombineFieldsInternal(Fields, Position, EOrbitGravityChannel::Physics, ReceiverMask, &Velocity);
+    return CombineFieldsInternal(Fields, Position, EOrbitGravityChannel::Physics, ReceiverMask,
+        &Velocity, Resolution, INDEX_NONE, 0.0);
 }
 
 int32 FOrbitFieldEvaluator::TraceStreamline(const FOrbitFieldDefinition& Field,

@@ -13,7 +13,11 @@ public class OrbitEditor : ModuleRules
             "Engine",
             "Orbit",
             "Projects",
-            "SlateCore"
+            "SlateCore",
+            "Slate",
+            "ToolMenus",
+            "UnrealEd",
+            "LevelEditor"
         });
     }
 }

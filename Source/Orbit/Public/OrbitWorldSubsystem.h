@@ -6,6 +6,7 @@
 #include "OrbitWorldSubsystem.generated.h"
 
 class AOrbitGravitySource;
+class UOrbitGravitySourceComponent;
 class AActor;
 class UPrimitiveComponent;
 
@@ -29,6 +30,16 @@ public:
 
     void RegisterSource(AOrbitGravitySource* Source);
     void UnregisterSource(AOrbitGravitySource* Source);
+    void RegisterSourceComponent(UOrbitGravitySourceComponent* Component);
+    void UnregisterSourceComponent(UOrbitGravitySourceComponent* Component);
+
+    /** Stateful consumers can supply the previous winning source to avoid midpoint flip-flop. */
+    FOrbitGravitySample SampleGravityForActorStable(const AActor* Actor, const FVector& WorldLocation,
+        EOrbitGravityChannel Channel, int32 PreferredSourceId, double Hysteresis) const;
+
+    /** Source-specific sampling for alignment or authored gravity receivers. */
+    FOrbitGravitySample SampleIndividualSource(const UObject* Source, const FVector& WorldLocation,
+        EOrbitGravityChannel Channel, uint8 ReceiverMask) const;
 
     /** The field at an arbitrary world position. No gravity vector is ever normalized unless nonzero. */
     UFUNCTION(BlueprintPure, Category="Orbit|Gravity")
@@ -62,6 +73,7 @@ private:
     };
 
     TArray<TWeakObjectPtr<AOrbitGravitySource>> Sources;
+    TArray<TWeakObjectPtr<UOrbitGravitySourceComponent>> SourceComponents;
     TArray<FOrbitFieldDefinition> ActiveFields;
     TArray<FManagedBody> ManagedBodies;
     float DiscoveryAccumulator = 0.0f;

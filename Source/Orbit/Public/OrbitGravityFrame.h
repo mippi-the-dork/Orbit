@@ -15,6 +15,12 @@ public:
     /** Aligns local +Z to Up while preserving as much of CurrentRotation's forward heading as possible. */
     static bool MakeAlignedRotation(const FVector& Up, const FQuat& CurrentRotation, FQuat& OutRotation);
 
+    /** Compute locomotion in a character's actual gravity-tangent plane (not world XY).
+     *  Signed direction is +right, -left; zero means movement along the actor's forward axis. */
+    static bool CalculateGravityRelativeLocomotion(const FVector& Velocity, const FVector& Up,
+        const FVector& ActorForward, double& OutSpeed, double& OutForwardSpeed,
+        double& OutRightSpeed, double& OutDirectionDegrees);
+
     /** Safe test of whether native near-floor landing assistance can even be considered.
      *  The movement component MUST still validate a collision sweep and walkable landing hit. */
     static bool ShouldAttemptNearFloorLanding(bool bFalling, double VerticalVelocityUp,

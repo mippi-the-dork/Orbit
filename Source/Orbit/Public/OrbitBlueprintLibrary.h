@@ -2,10 +2,41 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "OrbitGravityOrientationComponent.h"
 #include "OrbitGravityTypes.h"
 #include "OrbitBlueprintLibrary.generated.h"
 
 class ACharacter;
+
+/** Animation-friendly velocities expressed in the character's gravity-relative forward/right axes.
+ *  Does not change AnimBP logic unless the animation blueprint consumes these values. */
+USTRUCT(BlueprintType)
+struct ORBIT_API FOrbitGravityRelativeLocomotion
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bValid = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector GravityUp = FVector::UpVector;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    FVector TangentVelocity = FVector::ZeroVector;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float GroundSpeed = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float ForwardSpeed = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float RightSpeed = 0.0f;
+
+    /** Signed degrees relative to the actor's gravity-tangent forward: 0 forward, +90 right, -90 left, +/-180 backward. */
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float MovementDirectionDegrees = 0.0f;
+};
 
 UCLASS()
 class ORBIT_API UOrbitBlueprintLibrary : public UBlueprintFunctionLibrary
@@ -56,10 +87,34 @@ public:
     UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Transforms")
     static FTransform GravityWorldToLocalTransform(const FTransform& WorldTransform, const FTransform& GravityFrame);
 
+    /** Get a gravity Up direction for an Actor and optional explicit source.
+     * If no source is specified, uses combined gravity with Receiver channels. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Orientation", meta=(DefaultToSelf="Actor"))
+    static bool GetOrbitGravityUpForActor(const AActor* Actor, FVector WorldPosition,
+        const UObject* SpecificSource, FVector& Up);
+
+    /** Minimal rotation aligning any signed actor-local axis to gravity Up.
+     * Preserves twist/heading as far as possible. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Gravity|Orientation")
+    static bool MakeOrbitAxisAlignedRotation(FRotator CurrentRotation, FVector GravityUp,
+        EOrbitLocalAxis LocalAxis, FRotator& AlignedRotation);
+
+    /** Apply gravity orientation once, not every Tick. Source can be a Gravity Source
+     * Actor, Source Component, or empty to use the combined field. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Gravity|Orientation", meta=(DefaultToSelf="Actor"))
+    static bool OrientActorToOrbitGravity(AActor* Actor, EOrbitLocalAxis LocalAxis,
+        const UObject* SpecificSource);
+
     /** Convenient Character Blueprint call (no Orbit Controls component target pin).
      *  Requires Orbit Character Controls component on that Character. */
     UFUNCTION(BlueprintCallable, Category="Orbit|Controls|Input", meta=(DefaultToSelf="Character", DisplayName="Apply Orbit Gravity Relative Move"))
     static void ApplyOrbitGravityRelativeMove(ACharacter* Character, FVector2D MoveAxis);
+
+    /** Ground speed and locomotion direction using local Gravity Up, NOT world X/Y.
+     *  In an AnimBP use Try Get Pawn Owner -> Cast to Character -> this node.
+     *  Use the result instead of VectorLengthXY / world-Z CalculateDirection. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Animation", meta=(DefaultToSelf="Character"))
+    static FOrbitGravityRelativeLocomotion GetGravityRelativeLocomotion(const ACharacter* Character);
 
     /** Convenient Character Blueprint call (no Orbit Controls component target pin). */
     UFUNCTION(BlueprintCallable, Category="Orbit|Controls|Input", meta=(DefaultToSelf="Character", DisplayName="Apply Orbit Gravity Relative Look"))

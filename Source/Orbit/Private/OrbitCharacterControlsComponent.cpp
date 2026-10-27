@@ -231,7 +231,19 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
     }
 
     const FVector Up = GetCurrentUp();
-    const FVector Forward = FVector::VectorPlaneProject(RequestedFacingDirection, Up).GetSafeNormal();
+    FVector Direction = RequestedFacingDirection;
+    if (bFaceVelocityWhenMoving)
+    {
+        if (const UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+        {
+            const FVector TangentVelocity = FVector::VectorPlaneProject(Movement->Velocity, Up);
+            if (TangentVelocity.SizeSquared() >= FMath::Square(VelocityFacingThreshold))
+            {
+                Direction = TangentVelocity.GetSafeNormal();
+            }
+        }
+    }
+    const FVector Forward = FVector::VectorPlaneProject(Direction, Up).GetSafeNormal();
     if (Forward.IsNearlyZero()) { return; }
 
     // Use a tangent-space target rather than a world-yaw rotation. The absolute

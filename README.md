@@ -2,12 +2,31 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.2 (Iteration 013, experimental)  
+**Current version:** 0.2.6 (Iteration 017, experimental)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
 **Status:** Source package prepared; compile, PIE and packaged-game validation are pending.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+
+## Iteration 017: one Orbit plugin, internal optional Mover module
+
+- **Only one installable plugin:** `Orbit/Orbit.uplugin`. The adapter lives at `Orbit/Source/OrbitMover/` alongside `Orbit` and `OrbitEditor`. No separate OrbitMover plugin descriptor exists.
+- **Mover stays optional:** the internal `OrbitMover` module depends only on Core, CoreUObject, Engine and Orbit. It discovers an active Epic Mover component at runtime and calls its reflected `SetGravityOverride` / `SetUpDirectionOverride` functions. Orbit itself can build and load when Epic Mover is disabled.
+- **Known timing limitation:** the optional adapter uses a pre-physics game-thread tick and, where possible, a tick prerequisite on Mover. This is NOT the same as subscribing to Mover's typed pre-simulation callback. It is an experimental synchronous kinematic integration, not guaranteed correct for independent simulation or network prediction; Chaos/async remains unsupported.
+- **No migration layer:** this is a source-development consolidation with no public installs to preserve. Remove any old project `Plugins/OrbitMover/` directory if present; install only `Plugins/Orbit/`.
+
+See [Iteration 017](Docs/ITERATION_017.md) and [Mover integration](Docs/MOVER_INTEGRATION.md) for detailed scope and testing.
+
+## Iteration 016: source arbitration and reusable components
+
+- **Override Resolution** (Project Settings > Plugins > Orbit): Priority Override (legacy), Strongest Influence (default), Blended Influence. Explicit highest Priority always wins. Equal-priority competition scores current acceleration and normalized source distance, including Constant falloff.
+- **Character source hysteresis** and **gravity direction smoothing**: configurable in Orbit Character Gravity. They stabilize winner changes and orient gradually; they do not change physical gravity acceleration.
+- **Orbit Gravity Source Component**: put any of the five field types directly onto an Actor, including native spline sourcing, channels and vortex settings. Embedded sources share the same subsystem/physics/Blueprint gravity field as dedicated source actors.
+- **Orbit Gravity Orientation Component**: continuously align any signed local axis toward local gravity Up. Auto combined-field sampling or opt into a specific source actor/component. Do not combine with another system rotating the same actor.
+- **Blueprint orientation helpers**: Get Orbit Gravity Up for Actor, Make Orbit Axis Aligned Rotation, Orient Actor to Orbit Gravity.
+
+These are experimental source changes, **not** a claim of a successful UE 5.8.3 build. Complete usage details: [Iteration 016](Docs/ITERATION_016.md), [Components & Blueprint API](Docs/COMPONENTS_AND_BLUEPRINT_API.md), [Gravity Sources](Docs/GRAVITY_SOURCE_ACTOR.md), [Mover Integration](Docs/MOVER_INTEGRATION.md).
 
 ## What is included
 
@@ -28,14 +47,15 @@ Orbit is a *gravity framework*, not a Character Movement plugin. The world owns 
 | Automatic ordinary simulated rigid-body gravity | **Experimental** game-thread `AddForce` bridge |
 | Gravity-enabled-state preservation and opt-out tags | Implemented; pending UE test |
 | Optional Character Movement direction/strength bridge, native-gravity restoration and opt-in actor alignment | **Experimental**, supports tested-source path with UE PIE validation pending |
-| Low-gravity native FindFloor landing assist, live PIE property mirroring and runtime Strength diagnostics | **Experimental**; subject to UE floor sweep and landing validation |
-| Optional gravity-relative movement input, character facing and quaternion Spring Arm camera (native Character Movement) | **Experimental**; manual Enhanced Input Blueprint hookup required |
+| Post-movement native FindFloor landing assist, live PIE property mirroring and runtime Strength diagnostics | **Experimental**; subject to UE floor sweep and landing validation |
+| Optional gravity-relative input, actual-velocity facing and quaternion Spring Arm camera (native Character Movement) | **Experimental**; manual Enhanced Input Blueprint hookup required |
+| Gravity-relative animation locomotion query (full 3D tangent speed, signed direction) | Implemented; requires Animation Blueprint wiring |
 | Gravity-frame creation and relative/world transform conversion Blueprint nodes | Implemented; pending UE test |
 | Editor volumetric field arrows and purple streamlines, relative density (1–10), influence wireframes | Implemented; pending UE test |
 | Actor viewport billboard from supplied Orbit artwork | Implemented with Editor-only transient texture; pending UE visual test |
 | Orbit editor icons | Registered for plugin browser, gravity-source actor, character gravity component and class thumbnail; pending UE visual test |
-| Field math and Mover policy automated tests | 23 base Orbit field/character tests plus 3 optional OrbitMover policy tests authored; pending UE 5.8.3 verification |
-| Optional kinematic Mover gravity adapter (`OrbitMover` companion plugin) | **Experimental**, UE integration testing pending; Chaos Mover excluded |
+| Field math and Mover policy automated tests | 30 base Orbit field/character tests plus 4 internal OrbitMover tests authored; pending UE 5.8.3 verification |
+| Built-in optional kinematic Mover adapter (internal `OrbitMover` module) | **Experimental**, uses reflection and game-thread pre-physics updates; Chaos/async excluded |
 | Chaos solver callbacks and per-body substep gravity | **Not yet implemented** |
 | Gravity-aware NavMesh, EQS, AI MoveTo | **Not yet implemented** |
 | Ragdoll/cloth/vehicles/water/Niagara/PCG | **Not yet integrated** |
@@ -51,13 +71,13 @@ Orbit is a *gravity framework*, not a Character Movement plugin. The world owns 
 
 No Epic Engine files should be changed. This is an unverified source package, not a precompiled binary.
 
-## Optional Orbit Mover adapter (0.2.0)
+## Optional Orbit Mover integration (inside Orbit)
 
-This release ZIP includes **two sibling plugins**: `Orbit/` (the existing standalone gravity system) and `OrbitMover/` (a separately enabled companion that depends on Epic's Experimental **Mover** plugin). To use Mover gravity, copy **both** folders into `YourProject/Plugins/`, enable **Mover**, **Orbit**, and **Orbit Mover Integration**, then add an **Orbit Mover Gravity** component to a Pawn/Actor that already has a *synchronous kinematic* Mover component.
+The entire ZIP installs as **one plugin**: `YourProject/Plugins/Orbit/`. For Mover characters, enable Epic's Experimental **Mover** plugin in your project, restart/rebuild as required, and add **Orbit Mover Gravity** to an actor that has a synchronous kinematic Mover component. The same Orbit install works **without** Mover enabled: the adapter simply finds no active Mover component.
 
-The adapter applies Orbit's sampled full gravity acceleration and stable local Up before kinematic movement simulation. It respects Receiver channels, handles zero-strength sources, and relinquishes overrides when leaving Orbit fields. **Chaos Mover, async simulation and deterministic network rollback are not implemented.** Do not attach the existing Orbit Character Gravity adapter to the same Pawn for this workflow.
+This integration uses Mover's public Blueprint-reflected gravity acceleration and Up overrides, sampled from the shared Orbit subsystem. No Mover headers or Mover build dependency are linked into Orbit. In this iteration, overrides update on the game thread at **pre-physics tick** with a tick prerequisite when supported, not via Mover's typed simulation callback. It is **not validated** for all simulation-timing configurations; do not treat it as a rollback or Chaos Mover implementation.
 
-Two optional Blueprint nodes: `Set Orbit Mover Gravity Enabled` and `Refresh Orbit Mover Gravity`. See [`Docs/MOVER_INTEGRATION.md`](Docs/MOVER_INTEGRATION.md) for actual Orbit-specific integration behavior, limitations and test instructions. The core Orbit plugin has no Mover dependency.
+Blueprint nodes: `Set Orbit Mover Gravity Enabled` and `Refresh Orbit Mover Gravity`. See [`Docs/MOVER_INTEGRATION.md`](Docs/MOVER_INTEGRATION.md).
 
 ## Editor icons (introduced in 0.1.1)
 
@@ -67,7 +87,7 @@ Orbit now includes an **Editor-only** `OrbitEditor` module for Slate class-icon 
 | --- | --- |
 | `Resources/Icon128.png` | Plugin Browser thumbnail (128x128, supplied artwork) |
 | `Resources/Icons/OrbitActor_16.svg` | `AOrbitGravitySource` class icon in the World Outliner, class pickers and similar editor views |
-| `Resources/Icons/Orbit-Icon.svg` | `UOrbitCharacterGravityComponent` and optional `UOrbitMoverGravityComponent` class icons in component pickers; registered at 16/20/32px for future menus/toolbars |
+| `Resources/Icons/Orbit-Icon.svg` | `UOrbitCharacterGravityComponent` and built-in `UOrbitMoverGravityComponent` class icons in component pickers; registered at 16/20/32px for future menus/toolbars |
 | `Resources/Icons/OrbitAsset_64.svg` | `AOrbitGravitySource` class thumbnail, including applicable class/Blueprint browser views |
 
 There is **no standalone Orbit Content Browser asset class** in this iteration. The 64px artwork is used for the existing source actor class thumbnail and is rasterized to `Resources/Icons/OrbitBillboard.png` for an Editor-only, selectable billboard component. The billboard uses a session-cached transient texture; no Content Browser asset is created. No toolbar is registered yet.
@@ -219,12 +239,12 @@ This uses game-thread `UPrimitiveComponent::AddForce(..., bAccelChange=true)` on
 - `Docs/COMPATIBILITY.md`: implementation and validation status, without inflated support claims.
 - `Docs/TEST_PLAN.md`: step-by-step Editor, physics, field and packaging smoke tests.
 - `Docs/ARCHITECTURE.md`: module design, extension contracts and future roadmap.
-- `Docs/COMPONENTS_AND_BLUEPRINT_API.md`: maintained reference for the two base Orbit components, optional OrbitMover component, 13 core Blueprint functions and 2 optional Mover functions.
+- `Docs/COMPONENTS_AND_BLUEPRINT_API.md`: maintained reference for the five base Orbit components, built-in Orbit Mover component, 30 core Blueprint functions and 2 Mover functions.
 - `Docs/MOVER_INTEGRATION.md`: maintained reference for functionality **added by Orbit** for Epic Mover, its component/nodes, backend support status, limitations and tests.
 - `Docs/GRAVITY_SOURCE_ACTOR.md`: maintained guide for the placeable Gravity Source Actor, shapes, properties, channels, vortex, debug visualization and gameplay examples.
 - `Docs/Orbit_Master_Roadmap.md`: living project-wide roadmap.
-- `Source/Orbit/Private/Tests/OrbitFieldTests.cpp`: 18 authored Unreal automation field tests under `Orbit.Field.*`.
-- `../OrbitMover/Source/OrbitMover/Private/Tests/OrbitMoverTests.cpp`: three optional companion policy tests under `Orbit.Mover.*`.
+- `Source/Orbit/Private/Tests/OrbitFieldTests.cpp`: 30 authored base Unreal automation tests under `Orbit.Field.*`.
+- `Source/OrbitMover/Private/Tests/OrbitMoverTests.cpp`: four internal Mover tests under `Orbit.Mover.*`.
 
 ## Release status
 
@@ -244,3 +264,16 @@ The latest pass focuses on player testing around a sphere. Gravity Source proper
 `Orbit Character Controls` adds **Face Movement Direction** (on by default), smoothing the Character's facing toward movement input on the gravity tangent plane while leaving the camera independently oriented. Two new **actor-friendly** Blueprint wrappers, `Apply Orbit Gravity Relative Move` / `Apply Orbit Gravity Relative Look`, take `ACharacter*` (can default to Self in a Character Blueprint); the original instance-method versions still require the Orbit Character Controls component Target.
 
 New Blueprint gravity frame helpers construct a local-Up frame from an explicit Up or an Actor-aware Orbit query, then convert relative/world transforms. See `Docs/COMPONENTS_AND_BLUEPRINT_API.md` for exact node signatures and `Docs/ITERATION_013.md` for setup, test expectations, known limitations and UE 5.8.3 verification status. All three maintained docs were updated; the Mover backend itself is unchanged.
+
+
+## Native Third Person planet testing (Iteration 014)
+
+Testing a fall from initial spawn is not equivalent to landing after jumping. Starting in v0.2.3 Orbit observes near-floor falling **after** native Character Movement, instead of probing before the movement step. The landing assist still requires a sweep-validated, walkable native floor and never fabricates a hit. Its maximum approach speed defaults to 600 cm/s to cover common low-gravity starting drops; the previous limit of 100 cm/s excluded a 400 cm drop even at Strength 196. The fix is experimental until verified in PIE. Watch `Last Landing Assist Result`, `Last Native Floor Distance`, `Last Landing Descent Speed`, `Pre First Landing Checks`, and `Landing Assist Count` on the live Orbit Character Gravity component.
+
+For Manny / Quinn locomotion, the ordinary template Animation Blueprint may still use **world XY ground speed** and/or 2D direction calculations. On a planet those values are not invariant across the surface. Use the new Blueprint node **Get Gravity Relative Locomotion** on the character to read `Ground Speed`, `Forward Speed`, `Right Speed`, and `Movement Direction Degrees` in the local tangent plane, and route values into the existing AnimBP locomotion variables. This does not mutate an Animation Blueprint asset automatically. See [`Docs/ITERATION_014.md`](Docs/ITERATION_014.md) for setup and troubleshooting.
+
+## Two-planet gravity fields and editor placement (Iteration 015)
+
+In v0.2.4 two overlapping equal-priority Point/Override sources began choosing the nearer center. In v0.2.5 this is superseded by configurable Strongest Influence (default), Blended Influence and Legacy Priority Override. An actual planet-to-planet jump still requires sufficient launch velocity and overlapping/reachable source ranges; the gravity direction may switch sharply near the midpoint. See [`Docs/ITERATION_015.md`](Docs/ITERATION_015.md).
+
+In the Level Editor, select one or more ordinary level actors and choose **Right-click > Orbit > Orient to Gravity** to align their local +Z to the sampled gravity Up at each pivot. Supports Undo; skips sources, unmatched fields and zero-gravity points. This authoring command does not continuously orient moving actors.

@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 13,
-  "VersionName": "0.2.2",
+  "Version": 17,
+  "VersionName": "0.2.6",
   "FriendlyName": "Orbit",
-  "Description": "Gravity fields, experimental native Character Movement and controls, reliable near-floor diagnostics, gravity-relative transform utilities, and optional Mover integration.",
+  "Description": "Arbitrary gravity fields, actor and component sources, character controls and orientation, and optional Mover integration within one plugin.",
   "Category": "Physics",
   "CreatedBy": "Mippi",
   "CanContainContent": false,
@@ -19,6 +19,11 @@
       "Name": "OrbitEditor",
       "Type": "Editor",
       "LoadingPhase": "Default"
+    },
+    {
+      "Name": "OrbitMover",
+      "Type": "Runtime",
+      "LoadingPhase": "PostDefault"
     }
   ]
 }

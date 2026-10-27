@@ -2,6 +2,7 @@
 
 #include "OrbitGravityFrame.h"
 #include "OrbitWorldSubsystem.h"
+#include "OrbitSettings.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -19,11 +20,15 @@ void UOrbitCharacterGravityComponent::BeginPlay()
 {
     Super::BeginPlay();
     // Apply gravity before CharacterMovement updates walking, falling and floor checks.
-    if (const ACharacter* Character = Cast<ACharacter>(GetOwner()))
+    if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
     {
         if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
         {
             Movement->AddTickPrerequisiteComponent(this);
+            // Native physics/landing must run before the assist observes the final capsule position.
+            // Character's delegate fires after the movement scope, unlike this component's pre-physics tick.
+            Character->OnCharacterMovementUpdated.AddUniqueDynamic(
+                this, &UOrbitCharacterGravityComponent::OnCharacterMovementFinished);
         }
     }
 }
@@ -32,6 +37,8 @@ void UOrbitCharacterGravityComponent::EndPlay(const EEndPlayReason::Type EndPlay
 {
     if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
     {
+        Character->OnCharacterMovementUpdated.RemoveDynamic(
+            this, &UOrbitCharacterGravityComponent::OnCharacterMovementFinished);
         RestoreMovement(Character->GetCharacterMovement());
     }
     Super::EndPlay(EndPlayReason);
@@ -46,6 +53,24 @@ void UOrbitCharacterGravityComponent::RestoreMovement(UCharacterMovementComponen
         Movement->GravityScale = SavedGravityScale;
     }
     bControllingMovement = false;
+    PreferredGravitySourceId = INDEX_NONE;
+}
+
+void UOrbitCharacterGravityComponent::OnCharacterMovementFinished(
+    float DeltaSeconds, FVector OldLocation, FVector OldVelocity)
+{
+    ACharacter* Character = Cast<ACharacter>(GetOwner());
+    UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
+    if (!Movement) { return; }
+    if (Movement->IsMovingOnGround())
+    {
+        bHasBeenGrounded = true;
+        LastLandingAssistResult = TEXT("Grounded by native Character Movement");
+        bLandingAssistTriggered = false;
+        return;
+    }
+    if (!bHasBeenGrounded && Movement->IsFalling()) { ++PreFirstLandingChecks; }
+    TryAssistNearFloorLanding(Movement);
 }
 
 void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMovementComponent* Movement)
@@ -54,6 +79,8 @@ void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMoveme
     bNearFloorWalkable = false;
     LastWalkableFloorDistance = -1.0f;
     LastNativeFloorDistance = -1.0f;
+    LastLandingDescentSpeed = 0.0f;
+    LastLandingLateralSpeed = 0.0f;
 
     ACharacter* Character = Cast<ACharacter>(GetOwner());
     if (!bEnableNearFloorLandingAssist || !bInsideOrbitField || !Character || !Movement ||
@@ -61,6 +88,10 @@ void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMoveme
         !Character->GetCapsuleComponent() || NearFloorLandingDistance <= 0.0f ||
         NearFloorMaxApproachSpeed <= 0.0f)
     {
+        LastLandingAssistResult = !bEnableNearFloorLandingAssist ? TEXT("Disabled") :
+            !bInsideOrbitField ? TEXT("No influencing Orbit field") :
+            !Movement || !Movement->IsFalling() ? TEXT("Not falling") :
+            TEXT("Missing gravity, collision or range");
         return;
     }
 
@@ -68,10 +99,18 @@ void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMoveme
     const FVector Velocity = Movement->Velocity;
     const double VerticalVelocityUp = FVector::DotProduct(Velocity, -Down);
     const double TangentSpeed = FVector::VectorPlaneProject(Velocity, Down).Size();
-    if (VerticalVelocityUp > 0.0 || FMath::Abs(VerticalVelocityUp) > NearFloorMaxApproachSpeed ||
+    LastLandingDescentSpeed = static_cast<float>(-VerticalVelocityUp);
+    LastLandingLateralSpeed = static_cast<float>(TangentSpeed);
+    if (VerticalVelocityUp > 0.0)
+    {
+        LastLandingAssistResult = TEXT("Rising; normal jump landing is not assisted");
+        return;
+    }
+    if (FMath::Abs(VerticalVelocityUp) > NearFloorMaxApproachSpeed ||
         TangentSpeed > NearFloorMaxApproachSpeed)
     {
-        return; // No landing assist during upward jumps or fast motion.
+        LastLandingAssistResult = TEXT("Speed exceeds landing-assist limit");
+        return;
     }
 
     const FVector Location = Character->GetCapsuleComponent()->GetComponentLocation();
@@ -90,6 +129,8 @@ void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMoveme
     }
     if (!bNearFloorWalkable)
     {
+        LastLandingAssistResult = Floor.bBlockingHit ?
+            TEXT("Floor hit is not a valid walkable sweep") : TEXT("Native FindFloor found no surface");
         return;
     }
 
@@ -98,6 +139,7 @@ void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMoveme
     if (!FOrbitGravityFrame::ShouldAttemptNearFloorLanding(true, VerticalVelocityUp,
         TangentSpeed, NearFloorMaxApproachSpeed, FloorGap, NearFloorLandingDistance))
     {
+        LastLandingAssistResult = TEXT("Walkable floor is outside assist distance");
         return;
     }
 
@@ -109,10 +151,17 @@ void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMoveme
     if (bLandingAssistTriggered)
     {
         ++LandingAssistCount;
+        bHasBeenGrounded = true;
+        LastLandingAssistResult = TEXT("Native walking mode accepted sweep-validated floor");
     }
     else if (Movement->IsWalking())
     {
         Movement->SetMovementMode(MOVE_Falling);
+        LastLandingAssistResult = TEXT("Native walking entry rejected floor");
+    }
+    else
+    {
+        LastLandingAssistResult = TEXT("Native walking entry did not accept floor");
     }
 }
 
@@ -146,14 +195,14 @@ void UOrbitCharacterGravityComponent::TickComponent(float DeltaTime, ELevelTick 
     const UOrbitWorldSubsystem* Gravity = World->GetSubsystem<UOrbitWorldSubsystem>();
     if (!Movement || !Gravity) { return; }
 
-    const FOrbitGravitySample Sample = Gravity->SampleGravityForActor(
-        Character, Character->GetActorLocation(), EOrbitGravityChannel::Character);
+    const FOrbitGravitySample Sample = Gravity->SampleGravityForActorStable(
+        Character, Character->GetActorLocation(), EOrbitGravityChannel::Character,
+        bUseSourceHysteresis ? PreferredGravitySourceId : INDEX_NONE,
+        bUseSourceHysteresis ? GetDefault<UOrbitSettings>()->CharacterSwitchHysteresis : 0.0);
+    PreferredGravitySourceId = Sample.bHasInfluence ? Sample.DominantSourceId : INDEX_NONE;
     bInsideOrbitField = Sample.bHasInfluence;
     LastDominantSourceId = bInsideOrbitField ? Sample.DominantSourceId : INDEX_NONE;
-    bLandingAssistTriggered = false;
-    LastWalkableFloorDistance = -1.0f;
-    LastNativeFloorDistance = -1.0f;
-    bNearFloorWalkable = false;
+    // Landing diagnostics are generated after CharacterMovement, not reset on pre-movement ticks.
     LastAppliedGravityScale = Movement->GravityScale;
     LastFieldAcceleration = bInsideOrbitField ? Sample.Acceleration : FVector::ZeroVector;
 
@@ -183,8 +232,26 @@ void UOrbitCharacterGravityComponent::TickComponent(float DeltaTime, ELevelTick 
 
     if (Sample.bHasValidDirection)
     {
-        Movement->SetGravityDirection(Sample.Down);
-        AlignCharacterToUp(Sample.Up, DeltaTime);
+        FVector AppliedDown = Sample.Down;
+        if (bSmoothGravityDirection && GravityDirectionResponseRate > 0.0f && bControllingMovement)
+        {
+            const FVector PreviousDown = Movement->GetGravityDirection().GetSafeNormal();
+            if (!PreviousDown.IsNearlyZero() && FVector::DotProduct(PreviousDown, Sample.Down) < 0.99999)
+            {
+                const double Alpha = 1.0 - FMath::Exp(-GravityDirectionResponseRate * FMath::Max(0.0f, DeltaTime));
+                FVector Axis = FVector::CrossProduct(PreviousDown, Sample.Down);
+                if (Axis.IsNearlyZero())
+                {
+                    Axis = FVector::CrossProduct(PreviousDown, Character->GetActorRightVector());
+                    if (Axis.IsNearlyZero()) { Axis = FVector::CrossProduct(PreviousDown, FVector::UpVector); }
+                    if (Axis.IsNearlyZero()) { Axis = FVector::CrossProduct(PreviousDown, FVector::ForwardVector); }
+                }
+                const double Angle = FMath::Acos(FMath::Clamp(FVector::DotProduct(PreviousDown, Sample.Down), -1.0, 1.0));
+                AppliedDown = FQuat(Axis.GetSafeNormal(), Angle * Alpha).RotateVector(PreviousDown).GetSafeNormal();
+            }
+        }
+        Movement->SetGravityDirection(AppliedDown);
+        AlignCharacterToUp(-AppliedDown, DeltaTime);
     }
     // Zero-gravity fields intentionally set magnitude to zero but preserve a stable orientation.
     if (bMatchGravityMagnitude)
@@ -204,5 +271,5 @@ void UOrbitCharacterGravityComponent::TickComponent(float DeltaTime, ELevelTick 
                 *GetNameSafe(Character));
         }
     }
-    TryAssistNearFloorLanding(Movement);
+    // Native Character Movement must run before the landing assist in OnCharacterMovementFinished.
 }

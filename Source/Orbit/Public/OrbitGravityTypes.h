@@ -53,6 +53,18 @@ enum class EOrbitGravityFalloff : uint8
     InverseSquare UMETA(DisplayName="Inverse Square")
 };
 
+/** How equal-priority Override sources compete. Explicit Priority always takes precedence. */
+UENUM(BlueprintType)
+enum class EOrbitOverrideResolution : uint8
+{
+    /** Compatibility: prefer the nearer center only when both sources are Point fields. */
+    PriorityOverride UMETA(DisplayName="Priority Override (Legacy)"),
+    /** Highest weighted effective gravity influence wins, with optional receiver hysteresis. */
+    StrongestInfluence UMETA(DisplayName="Strongest Influence"),
+    /** Average eligible acceleration vectors by weighted influence; opposing vectors can cancel. */
+    BlendedInfluence UMETA(DisplayName="Blended Influence")
+};
+
 UENUM(BlueprintType)
 enum class EOrbitGravityCombine : uint8
 {
@@ -172,10 +184,13 @@ public:
     /** Velocity-aware correction for simulated rigid bodies using Spiral Capture. Other directions/modes use Evaluate. */
     static bool EvaluateForBody(const FOrbitFieldDefinition& Field, const FVector& Position,
         const FVector& Velocity, FVector& OutAcceleration);
-    static FOrbitGravitySample Combine(const TArray<FOrbitFieldDefinition>& Fields, const FVector& Position, EOrbitGravityChannel Channel = EOrbitGravityChannel::General, uint8 ReceiverMask = 1u);
+    static FOrbitGravitySample Combine(const TArray<FOrbitFieldDefinition>& Fields, const FVector& Position, EOrbitGravityChannel Channel = EOrbitGravityChannel::General, uint8 ReceiverMask = 1u,
+        EOrbitOverrideResolution Resolution = EOrbitOverrideResolution::StrongestInfluence,
+        int32 PreferredSourceId = INDEX_NONE, double SwitchHysteresis = 0.0);
     /** Applies velocity-aware vortex handling while preserving field priorities, channels and falloff. */
     static FOrbitGravitySample CombineForBody(const TArray<FOrbitFieldDefinition>& Fields, const FVector& Position,
-        const FVector& Velocity, uint8 ReceiverMask = 1u);
+        const FVector& Velocity, uint8 ReceiverMask = 1u,
+        EOrbitOverrideResolution Resolution = EOrbitOverrideResolution::StrongestInfluence);
     static FVector ClosestOnCurve(const TArray<FVector>& Curve, const FVector& Position, int32& OutSegment, double& OutAlpha);
 
     /** Samples a single field line through the normalized acceleration field using

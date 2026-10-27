@@ -1,25 +1,87 @@
 # Orbit: Components and Blueprint API Guide
 
-**Version:** Orbit v0.1.9, Iteration 010  
+**Version:** Orbit v0.2.6, Iteration 017  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Blueprint users, gameplay designers, and developers integrating Orbit into an Unreal project  
-**Source of truth:** Orbit v0.1.9 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
+**Source of truth:** Orbit v0.2.6 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
 
-This document describes **functionality actually present in v0.1.9**, not planned navigation, EQS, camera, or Chaos solver integrations.
+This document describes **functionality present in the Orbit v0.2.6 source package**, not planned navigation, EQS, camera, or Chaos solver integrations.
 
-For the placeable Gravity Source Actor, its property settings, shape and vortex modes, visualization, and level setup examples, see [`GRAVITY_SOURCE_ACTOR.md`](GRAVITY_SOURCE_ACTOR.md).
+For the placeable Gravity Source Actor and the new embedded Gravity Source Component, its property settings, shape and vortex modes, visualization, and level setup examples, see [`GRAVITY_SOURCE_ACTOR.md`](GRAVITY_SOURCE_ACTOR.md).
+
+
+## Iteration 016: two additional components and Blueprint nodes
+
+**Orbit now has six addable components in one plugin**: Character Gravity, Character Controls, Gravity Receiver, Gravity Orientation, Gravity Source, and Orbit Mover Gravity. The sixth is useful only when Epic Mover is enabled in the project. Internally the adapter is in `Source/OrbitMover`, but there is no second plugin to install.
+
+### Orbit Gravity Orientation Component (`UOrbitGravityOrientationComponent`)
+
+Add it to any Actor whose **actor rotation** should track gravity (for example, a movable platform). Defaults to the combined field at the actor pivot and respects the Actor's Gravity Receiver channels.
+
+| Property | Default | Function |
+| --- | --- | --- |
+| Enabled | True | Toggles the component's per-frame updates |
+| Local Axis | +Z | Which **signed local axis** should aim toward gravitational **Up** (+X, -X, +Y, -Y, +Z, -Z) |
+| Response Rate | 8 / second | Exponential smoothing; 0 snaps |
+| Specific Source Actor | None | Evaluate only this `AOrbitGravitySource`, overriding combined fields |
+| Specific Source Component | None | Evaluate only this embedded source, takes precedence over Source Actor |
+| Hold Orientation Without Gravity | True | Keep last rotation when field is undefined, zero or source is out of range |
+
+The component has **Orient Now**, a Blueprint-callable function that applies a one-shot rotation immediately and returns success/failure. `Last Gravity Up` and `Last Sample Valid` are runtime diagnostics. **It rotates the Actor, not individual meshes**, and does not simulate torques or align the actor's position. Requires movable components for continuously rotating collision geometry. Don't add it to a character when Character Gravity/Controls already rotate that same Actor.
+
+### Orbit Gravity Source Component (`UOrbitGravitySourceComponent`)
+
+Add **Orbit Gravity Source** to any Actor, attach it to an appropriate Scene Component, and choose Shape, Direction, Strength and Max Distance. Its field center, axis, and rotation use the **source component's world transform**, not the owner's pivot. A moving parent moves the field on the next runtime subsystem tick.
+
+It shares the dedicated Gravity Source Actor's major field properties: all five shapes, inward/outward and vortex directions, strength, constant/linear/inverse-square falloff, Max Distance, Priority, Override/Additive, channels, Physics/Character flags, volume/bounding masks, and all Spiral Capture controls. A component configured for Spline uses its `Gravity Spline` component reference or the first `USplineComponent` on the owner; oriented spline Up uses the referenced spline roll.
+
+- `Set Gravity Strength` (on the source component) immediately updates the current world snapshot.
+- `Sample Source Component` samples just this component, using its own channels, without adding other sources.
+- Dynamic actors/components register when they enter play and unregister on EndPlay.
+- Editor visualization and editor-world property mirroring are **not** yet equivalent to the dedicated source Actor's billboard, debug preview and PIE mirroring. Runtime source logic is shared.
+- A component placed on a moving Actor requires care: do not independently rotate its parent with an Orientation Component unless you intend to rotate the gravity field too.
+
+### New Blueprint library functions
+
+| Node | Inputs | Outputs | Use |
+| --- | --- | --- | --- |
+| **Get Orbit Gravity Up for Actor** | Actor, World Position, optional Specific Source (`Orbit Gravity Source` Actor or Component) | Boolean, Up vector | Read a valid gravitational Up; false when no matching influence/zero vector |
+| **Make Orbit Axis Aligned Rotation** | Current Rotation, Gravity Up, Local Axis | Boolean, Aligned Rotation | Make a one-shot rotation that brings the chosen local axis to gravity Up with minimal twist |
+| **Orient Actor to Orbit Gravity** | Actor (Self), Local Axis, optional Specific Source | Boolean | Sample and apply actor rotation in one Blueprint node |
+
+No source selection reference means **combined field** and the Actor's receiver channels. Source references ignore other fields but still honor the source's enabled state, channels and range. These nodes cannot infer a unique Up at a perfectly cancelling field; they return false rather than inventing a direction.
+
+### Updated Character Gravity settings
+
+- **Use Source Hysteresis** (default On): when using Strongest Influence, retain the current source until a challenger exceeds its score by the **Character Switch Hysteresis** fraction set in Project Settings > Plugins > Orbit (default 0.15).
+- **Smooth Gravity Direction** (default On): interpolate the native Character Movement gravity direction using a rotation, including near-opposite directions.
+- **Gravity Direction Response Rate** (default 5/s): controls interpolation rate separately from Actor Orientation Response Rate. Setting Smooth Off restores instant handoffs.
+
+The underlying gravity *magnitude* remains sampled directly; the smoothed direction is a character-specific movement adaptation, not a retroactive change to Blueprint gravity sampling, rigid-body physics, or Mover. Character Controls and Character Gravity can still compete for Actor rotation; that older integration issue remains open.
+
+### Project Settings: competing sources
+
+- `Override Resolution = Strongest Influence` is the new default for eligible **equal-priority Override** sources; the weight is instantaneous acceleration magnitude times a monotonic spatial proximity term. Sources with Constant falloff therefore still compete by distance.
+- `Blended Influence` calculates a normalized weighted average of equal-priority Override acceleration vectors. Equal and opposite inputs can give a valid **zero-gravity** region. A blended field can produce smooth acceleration but does not mean a character's camera/rotation is automatically smooth.
+- `Priority Override (Legacy)` retains the v0.2.4 closer-Point rule (and first-seen ties for other shapes).
+- Higher **Priority** still selects the winning group before any equal-priority mode is applied. Lower or equal-priority Additive fields remain suppressed by an influencing Override, as before.
+
+See [ITERATION_016.md](ITERATION_016.md) for a two-planet test that compares the three settings.
 
 ## 1. How Orbit is organized
 
 Orbit currently exposes:
 
-- **Orbit Gravity Source:** A placeable **Actor** defining a gravity field. It is **not** one of the two components described below.
+- **Orbit Mover Gravity Component (optional integration):** Ships inside Orbit; enable Epic Mover in the project to use this integration. See [MOVER_INTEGRATION.md](MOVER_INTEGRATION.md).
+
+- **Orbit Character Controls Component:** An opt-in third-person movement input and camera bridge for native Character Movement. Adds two Blueprint-callable input nodes and supports standard Spring Arm cameras. See section 10.
+- **Orbit Gravity Source Actor:** A placeable **Actor** defining a gravity field; a separate **Orbit Gravity Source Component** can now embed a field in an ordinary Actor.
 - **Orbit Character Gravity Component:** An optional bridge between Orbit gravity and Unreal's native Character Movement component.
 - **Orbit Gravity Receiver Component:** An optional way to select which gravity channels affect an Actor.
 - **Orbit World Subsystem:** A runtime, world-level authority for gravity source sampling and automatic, experimental rigid-body acceleration.
 - **Orbit Blueprint Library:** Convenience nodes for sampling gravity and performing gravity-relative vector calculations.
 
-Most ordinary simulated physics objects need **neither component**. When automatic physics integration is enabled, Orbit discovers eligible physics components and applies field acceleration. The Character Gravity component is for native `ACharacter` movement. The Receiver component changes which gravity sources an Actor is eligible to receive.
+Most ordinary simulated physics objects need **no Orbit components**. When automatic physics integration is enabled, Orbit discovers eligible physics components and applies field acceleration. The Character Gravity component is for native `ACharacter` movement. The Receiver component changes which gravity sources an Actor is eligible to receive.
 
 ### Important terminology: two different channel concepts
 
@@ -69,7 +131,7 @@ It runs before native Character Movement, respects the Character's optional Rece
 ### Limitations
 
 - Rotation is deliberately **off by default**. Standard third-person/first-person controller schemes frequently assume world +Z; enabling actor alignment without adapting the camera/input can make controls disorienting.
-- No root-motion, foot IK, animation, capsule-floor locomotion, AI path following or camera integration is claimed as complete.
+- No root-motion, foot IK, animation, complete capsule-floor locomotion, AI path following or production camera integration is claimed as complete. An optional experimental near-floor landing assist and Character Controls camera adapter are described in section 10.
 - `GravityScale` conversion requires nonzero native WorldSettings gravity. If the world gravity is zero, Orbit logs a warning and cannot generate nonzero native Character Movement acceleration through a scale alone.
 - The adapter does not implement custom network prediction or replicate source updates. Test in standalone single-player first.
 - Character Movement receives the instantaneous spatial field. **Spiral Capture** remains a separate velocity-aware effect for physics-simulating bodies, not Characters.
@@ -119,7 +181,7 @@ Here, the Player is eligible for Planet A's gravity field and the crate for Plan
 - Any overlap is sufficient. A source with channels 0 and 2 affects a receiver with channel 2 alone.
 - All three channels off results in **no matching Orbit sources**.
 - Channels have no relationship to collision channels, object types, or visibility/lighting channels.
-- The same Receiver mask is used for all eligible primitive components of its owning Actor. v0.1.9 does not provide different Receiver channel masks for individual components within the same Actor.
+- The same Receiver mask is used for all eligible primitive components of its owning Actor. Orbit v0.2.5 does not provide different Receiver channel masks for individual components within the same Actor.
 - For rigid bodies with no compatible Orbit source, Orbit leaves them using native gravity instead of claiming them.
 
 ### Blueprint-visible property
@@ -134,9 +196,9 @@ Do not add a Receiver merely to make a physics cube fall toward an Orbit source.
 
 ## 4. Complete list of Orbit Blueprint functions
 
-The v0.1.9 plugin declares **13 Orbit-specific Blueprint-callable or Blueprint-pure functions** across four classes. The names below are the names to search for in the Blueprint node picker. Unreal also generates normal property Get/Set nodes for exposed properties and struct Make/Break nodes, but those are not additional Orbit-authored functions.
+The base Orbit plugin declares **24 Orbit-specific Blueprint-callable or Blueprint-pure functions**, including input adapters and runtime helpers, across its runtime classes. The names below are the names to search for in the Blueprint node picker. Unreal also generates normal property Get/Set nodes for exposed properties and struct Make/Break nodes, but those are not additional Orbit-authored functions.
 
-### 4A. Orbit Blueprint Library (6 nodes)
+### 4A. Orbit Blueprint Library (six foundational gravity/orientation nodes; other library nodes are documented in later sections)
 
 These can be called from ordinary Blueprint graphs; they do not require a stored reference to the World Subsystem.
 
@@ -229,7 +291,7 @@ Samples **this Gravity Source alone**, not the combined World Subsystem field. I
 
 **Use when:** Debugging a particular gravity source or comparing a single source's field with the combined world result.
 
-**Important v0.1.9 detail:** Internally this node uses the evaluator's default **Gravity Channel 0** mask and `General` query. Therefore a source configured **only** for Channel 1 or 2 can return no influence through this convenience function. To sample sources on those channels, use the World Subsystem's **Sample Gravity With Channels** node instead. This is a current API limitation, not an intended channel rule for physics.
+**Important current behavior:** Internally this node uses the evaluator's default **Gravity Channel 0** mask and `General` query. Therefore a source configured **only** for Channel 1 or 2 can return no influence through this convenience function. To sample sources on those channels, use the World Subsystem's **Sample Gravity With Channels** node instead. This is a current API limitation, not an intended channel rule for physics.
 
 ### 4C. Orbit Gravity Receiver Component (1 node)
 
@@ -447,8 +509,8 @@ These are not Blueprint library nodes, and none of them are required for ordinar
 
 ## 8. Current limits relevant to Blueprint use
 
-- **Only two addable Orbit Actor Components exist in v0.1.9:** Character Gravity and Gravity Receiver. The Gravity Source is a placeable Actor; Orbit World Subsystem is created by the game world.
-- **Character integration now supports direction and magnitude, with optional Actor/capsule alignment.** Camera/controller/input orientation, advanced locomotion, animation and networking still require further work.
+- **Orbit has six addable Actor Components:** Character Gravity, Gravity Receiver, Character Controls, Gravity Orientation, Gravity Source and Orbit Mover Gravity (functional with Epic Mover enabled). The dedicated Gravity Source Actor is a separate placeable Actor; Orbit World Subsystem is created by the game world.
+- **Character integration supports direction, magnitude, optional Actor/capsule alignment, plus separate opt-in tangent-plane input, facing and gravity-relative Spring Arm camera handling.** Advanced locomotion, animation, and networking still require further work.
 - **Automatic rigid-body gravity is experimental.** It uses game-thread `AddForce(..., bAccelChange = true)`, not Chaos simulation callbacks or substep forces.
 - **No gravity-aware NavMesh, EQS, path following, vehicle, Niagara, or projectile integrations are included** in this version.
 - **No multiplayer gravity source replication/prediction** is implemented.
@@ -456,7 +518,24 @@ These are not Blueprint library nodes, and none of them are required for ordinar
 - **Sample Source is a single-source Channel 0 convenience call.** It is not a substitute for the combined Actor/channel-aware world query.
 - **Spiral Capture differs from the field preview.** Visualization and Blueprint spatial samples do not account for a body's velocity and collision response.
 
-## 9. Quick node index
+## 8A. Optional Orbit Mover component and its nodes
+
+**Plugin:** `Orbit` (internal `OrbitMover` module). Epic's Experimental Mover is optional; Orbit has no build-time Mover dependency.
+
+**Component:** `UOrbitMoverGravityComponent`, Add Component search **Orbit Mover Gravity**. Intended for Actors/Pawns with a **synchronous kinematic `UMoverComponent`**. The bridge applies Orbit's gravity acceleration and local Up using Mover's reflected public functions during a pre-physics game-thread tick, with a tick prerequisite where applicable. Unlike the prior pre-simulation callback, this timing is not guaranteed for independent Mover simulations. It is **not compatible with Chaos Mover or asynchronous backends**. It respects the same Gravity Receiver channels as the Character Gravity adapter. For full setup and caveats see [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md).
+
+**Orbit-authored Blueprint nodes, always defined in the Orbit plugin (functional on a compatible Mover actor):**
+
+1. **Set Orbit Mover Gravity Enabled** (`Orbit | Mover`): Input `bEnabled` Boolean. Enables/disables integration; disabling relinquishes its overrides to native Mover.
+2. **Refresh Orbit Mover Gravity** (`Orbit | Mover`): Re-samples and applies Orbit gravity manually for the owner. Not normally needed per tick.
+
+**New runtime diagnostic properties**: Inside Orbit Field, Last Orbit Acceleration, Last Orbit Up, Last Sample Position, Samples Applied, Backend Supported. These are ordinary property Get nodes, not additional authored Blueprint functions. Orbit exposes **32** authored functions across its internal modules: 30 core and 2 Mover-specific. Enabling Epic Mover is required for those latter functions to affect movement.
+
+---
+
+## 9. Quick node index (v0.2.5)
+
+These are **authored Blueprint-callable/pure functions**, not automatically generated property Get/Set or Make/Break struct nodes. The two Mover nodes are part of Orbit, but require a compatible Epic Mover component to have any effect.
 
 | # | Blueprint node | Owner | Category |
 | ---: | --- | --- | --- |
@@ -473,5 +552,175 @@ These are not Blueprint library nodes, and none of them are required for ordinar
 | 11 | Sample Gravity For Actor | Orbit World Subsystem | Orbit / Channels |
 | 12 | Get Gravity Acceleration | Orbit World Subsystem | Orbit / Gravity |
 | 13 | Get Active Source Count | Orbit World Subsystem | Orbit / Gravity |
+| 14 | Set Gravity Strength | Orbit Gravity Source Actor | Orbit / Field / Runtime |
+| 15 | Refresh Active Sources | Orbit World Subsystem | Orbit / Gravity / Runtime |
+| 16 | Apply Gravity Relative Move | Orbit Character Controls Component | Orbit / Controls / Input |
+| 17 | Apply Gravity Relative Look | Orbit Character Controls Component | Orbit / Controls / Input |
+| 18 | Make Gravity Frame | Orbit Blueprint Library | Orbit / Gravity / Transforms |
+| 19 | Make Gravity Frame For Actor | Orbit Blueprint Library | Orbit / Gravity / Transforms |
+| 20 | Gravity Local to World Transform | Orbit Blueprint Library | Orbit / Gravity / Transforms |
+| 21 | Gravity World to Local Transform | Orbit Blueprint Library | Orbit / Gravity / Transforms |
+| 22 | Apply Orbit Gravity Relative Move | Orbit Blueprint Library | Orbit / Controls / Input |
+| 23 | Apply Orbit Gravity Relative Look | Orbit Blueprint Library | Orbit / Controls / Input |
+| 24 | Get Gravity Relative Locomotion | Orbit Blueprint Library | Orbit / Animation |
+| 25 | Get Orbit Gravity Up for Actor | Orbit Blueprint Library | Orbit / Gravity / Orientation |
+| 26 | Make Orbit Axis Aligned Rotation | Orbit Blueprint Library | Orbit / Gravity / Orientation |
+| 27 | Orient Actor to Orbit Gravity | Orbit Blueprint Library | Orbit / Gravity / Orientation |
+| 28 | Set Gravity Strength | Orbit Gravity Source Component | Orbit / Field / Runtime |
+| 29 | Sample Source Component | Orbit Gravity Source Component | Orbit / Field |
+| 30 | Orient Now | Orbit Gravity Orientation Component | Orbit / Orientation |
+| 31 | Set Orbit Mover Gravity Enabled | Orbit Mover Gravity Component (optional) | Orbit / Mover |
+| 32 | Refresh Orbit Mover Gravity | Orbit Mover Gravity Component (optional) | Orbit / Mover |
 
-*Documentation generated from Orbit v0.1.9 source. This is an API-level review, not proof of UE compilation or PIE behavior.*
+**Component Target vs Actor Self:** Nodes 16/17 must target an **Orbit Character Controls Component reference**. The static convenience nodes 22/23 accept a **Character** reference and default that pin to `Self` inside a Character Blueprint. They require an Orbit Character Controls component installed on that Character and do nothing without it. Use one input path, not both. 
+
+*Documentation audited against Orbit v0.2.5 source, not proof of UE compilation or in-editor behavior.*
+
+---
+
+## 10. Character input/camera and landing reliability (introduced in v0.2.1, expanded in v0.2.2)
+
+### Orbit Character Controls Component
+
+**C++:** `UOrbitCharacterControlsComponent`  
+**Add Component picker:** `Orbit Character Controls`  
+**Owner:** `ACharacter` with native `UCharacterMovementComponent`. Add alongside `Orbit Character Gravity` for planet traversal.
+
+This is one of the **five base Orbit components**, alongside Character Gravity, Gravity Receiver, Gravity Orientation and Gravity Source. It does NOT automatically consume Enhanced Input bindings: the user explicitly forwards input through its two nodes.
+
+| Property | Default | Effect |
+| --- | --- | --- |
+| Orient Camera to Gravity | true | Use a transported gravity-local heading and pitch |
+| Prefer Spring Arm Camera | true | Drive the first Spring Arm in absolute world rotation using quaternions; temporarily disable Pawn Control Rotation; restore prior flags on EndPlay or disable |
+| Yaw Degrees Per Unit | 1 | Local-Up yaw input sensitivity |
+| Pitch Degrees Per Unit | 1 | Gravity-local pitch input sensitivity |
+| Min Pitch / Max Pitch | -80 / +80 | Clamp pitch relative to **local gravity Up**, not world Z |
+| Face Movement Direction | true | Turns Actor/capsule toward an appropriate tangent-plane movement heading (not camera yaw) |
+| Face Velocity When Moving | true | Above threshold, face actual tangent-plane velocity rather than latest raw input. Useful for animation consistency. |
+| Velocity Facing Threshold | 30 cm/s | Below this speed use input-facing fallback. |
+| Facing Response Rate | 12 | Smooth quaternion response; 0 snaps |
+| Facing Input Threshold | 0.1 | Ignore tiny input; keep heading without movement |
+| Last Facing Direction | runtime | Read-only world-space target direction of last facing update |
+| Last Gravity Up | runtime | Read-only sampled movement Up |
+| Last Move Forward / Right | runtime | Read-only tangent input basis for PIE debugging |
+
+#### Iteration 012 Orbit Blueprint nodes
+
+| # | Blueprint node | Target | Input | Output / Behavior |
+| ---: | --- | --- | --- | --- |
+| 14 | **Set Gravity Strength** | Orbit Gravity Source Actor | New Strength (double cm/s²) | Immediately updates runtime actor's Strength and its game-world source snapshot; rejects non-finite or negative inputs |
+| 15 | **Refresh Active Sources** | Orbit World Subsystem | none | Rebuilds the registered runtime source snapshot immediately. Useful after several direct property assignments |
+| 16 | **Apply Gravity Relative Move** | Orbit Character Controls Component | Move Axis (Vector2D), X right / Y forward | Applies forward/right movement **tangent to current gravity Up** through native `AddMovementInput` |
+| 17 | **Apply Gravity Relative Look** | Orbit Character Controls Component | Look Axis (Vector2D), X yaw / Y pitch | Maintains gravity-local camera heading and pitch. Prefers quaternion-driven Spring Arm; uses Controller Rotation only as fallback |
+
+The base `Orbit` plugin now authors **24 Blueprint-callable/pure functions**, plus the two built-in `OrbitMover` module functions documented in [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md). Normal UObject property setters, Blueprint Make/Break struct nodes, and engine-native nodes are not included in these counts.
+
+### Additional Orbit Character Gravity component settings
+
+| Property | Default | Effect |
+| --- | --- | --- |
+| Enable Near Floor Landing Assist | true | Allows *native* near-floor landing after a confirmed walkable capsule-sweep hit and valid landing spot |
+| Near Floor Landing Distance | 10 cm | Maximum sweep-validated gap, hard bounded to 1–20 cm |
+| Near Floor Max Approach Speed | 600 cm/s (new default) | Caps near-floor assistance; initial drops from several hundred centimeters can exceed the original 100 cm/s limit. Native walkable-floor validation remains mandatory. |
+| Last Applied Gravity Scale | runtime read-only | Actual value last applied to native Character Movement |
+| Last Dominant Source ID | runtime read-only | Diagnostic ID from the active field sample, not a stable serialized Actor identifier |
+| Last Walkable Floor Distance | runtime read-only | Validated sweep distance in cm or -1 when no suitable sweep hit |
+| Landing Assist Triggered | runtime read-only | Whether the optional near-floor assist performed the transition to native Walking that tick |
+| Landing Assist Count | runtime read-only | Lifetime count of successful native assist transitions, easier to observe in PIE |
+
+A zero-strength field does not trigger near-floor assist. The landing method calls native `K2_FindFloor` and uses its gravity-relative walkable sweep result. The previous shortened-capsule sweep hit was incorrectly revalidated by `IsValidLandingSpot` (a path meant for full collision landing hits). It does not synthesize hits or teleport. Native Character Movement still validates its own floor when entering Walking. The outcome still requires PIE validation.
+
+| Near Floor Walkable | runtime read-only | True when native FindFloor found a nonpenetrating, walkable sweep hit |
+| Last Native Floor Distance | runtime read-only | FloorDist reported by native FindFloor, or -1 when no blocking floor sweep |
+
+
+### Exact Third Person template hookup
+
+1. Add `Orbit Character Gravity` and `Orbit Character Controls` to `BP_ThirdPersonCharacter`. Enable **Align Actor to Gravity** on the former; keep the latter's **Orient Camera to Gravity** enabled. Keep a normal Spring Arm/Camera in the Components panel.
+2. Under Character Movement, turn **Orient Rotation to Movement** and **Use Controller Desired Rotation** off for this test. Under Self, disable **Use Controller Rotation Yaw/Pitch/Roll**.
+3. Open Event Graph. In **IA_Move (Triggered)**, take its `Action Value` through a 2D Axis Value extraction and connect to **Apply Gravity Relative Move (Move Axis)** targeting Orbit Character Controls. Remove/disconnect the template's two original `AddMovementInput` calls.
+4. In **IA_Look (Triggered)**, connect its 2D Axis Value to **Apply Gravity Relative Look (Look Axis)** on the same component. Remove/disconnect the template's original `AddControllerYawInput` and `AddControllerPitchInput` calls. Leave Jump logic unchanged.
+5. Compile, save, run PIE. A source/planet at `(0,0,2000)` with `PlayerStart` at `(900,0,2000)` tests the equator; `(0,0,2800)` tests low-g landing on a 10x basic Sphere.
+6. For live Strength testing: **F8, select the PIE-world source**, not its editor-world counterpart. Watch the PIE Character's `Last Field Acceleration` and `Last Applied Gravity Scale`. To eliminate selection ambiguity, call the source's **Set Gravity Strength** node from the Level Blueprint during PIE.
+
+See [`ITERATION_012.md`](ITERATION_012.md) for acceptance tests and honest limitations.
+
+---
+
+## 11. Iteration 013: live Details edits, body facing, transform tools
+
+This section describes Orbit changes in v0.2.2. See [`ITERATION_013.md`](ITERATION_013.md) for the exact planet test and a comparison of the native floor-detection path.
+
+### Runtime Details editing
+
+The placeable Gravity Source has **Mirror Editor Changes to PIE** (default true). While PIE is running, editing an editable source property on its editor-world level Actor attempts to match its PIE copy by actor GUID or exact actor name and matching level package and updates that PIE source. The `Last Editor PIE Mirror Count` property reveals how many PIE copies were updated (normally 1). Editing the PIE-world source directly continues to work. The new behavior is editor-only and not replicated. Editing an editor-world source still changes its editable unsimulated level copy, so undo it if you do not want to retain the authored change. The Blueprint Strength setter is retained.
+
+### Landing diagnostics
+
+In addition to **Last Walkable Floor Distance** and **Landing Assist Count**, the Character Gravity component exposes **Near Floor Walkable** and **Last Native Floor Distance**. When Falling near the planet, inspect these properties on the **PIE-world character instance**. `Near Floor Walkable = false` indicates native FindFloor didn't find the required walkable sweep, even if the render mesh appears near the surface. `Last Native Floor Distance > Near Floor Landing Distance` indicates a gap larger than the configured assist range.
+
+### Facing a direction on curved surfaces
+
+The Orbit Character Controls component now defaults **Face Movement Direction = true**. It uses the most recent nontrivial movement input direction projected into the gravity tangent plane, interpolating the Actor/capsule rotation with a quaternion. **Facing Response Rate = 12**, **Facing Input Threshold = 0.1**. The camera remains independently oriented through its Spring Arm. It does not modify third-person animation selections or control custom character controllers. Disable native Character Movement's `Orient Rotation to Movement` and the Character's `Use Controller Rotation Yaw/Pitch/Roll` for this test. If a custom locomotion system controls rotation, turn Orbit facing off.
+
+### Gravity frame construction and transform conversions
+
+**Make Gravity Frame**: Inputs `World Origin` (Vector), `Gravity Up` (Vector), `Preferred Forward` (Vector). Outputs `Return Value` (bool) and `Gravity Frame` (Transform). Gravity Frame is world-space and unit-scaled, with local +Z = Up and +X tangent to Preferred Forward. Invalid zero/NaN Up returns false and an identity transform.
+
+**Make Gravity Frame For Actor**: Inputs `Actor` (defaults to Self), `World Position`, `Preferred Forward`. Outputs bool and Gravity Frame. Samples the Character integration channel with the Actor's Receiver gravity channels. Returns false if no valid direction is available; explicitly construct a frame with a cached Up during zero gravity.
+
+**Gravity Local to World Transform**: Inputs `Relative Transform` and `Gravity Frame`, returns World Transform. Composition: `RelativeTransform * GravityFrame`.
+
+**Gravity World to Local Transform**: Inputs `World Transform` and `Gravity Frame`, returns Relative Transform. Uses `WorldTransform.GetRelativeTransform(GravityFrame)`. For positions/vectors/directions alone, use Unreal's ordinary `Transform Location`, `Inverse Transform Location`, `Transform Direction`, `Inverse Transform Direction` nodes with the same Gravity Frame.
+
+**Apply Orbit Gravity Relative Move** and **Apply Orbit Gravity Relative Look**: Actor-friendly convenience Blueprint Library nodes. Inputs `Character` (`Self` in a Character Blueprint) and `Move Axis` / `Look Axis` (Vector2D). Find the Character's existing Orbit Character Controls component and call its instance method. No additional input interception, component creation or target cast occurs.
+
+#### Example: Spawn an effect at an offset local to gravity
+
+1. `Make Gravity Frame For Actor(Self, GetActorLocation, CameraForward)` → Frame and success.
+2. Make a Transform with Location `(100, 0, 50)` and desired local rotation, Scale `(1,1,1)`.
+3. `Gravity Local to World Transform(RelativeTransform, Frame)` → final world-space Transform for `Spawn Actor` or `Spawn System At Location`.
+4. To convert an existing world object back into the same gravity-relative frame, use `Gravity World to Local Transform`.
+
+
+## 12. Iteration 015: gravity-relative animation and first-spawn landing
+
+### Get Gravity Relative Locomotion (new Blueprint Library node)
+
+**Category:** `Orbit | Animation`  
+**C++:** `UOrbitBlueprintLibrary::GetGravityRelativeLocomotion`  
+**Input:** `Character` (reference to `ACharacter`, usually the result of `Try Get Pawn Owner` -> `Cast to Character` inside an Animation Blueprint; defaults to Self when Self is a Character)  
+**Return:** `FOrbitGravityRelativeLocomotion` (split or Break the struct):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| Valid | Boolean | The character and movement component exist and a tangent basis was valid. |
+| Gravity Up | Vector | Normalized inverse of native Character Movement gravity, or actor Up if undefined. |
+| Tangent Velocity | Vector | Full world-space velocity projected to the gravity-tangent walking plane, **not** world XY. |
+| Ground Speed | Float, cm/s | Magnitude of tangent velocity, useful for idle/walk/run BlendSpaces. |
+| Forward Speed | Float, cm/s | Tangent velocity dotted with character's projected local Forward, positive forward and negative backward. |
+| Right Speed | Float, cm/s | Tangent velocity dotted with character's projected local Right, positive right and negative left. |
+| Movement Direction Degrees | Float | `atan2(RightSpeed,ForwardSpeed)` in degrees, 0 forward, +90 right, -90 left, +/-180 backward. |
+
+The node does **not** replace the existing template animation graph automatically. If the current AnimBP derives GroundSpeed with `VectorLengthXY`, that will change as the character runs around the planet because world XY omits world Z velocity. Substitute this gravity-tangent `Ground Speed` output for animation BlendSpace speed and its signed `Movement Direction Degrees` only if your graph uses a directional BlendSpace. On newer templates with root yaw offsets/Orientation Warping, inspect those nodes separately before disabling them; their inputs may also require gravity-relative values. This node reads current native movement velocity, not input intent, and does not predict gait, foot IK or root-motion movement.
+
+### Character Controls facing update
+
+`Face Velocity When Moving` defaults to true. Above `Velocity Facing Threshold = 30 cm/s`, the actor rotates toward the actual tangent-plane velocity; below that threshold it can use the requested move input. It remains optional and independent of the camera. Disable **Face Movement Direction** if your existing locomotion/animation system intentionally controls actor yaw. The previous controls nodes, including the actor-friendly wrappers, are unchanged.
+
+### Distinguishing spawn falls from jumps
+
+The near-floor assist runs from a post-native-movement delegate while gravity direction/scale are still injected pre-movement. `Last Landing Assist Result`, `Last Landing Descent Speed`, `Last Landing Lateral Speed`, `Has Been Grounded` and `Pre First Landing Checks` help distinguish initial spawn fall from a jump following a valid walking state. Defaults: **Near Floor Landing Distance = 10 cm**, **Near Floor Max Approach Speed = 600 cm/s** (previously 100). A result such as `Native FindFloor found no surface` is evidence for a floor-probe/collision/orientation problem rather than an approach-speed gate; `Speed exceeds landing-assist limit` suggests raising the cap only for a controlled diagnostic. This remains experimental and requires in-editor validation.
+
+---
+
+## Iteration 015: shared-field arbitration and editor action
+
+No Orbit-authored Blueprint nodes or components are added/removed in v0.2.5. All `Sample...` nodes, both Character components, Gravity Receiver and the optional OrbitMover adapter use the shared field evaluator. In overlapping regions with equal-priority Point/Override sources, the sample now comes from **the nearer source center**, independent of source registration order. Higher Priority still wins and other shape ties are unchanged. Watch `Dominant Source ID` / `Last Dominant Source ID` as a diagnostic for inter-planet transfers.
+
+`Orbit > Orient to Gravity` is an **Editor-only actor right-click action**, **not a Blueprint node** or runtime component. It samples current editor-world sources for each selected actor, honors its Receiver channels, aligns its local +Z to gravitational Up and supports Undo. See [`ITERATION_015.md`](ITERATION_015.md).
+
+
+## Iteration 017: single-plugin consolidation (v0.2.6)
+
+The `OrbitMover` code is now inside `Orbit/Source/OrbitMover/` and its component and two functions ship in the **one Orbit plugin**. You do not install, enable or distribute a separate `OrbitMover.uplugin`. The engine's Experimental Mover can remain disabled unless the project uses Mover. The adapter uses runtime reflection and game-thread pre-physics ticking rather than a typed Mover pre-simulation callback, so independent simulation timing and rollback remain unverified. See [MOVER_INTEGRATION.md](MOVER_INTEGRATION.md).

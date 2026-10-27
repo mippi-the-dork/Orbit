@@ -634,3 +634,207 @@ bool FOrbitMovementFacingTangentTest::RunTest(const FString& Parameters)
     return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "OrbitGravityFrame.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitCharacterGravityLocomotionTest,
+    "Orbit.Character.GravityRelativeLocomotion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitCharacterGravityLocomotionTest::RunTest(const FString& Parameters)
+{
+    for (const FVector Up : TArray<FVector>{ FVector::UpVector, -FVector::UpVector,
+         FVector::ForwardVector, -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector })
+    {
+        FVector Forward, Right;
+        TestTrue(TEXT("Gravity tangent basis is available"), FOrbitGravityFrame::MakeTangentBasis(
+            Up, FVector::ForwardVector, Forward, Right));
+        double Speed, Fwd, Side, Dir;
+        TestTrue(TEXT("Forward velocity calculates"), FOrbitGravityFrame::CalculateGravityRelativeLocomotion(
+            Forward * 250.0, Up, Forward, Speed, Fwd, Side, Dir));
+        TestTrue(TEXT("Forward motion remains 250 cm/s even when world Z changes"), FMath::IsNearlyEqual(Speed, 250.0, 0.001));
+        TestTrue(TEXT("Forward is positive"), FMath::IsNearlyEqual(Fwd, 250.0, 0.001));
+        TestTrue(TEXT("Direction is zero"), FMath::Abs(Dir) < 0.001);
+        TestTrue(TEXT("Sideways velocity calculates"), FOrbitGravityFrame::CalculateGravityRelativeLocomotion(
+            Right * 300.0, Up, Forward, Speed, Fwd, Side, Dir));
+        TestTrue(TEXT("Right motion is 90 degrees"), FMath::IsNearlyEqual(Dir, 90.0, 0.001));
+        TestTrue(TEXT("Sideways is positive"), FMath::IsNearlyEqual(Side, 300.0, 0.001));
+        TestTrue(TEXT("Pure gravity-direction velocity gives zero ground speed"), FOrbitGravityFrame::CalculateGravityRelativeLocomotion(
+            Up * 900.0, Up, Forward, Speed, Fwd, Side, Dir));
+        TestTrue(TEXT("Vertical speed is removed"), Speed < 0.001);
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitInitialDropApproachSpeedTest,
+    "Orbit.Character.InitialDropAssistEligibility", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitInitialDropApproachSpeedTest::RunTest(const FString& Parameters)
+{
+    // 400 cm drop on a 196 cm/s^2 source => 396 cm/s approach, excluding old 100 cm/s gate.
+    const double DropApproachSpeed = FMath::Sqrt(2.0 * 196.0 * 400.0);
+    TestTrue(TEXT("400 cm drop exceeds original limit"), DropApproachSpeed > 100.0);
+    TestTrue(TEXT("Updated speed limit permits source-derived initial drop"),
+        FOrbitGravityFrame::ShouldAttemptNearFloorLanding(true, -DropApproachSpeed, 0.0,
+            600.0, 5.0, 10.0));
+    TestFalse(TEXT("Upward rebound or jump apex cannot trigger assist"),
+        FOrbitGravityFrame::ShouldAttemptNearFloorLanding(true, DropApproachSpeed, 0.0,
+            600.0, 5.0, 10.0));
+    TestFalse(TEXT("Floor farther than user limit cannot trigger assist"),
+        FOrbitGravityFrame::ShouldAttemptNearFloorLanding(true, -DropApproachSpeed, 0.0,
+            600.0, 20.0, 10.0));
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPointSourceTransferTest,
+    "Orbit.Field.EqualPriorityPlanetTransfer", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitPointSourceTransferTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition PlanetA;
+    PlanetA.Shape = EOrbitGravityShape::Point;
+    PlanetA.Center = FVector(-500.0, 0.0, 0.0);
+    PlanetA.Strength = 980.0;
+    PlanetA.MaxDistance = 1000.0;
+    PlanetA.Direction = EOrbitGravityDirection::Inward;
+    PlanetA.SourceId = 11;
+    PlanetA.Combine = EOrbitGravityCombine::Override;
+    FOrbitFieldDefinition PlanetB = PlanetA;
+    PlanetB.Center = FVector(500.0, 0.0, 0.0);
+    PlanetB.SourceId = 22;
+    const FVector NearA(-200.0, 0.0, 0.0);
+    const FVector NearB(200.0, 0.0, 0.0);
+    for (int32 Order = 0; Order < 2; ++Order)
+    {
+        TArray<FOrbitFieldDefinition> Fields;
+        Fields.Add(Order == 0 ? PlanetA : PlanetB);
+        Fields.Add(Order == 0 ? PlanetB : PlanetA);
+        const FOrbitGravitySample A = FOrbitFieldEvaluator::Combine(Fields, NearA);
+        const FOrbitGravitySample B = FOrbitFieldEvaluator::Combine(Fields, NearB);
+        TestEqual(TEXT("Nearest planet owns its side of overlap"), A.DominantSourceId, 11);
+        TestEqual(TEXT("Other planet owns opposite side"), B.DominantSourceId, 22);
+        TestTrue(TEXT("Near first planet pulls toward negative X"), A.Acceleration.X < 0.0);
+        TestTrue(TEXT("Near second planet pulls toward positive X"), B.Acceleration.X > 0.0);
+    }
+    PlanetA.Priority = 10;
+    TArray<FOrbitFieldDefinition> PriorityFields = {PlanetA, PlanetB};
+    TestEqual(TEXT("Explicit priority still takes precedence"),
+        FOrbitFieldEvaluator::Combine(PriorityFields, NearB).DominantSourceId, 11);
+    PriorityFields[0].MaxDistance = 200.0;
+    TestEqual(TEXT("Out-of-range high-priority source cannot take ownership"),
+        FOrbitFieldEvaluator::Combine(PriorityFields, NearB).DominantSourceId, 22);
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "OrbitBlueprintLibrary.h"
+#include "OrbitGravitySourceComponent.h"
+#include "UObject/UObjectGlobals.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitInfluenceCompetitionTest,
+    "Orbit.Field.InfluenceCompetition", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitInfluenceCompetitionTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition A;
+    A.Center = FVector(-500.0, 0.0, 0.0);
+    A.MaxDistance = 1400.0;
+    A.Strength = 980.0;
+    A.SourceId = 100;
+    FOrbitFieldDefinition B = A;
+    B.Center = FVector(500.0, 0.0, 0.0);
+    B.SourceId = 200;
+    B.Strength = 300.0;
+    TArray<FOrbitFieldDefinition> Fields = {A, B};
+
+    const FVector Position(0.0, 0.0, 0.0);
+    const FOrbitGravitySample Strongest = FOrbitFieldEvaluator::Combine(Fields, Position,
+        EOrbitGravityChannel::Character, 1u, EOrbitOverrideResolution::StrongestInfluence);
+    TestEqual(TEXT("Stronger source wins even when at same distance"), Strongest.DominantSourceId, 100);
+    TestTrue(TEXT("Strongest field points left"), Strongest.Acceleration.X < -900.0);
+    const FOrbitGravitySample Blend = FOrbitFieldEvaluator::Combine(Fields, Position,
+        EOrbitGravityChannel::Character, 1u, EOrbitOverrideResolution::BlendedInfluence);
+    TestTrue(TEXT("Blend differs from strongest"), FMath::Abs(Blend.Acceleration.X) < 980.0);
+    TestTrue(TEXT("Blend retains stronger source direction"), Blend.Acceleration.X < 0.0);
+    B.Strength = 980.0;
+    Fields[1] = B;
+    const FOrbitGravitySample Cancellation = FOrbitFieldEvaluator::Combine(Fields, Position,
+        EOrbitGravityChannel::General, 1u, EOrbitOverrideResolution::BlendedInfluence);
+    TestTrue(TEXT("Opposing equal fields cancel"), Cancellation.Acceleration.IsNearlyZero(0.01));
+    TestTrue(TEXT("Cancellation still claims authored field influence"), Cancellation.bHasInfluence);
+    TestFalse(TEXT("Null field has no valid Up"), Cancellation.bHasValidDirection);
+
+    B.Priority = 10;
+    Fields[1] = B;
+    const FOrbitGravitySample Priority = FOrbitFieldEvaluator::Combine(Fields, Position,
+        EOrbitGravityChannel::Character, 1u, EOrbitOverrideResolution::BlendedInfluence);
+    TestEqual(TEXT("Explicit Priority overrides blend"), Priority.DominantSourceId, 200);
+    TestTrue(TEXT("Higher priority points right"), Priority.Acceleration.X > 0.0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSourceHysteresisTest,
+    "Orbit.Field.SourceHysteresis", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSourceHysteresisTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition A;
+    A.Center = FVector(-500.0, 0.0, 0.0);
+    A.SourceId = 100;
+    A.MaxDistance = 2000.0;
+    FOrbitFieldDefinition B = A;
+    B.Center = FVector(500.0, 0.0, 0.0);
+    B.SourceId = 200;
+    TArray<FOrbitFieldDefinition> Fields = { A, B };
+    const FVector SlightlyTowardB(40.0, 0.0, 0.0);
+    TestEqual(TEXT("Without history B owns nearer side"),
+        FOrbitFieldEvaluator::Combine(Fields, SlightlyTowardB, EOrbitGravityChannel::Character,
+            1u, EOrbitOverrideResolution::StrongestInfluence).DominantSourceId, 200);
+    TestEqual(TEXT("15 percent hysteresis retains previous source near midpoint"),
+        FOrbitFieldEvaluator::Combine(Fields, SlightlyTowardB, EOrbitGravityChannel::Character,
+            1u, EOrbitOverrideResolution::StrongestInfluence, 100, 0.15).DominantSourceId, 100);
+    TestEqual(TEXT("Sufficiently stronger B overcomes hysteresis"),
+        FOrbitFieldEvaluator::Combine(Fields, FVector(350.0, 0.0, 0.0), EOrbitGravityChannel::Character,
+            1u, EOrbitOverrideResolution::StrongestInfluence, 100, 0.15).DominantSourceId, 200);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSignedAxisOrientationTest,
+    "Orbit.Orientation.SignedAxes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSignedAxisOrientationTest::RunTest(const FString& Parameters)
+{
+    const FVector ExpectedUp = FVector(0.0, 1.0, 0.0);
+    const TArray<FVector> Axes = { FVector::ForwardVector, -FVector::ForwardVector,
+        FVector::RightVector, -FVector::RightVector, FVector::UpVector, -FVector::UpVector };
+    for (int32 Index = 0; Index < Axes.Num(); ++Index)
+    {
+        FRotator Rotation;
+        TestTrue(TEXT("Signed axis yields a gravity-aligned rotation"),
+            UOrbitBlueprintLibrary::MakeOrbitAxisAlignedRotation(FRotator::ZeroRotator,
+                ExpectedUp, static_cast<EOrbitLocalAxis>(Index), Rotation));
+        TestTrue(TEXT("Selected local axis maps to desired gravity Up"),
+            Rotation.Quaternion().RotateVector(Axes[Index]).Equals(ExpectedUp, 0.001));
+    }
+    FRotator Rotation;
+    TestFalse(TEXT("Zero gravity Up must not change orientation"),
+        UOrbitBlueprintLibrary::MakeOrbitAxisAlignedRotation(FRotator::ZeroRotator,
+            FVector::ZeroVector, EOrbitLocalAxis::PositiveZ, Rotation));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitEmbeddedSourceDefinitionTest,
+    "Orbit.Field.EmbeddedComponentDefinition", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitEmbeddedSourceDefinitionTest::RunTest(const FString& Parameters)
+{
+    UOrbitGravitySourceComponent* Component = NewObject<UOrbitGravitySourceComponent>();
+    TestNotNull(TEXT("Source component constructed without an Actor"), Component);
+    if (!Component) { return false; }
+    Component->Strength = 350.0;
+    Component->GravityChannels.bChannel0 = false;
+    Component->GravityChannels.bChannel2 = true;
+    FOrbitFieldDefinition Field;
+    Component->BuildDefinition(Field);
+    TestTrue(TEXT("Embedded strength copied"), FMath::IsNearlyEqual(Field.Strength, 350.0));
+    TestEqual(TEXT("Embedded source uses its own unique ID"), Field.SourceId, Component->GetUniqueID());
+    TestEqual(TEXT("Embedded channels copied"), Field.ChannelMask, static_cast<uint8>(4u));
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS

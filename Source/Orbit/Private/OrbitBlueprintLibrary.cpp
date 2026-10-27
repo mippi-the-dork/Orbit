@@ -1,9 +1,13 @@
 #include "OrbitBlueprintLibrary.h"
 #include "OrbitWorldSubsystem.h"
+#include "OrbitGravityReceiverComponent.h"
+#include "OrbitGravityOrientationComponent.h"
+#include "OrbitGravitySourceComponent.h"
 #include "OrbitGravityFrame.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "OrbitCharacterControlsComponent.h"
 #include "Math/RotationMatrix.h"
 
@@ -113,4 +117,107 @@ void UOrbitBlueprintLibrary::ApplyOrbitGravityRelativeLook(ACharacter* Character
             Controls->ApplyGravityRelativeLook(LookAxis);
         }
     }
+}
+
+
+FOrbitGravityRelativeLocomotion UOrbitBlueprintLibrary::GetGravityRelativeLocomotion(
+    const ACharacter* Character)
+{
+    FOrbitGravityRelativeLocomotion Out;
+    if (!IsValid(Character)) { return Out; }
+    const UCharacterMovementComponent* Move = Character->GetCharacterMovement();
+    if (!Move) { return Out; }
+
+    const FVector GravityDown = Move->GetGravityDirection();
+    const FVector Up = GravityDown.IsNearlyZero() ? Character->GetActorUpVector() : -GravityDown.GetSafeNormal();
+    const FVector Velocity = Move->Velocity;
+    double Speed, ForwardSpeed, RightSpeed, Direction;
+    if (!FOrbitGravityFrame::CalculateGravityRelativeLocomotion(Velocity, Up,
+        Character->GetActorForwardVector(), Speed, ForwardSpeed, RightSpeed, Direction))
+    {
+        return Out;
+    }
+    Out.bValid = true;
+    Out.GravityUp = Up;
+    Out.TangentVelocity = FVector::VectorPlaneProject(Velocity, Up);
+    Out.GroundSpeed = static_cast<float>(Speed);
+    Out.ForwardSpeed = static_cast<float>(ForwardSpeed);
+    Out.RightSpeed = static_cast<float>(RightSpeed);
+    Out.MovementDirectionDegrees = static_cast<float>(Direction);
+    return Out;
+}
+
+
+bool UOrbitBlueprintLibrary::GetOrbitGravityUpForActor(const AActor* Actor, FVector WorldPosition,
+    const UObject* SpecificSource, FVector& Up)
+{
+    Up = FVector::UpVector;
+    if (!IsValid(Actor) || !Actor->GetWorld()) { return false; }
+    const UOrbitWorldSubsystem* Subsystem = Actor->GetWorld()->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Subsystem) { return false; }
+    FOrbitGravitySample Sample;
+    if (IsValid(SpecificSource))
+    {
+        uint8 Mask = 1u;
+        if (const UOrbitGravityReceiverComponent* Receiver =
+            Actor->FindComponentByClass<UOrbitGravityReceiverComponent>())
+        {
+            Mask = Receiver->GravityChannels.ToMask();
+        }
+        Sample = Subsystem->SampleIndividualSource(SpecificSource, WorldPosition,
+            EOrbitGravityChannel::General, Mask);
+    }
+    else
+    {
+        Sample = Subsystem->SampleGravityForActor(Actor, WorldPosition, EOrbitGravityChannel::General);
+    }
+    if (!Sample.bHasInfluence || !Sample.bHasValidDirection) { return false; }
+    Up = Sample.Up;
+    return true;
+}
+
+static FVector OrbitSignedAxis(EOrbitLocalAxis Axis)
+{
+    switch (Axis)
+    {
+    case EOrbitLocalAxis::PositiveX: return FVector::ForwardVector;
+    case EOrbitLocalAxis::NegativeX: return -FVector::ForwardVector;
+    case EOrbitLocalAxis::PositiveY: return FVector::RightVector;
+    case EOrbitLocalAxis::NegativeY: return -FVector::RightVector;
+    case EOrbitLocalAxis::NegativeZ: return -FVector::UpVector;
+    default: return FVector::UpVector;
+    }
+}
+
+bool UOrbitBlueprintLibrary::MakeOrbitAxisAlignedRotation(FRotator CurrentRotation, FVector GravityUp,
+    EOrbitLocalAxis LocalAxis, FRotator& AlignedRotation)
+{
+    AlignedRotation = CurrentRotation;
+    if (GravityUp.IsNearlyZero() || GravityUp.ContainsNaN() || CurrentRotation.ContainsNaN())
+    {
+        return false;
+    }
+    const FQuat Current = CurrentRotation.Quaternion();
+    const FVector CurrentAxis = Current.RotateVector(OrbitSignedAxis(LocalAxis));
+    const FVector Target = GravityUp.GetSafeNormal();
+    const FQuat Delta = FQuat::FindBetweenNormals(CurrentAxis.GetSafeNormal(), Target);
+    const FQuat Rotation = (Delta * Current).GetNormalized();
+    if (Rotation.ContainsNaN()) { return false; }
+    AlignedRotation = Rotation.Rotator();
+    return true;
+}
+
+bool UOrbitBlueprintLibrary::OrientActorToOrbitGravity(AActor* Actor, EOrbitLocalAxis LocalAxis,
+    const UObject* SpecificSource)
+{
+    if (!IsValid(Actor)) { return false; }
+    FVector Up;
+    FRotator Rotation;
+    if (!GetOrbitGravityUpForActor(Actor, Actor->GetActorLocation(), SpecificSource, Up) ||
+        !MakeOrbitAxisAlignedRotation(Actor->GetActorRotation(), Up, LocalAxis, Rotation))
+    {
+        return false;
+    }
+    Actor->SetActorRotation(Rotation, ETeleportType::None);
+    return true;
 }

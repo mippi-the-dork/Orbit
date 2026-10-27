@@ -4,6 +4,23 @@
 #include "Styling/SlateStyleRegistry.h"
 #include "Brushes/SlateImageBrush.h"
 #include "Misc/Paths.h"
+#include "ToolMenus.h"
+#include "ToolMenu.h"
+#include "ToolMenuSection.h"
+#include "OrbitGravitySource.h"
+#include "OrbitGravitySourceComponent.h"
+#include "OrbitGravityOrientationComponent.h"
+#include "OrbitSettings.h"
+#include "OrbitGravityReceiverComponent.h"
+#include "OrbitGravityFrame.h"
+#include "OrbitGravityTypes.h"
+#include "Editor.h"
+#include "Engine/Selection.h"
+#include "EngineUtils.h"
+#include "ScopedTransaction.h"
+#include "Framework/Commands/UIAction.h"
+#include "GameFramework/Actor.h"
+#include "Engine/World.h"
 
 /**
  * Orbit's runtime module has no Slate or editor dependencies.
@@ -36,6 +53,10 @@ public:
             StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
         StyleSet->Set(TEXT("ClassIcon.OrbitCharacterControlsComponent"), new FSlateVectorImageBrush(
             StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
+        StyleSet->Set(TEXT("ClassIcon.OrbitGravitySourceComponent"), new FSlateVectorImageBrush(
+            StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
+        StyleSet->Set(TEXT("ClassIcon.OrbitGravityOrientationComponent"), new FSlateVectorImageBrush(
+            StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
         StyleSet->Set(TEXT("ClassIcon.OrbitGravityReceiverComponent"), new FSlateVectorImageBrush(
             StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon16));
         // Optional OrbitMover companion is registered by class name only; this Editor module
@@ -59,10 +80,16 @@ public:
             StyleSet->RootToContentDir(TEXT("Icons/Orbit-Icon"), TEXT(".svg")), Icon32));
 
         FSlateStyleRegistry::RegisterSlateStyle(*StyleSet);
+
+        // Extend UE's native actor context menu after ToolMenus is initialized.
+        UToolMenus::RegisterStartupCallback(
+            FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FOrbitEditorModule::RegisterMenus));
     }
 
     virtual void ShutdownModule() override
     {
+        UToolMenus::UnRegisterStartupCallback(this);
+        UToolMenus::UnregisterOwner(this);
         if (StyleSet.IsValid())
         {
             FSlateStyleRegistry::UnRegisterSlateStyle(*StyleSet);
@@ -71,6 +98,105 @@ public:
     }
 
 private:
+    static TArray<AActor*> GetSelectedEditorActors()
+    {
+        TArray<AActor*> Actors;
+        if (!GEditor || !GEditor->GetSelectedActors()) { return Actors; }
+        for (FSelectionIterator It(*GEditor->GetSelectedActors()); It; ++It)
+        {
+            AActor* Actor = Cast<AActor>(*It);
+            // Don't accidentally rotate source axes while orienting platforms.
+            if (IsValid(Actor) && Actor->GetWorld() &&
+                !Actor->GetWorld()->IsGameWorld() &&
+                !Actor->IsA<AOrbitGravitySource>())
+            {
+                Actors.Add(Actor);
+            }
+        }
+        return Actors;
+    }
+
+    static bool CanOrientSelectedActors()
+    {
+        return GetSelectedEditorActors().Num() > 0;
+    }
+
+    static void OrientSelectedActorsToGravity()
+    {
+        const TArray<AActor*> Actors = GetSelectedEditorActors();
+        if (Actors.IsEmpty()) { return; }
+        FScopedTransaction Transaction(NSLOCTEXT("OrbitEditor", "OrientActorsTransaction",
+            "Orient Actors to Orbit Gravity"));
+        int32 Changed = 0;
+        for (AActor* Actor : Actors)
+        {
+            UWorld* World = Actor->GetWorld();
+            if (!World) { continue; }
+            TArray<FOrbitFieldDefinition> Fields;
+            for (TActorIterator<AOrbitGravitySource> It(World); It; ++It)
+            {
+                if (IsValid(*It) && It->bEnabled)
+                {
+                    FOrbitFieldDefinition& Field = Fields.AddDefaulted_GetRef();
+                    It->BuildDefinition(Field);
+                }
+            }
+            // Include fields embedded in ordinary actors as well as dedicated sources.
+            for (TActorIterator<AActor> It(World); It; ++It)
+            {
+                TArray<UOrbitGravitySourceComponent*> Components;
+                It->GetComponents<UOrbitGravitySourceComponent>(Components);
+                for (UOrbitGravitySourceComponent* Source : Components)
+                {
+                    if (IsValid(Source) && Source->bEnabled)
+                    {
+                        FOrbitFieldDefinition& Field = Fields.AddDefaulted_GetRef();
+                        Source->BuildDefinition(Field);
+                    }
+                }
+            }
+            uint8 ReceiverMask = 1u;
+            if (const UOrbitGravityReceiverComponent* Receiver =
+                Actor->FindComponentByClass<UOrbitGravityReceiverComponent>())
+            {
+                ReceiverMask = Receiver->GravityChannels.ToMask();
+            }
+            const FOrbitGravitySample Sample = FOrbitFieldEvaluator::Combine(
+                Fields, Actor->GetActorLocation(), EOrbitGravityChannel::General, ReceiverMask,
+                GetDefault<UOrbitSettings>()->OverrideResolution);
+            if (!Sample.bHasInfluence || !Sample.bHasValidDirection) { continue; }
+            FQuat Rotation;
+            if (!FOrbitGravityFrame::MakeAlignedRotation(Sample.Up, Actor->GetActorQuat(), Rotation))
+            {
+                continue;
+            }
+            if (Actor->GetActorQuat().Equals(Rotation, 0.0001)) { continue; }
+            Actor->Modify();
+            Actor->SetActorRotation(Rotation, ETeleportType::TeleportPhysics);
+            Actor->PostEditMove(true);
+            ++Changed;
+        }
+        if (Changed == 0) { Transaction.Cancel(); }
+    }
+
+    void RegisterMenus()
+    {
+        FToolMenuOwnerScoped OwnerScoped(this);
+        UToolMenu* ActorMenu = UToolMenus::Get()->ExtendMenu(TEXT("LevelEditor.ActorContextMenu"));
+        if (!ActorMenu) { return; }
+        FToolMenuSection& Section = ActorMenu->FindOrAddSection(
+            TEXT("OrbitGravityActions"), NSLOCTEXT("OrbitEditor", "GravityActions", "Orbit"));
+        Section.AddMenuEntry(
+            TEXT("OrbitOrientSelectedActorsToGravity"),
+            NSLOCTEXT("OrbitEditor", "OrientToGravity", "Orient to Gravity"),
+            NSLOCTEXT("OrbitEditor", "OrientToGravityToolTip",
+                "Align selected actors' local +Z to the effective Orbit gravity Up at each actor's pivot. "
+                "Keeps their heading as closely as possible; supports Undo. Requires an active, matching gravity source."),
+            FSlateIcon(TEXT("OrbitEditorStyle"), TEXT("Orbit.Icon16")),
+            FUIAction(FExecuteAction::CreateStatic(&FOrbitEditorModule::OrientSelectedActorsToGravity),
+                FCanExecuteAction::CreateStatic(&FOrbitEditorModule::CanOrientSelectedActors)));
+    }
+
     TSharedPtr<FSlateStyleSet> StyleSet;
 };
 

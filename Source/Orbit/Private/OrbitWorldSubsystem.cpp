@@ -1,6 +1,7 @@
 #include "OrbitWorldSubsystem.h"
 
 #include "OrbitGravitySource.h"
+#include "OrbitGravitySourceComponent.h"
 #include "OrbitGravityReceiverComponent.h"
 #include "GameFramework/Actor.h"
 #include "Engine/EngineTypes.h"
@@ -31,6 +32,7 @@ void UOrbitWorldSubsystem::Deinitialize()
     RestoreBodyGravity();
     ActiveFields.Empty();
     Sources.Empty();
+    SourceComponents.Empty();
     Super::Deinitialize();
 }
 
@@ -67,6 +69,25 @@ void UOrbitWorldSubsystem::UnregisterSource(AOrbitGravitySource* Source)
     }
 }
 
+void UOrbitWorldSubsystem::RegisterSourceComponent(UOrbitGravitySourceComponent* Component)
+{
+    if (IsValid(Component) && Component->GetWorld() == GetWorld())
+    {
+        SourceComponents.AddUnique(TWeakObjectPtr<UOrbitGravitySourceComponent>(Component));
+        bNeedsInitialDiscovery = true;
+        UpdateSourceSnapshot();
+    }
+}
+
+void UOrbitWorldSubsystem::UnregisterSourceComponent(UOrbitGravitySourceComponent* Component)
+{
+    SourceComponents.RemoveAll([Component](const TWeakObjectPtr<UOrbitGravitySourceComponent>& Entry)
+    {
+        return !Entry.IsValid() || Entry.Get() == Component;
+    });
+    UpdateSourceSnapshot();
+}
+
 void UOrbitWorldSubsystem::UpdateSourceSnapshot()
 {
     ActiveFields.Reset();
@@ -77,6 +98,16 @@ void UOrbitWorldSubsystem::UpdateSourceSnapshot()
         {
             Sources.RemoveAtSwap(Index);
         }
+        else if (Source->bEnabled)
+        {
+            FOrbitFieldDefinition& Definition = ActiveFields.AddDefaulted_GetRef();
+            Source->BuildDefinition(Definition);
+        }
+    }
+    for (int32 Index = SourceComponents.Num() - 1; Index >= 0; --Index)
+    {
+        UOrbitGravitySourceComponent* Source = SourceComponents[Index].Get();
+        if (!IsValid(Source) || !Source->IsRegistered()) { SourceComponents.RemoveAtSwap(Index); }
         else if (Source->bEnabled)
         {
             FOrbitFieldDefinition& Definition = ActiveFields.AddDefaulted_GetRef();
@@ -113,7 +144,8 @@ FOrbitGravitySample UOrbitWorldSubsystem::SampleGravity(const FVector& WorldLoca
 FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityWithChannels(
     const FVector& WorldLocation, FOrbitGravityChannels ReceiverChannels, EOrbitGravityChannel Channel) const
 {
-    FOrbitGravitySample Result = FOrbitFieldEvaluator::Combine(ActiveFields, WorldLocation, Channel, ReceiverChannels.ToMask());
+    FOrbitGravitySample Result = FOrbitFieldEvaluator::Combine(ActiveFields, WorldLocation, Channel,
+        ReceiverChannels.ToMask(), GetDefault<UOrbitSettings>()->OverrideResolution);
     if (!Result.bHasInfluence)
     {
         const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
@@ -138,6 +170,45 @@ FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityForActor(
     Channels.bChannel1 = (Mask & 2u) != 0u;
     Channels.bChannel2 = (Mask & 4u) != 0u;
     return SampleGravityWithChannels(WorldLocation, Channels, Channel);
+}
+
+FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityForActorStable(
+    const AActor* Actor, const FVector& WorldLocation, EOrbitGravityChannel Channel,
+    int32 PreferredSourceId, double Hysteresis) const
+{
+    FOrbitGravitySample Result = FOrbitFieldEvaluator::Combine(ActiveFields, WorldLocation, Channel,
+        GetReceiverChannelMask(Actor), GetDefault<UOrbitSettings>()->OverrideResolution,
+        PreferredSourceId, Hysteresis);
+    if (!Result.bHasInfluence && GetDefault<UOrbitSettings>()->bUseWorldGravityOutsideFields && GetWorld())
+    {
+        Result.Acceleration = FVector(0.0, 0.0, GetWorld()->GetGravityZ());
+        Result.Magnitude = Result.Acceleration.Size();
+        Result.bHasValidDirection = Result.Magnitude > UE_DOUBLE_SMALL_NUMBER;
+        Result.Down = Result.bHasValidDirection ? Result.Acceleration / Result.Magnitude : FVector::ZeroVector;
+        Result.Up = Result.bHasValidDirection ? -Result.Down : FVector::UpVector;
+    }
+    return Result;
+}
+
+FOrbitGravitySample UOrbitWorldSubsystem::SampleIndividualSource(const UObject* Source,
+    const FVector& WorldLocation, EOrbitGravityChannel Channel, uint8 ReceiverMask) const
+{
+    FOrbitFieldDefinition Field;
+    if (const AOrbitGravitySource* ActorSource = Cast<AOrbitGravitySource>(Source))
+    {
+        if (ActorSource->GetWorld() != GetWorld() || !ActorSource->bEnabled) { return FOrbitGravitySample(); }
+        ActorSource->BuildDefinition(Field);
+    }
+    else if (const UOrbitGravitySourceComponent* Component = Cast<UOrbitGravitySourceComponent>(Source))
+    {
+        if (Component->GetWorld() != GetWorld() || !Component->bEnabled) { return FOrbitGravitySample(); }
+        Component->BuildDefinition(Field);
+    }
+    else { return FOrbitGravitySample(); }
+    TArray<FOrbitFieldDefinition> Fields;
+    Fields.Add(MoveTemp(Field));
+    return FOrbitFieldEvaluator::Combine(Fields, WorldLocation, Channel, ReceiverMask,
+        GetDefault<UOrbitSettings>()->OverrideResolution);
 }
 
 FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityForComponent(
@@ -255,7 +326,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
 
         const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
             ActiveFields, Component->GetComponentLocation(), Component->GetPhysicsLinearVelocity(),
-            GetReceiverChannelMask(Component->GetOwner()));
+            GetReceiverChannelMask(Component->GetOwner()), GetDefault<UOrbitSettings>()->OverrideResolution);
         if (!Sample.bHasInfluence &&
             (Settings->bUseWorldGravityOutsideFields ||
              !HasCompatiblePhysicsSource(GetReceiverChannelMask(Component->GetOwner()))))

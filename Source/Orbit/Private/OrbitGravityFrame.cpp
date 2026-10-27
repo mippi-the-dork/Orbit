@@ -80,3 +80,24 @@ bool FOrbitGravityFrame::MakeGravityScale(double DesiredAcceleration, double Wor
         0.0, MaxGravityScale));
     return true;
 }
+
+
+bool FOrbitGravityFrame::CalculateGravityRelativeLocomotion(const FVector& Velocity,
+    const FVector& Up, const FVector& ActorForward, double& OutSpeed,
+    double& OutForwardSpeed, double& OutRightSpeed, double& OutDirectionDegrees)
+{
+    OutSpeed = OutForwardSpeed = OutRightSpeed = OutDirectionDegrees = 0.0;
+    if (Velocity.ContainsNaN()) { return false; }
+    FVector Forward, Right;
+    if (!MakeTangentBasis(Up, ActorForward, Forward, Right)) { return false; }
+    const FVector TangentVelocity = FVector::VectorPlaneProject(Velocity, Up.GetSafeNormal());
+    OutSpeed = TangentVelocity.Size();
+    OutForwardSpeed = FVector::DotProduct(TangentVelocity, Forward);
+    OutRightSpeed = FVector::DotProduct(TangentVelocity, Right);
+    if (OutSpeed > UE_DOUBLE_SMALL_NUMBER)
+    {
+        OutDirectionDegrees = FMath::RadiansToDegrees(FMath::Atan2(OutRightSpeed, OutForwardSpeed));
+    }
+    return FMath::IsFinite(OutSpeed) && FMath::IsFinite(OutForwardSpeed) &&
+        FMath::IsFinite(OutRightSpeed) && FMath::IsFinite(OutDirectionDegrees);
+}

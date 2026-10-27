@@ -1,16 +1,30 @@
 # Orbit: Gravity Source Actor Guide
 
-**Version:** Orbit v0.1.9, Iteration 010  
+**Version:** Orbit v0.2.6, Iteration 016  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Level designers, technical artists, Blueprint users and programmers  
 **Primary class:** `AOrbitGravitySource`  
-**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.1.9.
+**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.5.
 
-This is the guide to the **placeable Orbit Gravity Source Actor** and its properties. For the two addable Orbit components and all 13 custom Blueprint functions, see [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md).
+This is the guide to the **placeable Orbit Gravity Source Actor** and its properties. For the five base Orbit components, the Orbit Mover component and the corresponding Blueprint APIs, see [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md).
 
-This documents what v0.1.9 actually implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and camera integration are future work, not part of this Actor.
+This documents what Orbit v0.2.5 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
 
 ---
+
+## Iteration 016: field competition and embedded sources
+
+The **Orbit Gravity Source Actor** remains the best authoring option for visual bounds, gravity arrows and streamlines. You may instead add a new **Orbit Gravity Source Component** to an existing Actor when the field must follow a mesh, platform or moving Blueprint. Embedded sources register with the same runtime World Subsystem, participate in the same channels and combining rules, and support every gravity shape and vortex. They do not yet provide all of the dedicated actor's editor preview/billboard features.
+
+Configure **Project Settings > Plugins > Orbit > Field > Competition > Override Resolution**:
+
+- **Strongest Influence** (default): at the highest explicit Priority, choose the strongest distance-weighted candidate. With identical strengths and distances, the numerical tie is unspecified; Character source hysteresis reduces back-and-forth switching around the boundary.
+- **Blended Influence**: weighted average of current gravitational acceleration vectors at the highest Priority. Equal/opposite Point sources can create a zero-g saddle/null. A zero-g point does not prescribe an instantaneous Up vector.
+- **Priority Override (Legacy)**: v0.2.4 selection, including nearest-center Point ties. Use to preserve authored projects.
+
+**Important:** This weighting is used for **choosing/combining** overlapping sources; each individual source's actual Strength and Falloff remain unchanged. The physics subsystem and World Subsystem use the project mode. Native Character Gravity additionally offers hysteresis and directional smoothing. Standard Mover uses the updated sample, but rollback-safe source history is still unsupported.
+
+For live platform alignment, add **Orbit Gravity Orientation Component** to the platform, select signed Local Axis and optional Specific Source Actor/Component. This rotates the Actor each frame and works independently of the one-shot editor right-click **Orbit > Orient to Gravity**. For one-off runtime Blueprint use, call **Orient Actor to Orbit Gravity** or **Make Orbit Axis Aligned Rotation**. A component's individual transform, not its actor origin, defines its gravity field.
 
 ## 1. What a Gravity Source does
 
@@ -244,15 +258,14 @@ Properties under **Orbit > Combining**:
 | **Combine** | `Override` | Overrides eligible lower-priority contributions when this field influences a position. |
 | **Priority** | `0` | Higher numbers win between overlapping Override sources. |
 
-The evaluator uses these rules:
+The evaluator now uses these rules:
 
-1. Find applicable **Override** fields, choosing the highest-priority one.
-2. Sum applicable **Additive** fields whose priority is **strictly higher** than that winning Override's priority.
-3. If no Override applies, combine applicable Additive fields.
+1. Evaluate eligible overlapping Override sources and select the **highest Priority group**.
+2. Resolve *equal-priority* Override sources using the Project Settings Override Resolution mode: Strongest Influence (effective strength and distance), Blended Influence (weighted average), or Priority Override (legacy Point proximity/registration behavior).
+3. Add eligible Additive contributions whose priority is strictly higher than the winning Override priority. If no overriding field applies, sum Additive sources.
+4. Preserve `Has Influence` for Additive-only sources, even if opposing forces cancel. Zero acceleration can coexist with a true influence flag.
 
-Avoid depending on the ordering of **equal-priority overlapping Override** sources. Give intentionally dominant sources distinct priorities.
-
-**Known v0.1.9 issue:** In the current combined-field evaluator, contributions from Additive-only sources can be calculated without setting `Has Influence` to true. At the World Subsystem level, the normal world-gravity fallback can therefore replace that result. Treat Additive-only setups as not yet reliably validated, especially when world-gravity fallback is enabled. This is a known follow-up fix, not expected intended behavior.
+The previously documented Additive-only `Has Influence` bug has been corrected in the evaluator, although this still needs PIE regression testing.
 
 ### 6.4 Source registration and runtime changes
 
@@ -396,7 +409,7 @@ Event / gameplay action
   -> Set Max Distance
 ```
 
-Supported property edits are reflected in subsequent World Subsystem snapshots. No special `Refresh Gravity Source` node exists in v0.1.9. These changes are **not network-replicated** automatically.
+Supported property edits are reflected in subsequent World Subsystem snapshots. Starting in v0.2.1, call `Set Gravity Strength` on a source or `Refresh Active Sources` on the World Subsystem to publish live runtime changes immediately in the same game world. These changes are **not network-replicated** automatically.
 
 ### Orbit-authored node on the Actor: Sample Source
 
@@ -427,7 +440,7 @@ Other relevant nodes, including `Sample Orbit Gravity for Actor`, `Sample Gravit
 | Physics objects spiral inward then fly outward | Compare Spiral Capture against legacy Continuous Force; inspect response rate and acceleration cap, collisions and high incoming velocity. |
 | Character capsule aligns but camera does not | Character actor alignment intentionally does not rotate Player Controller, Camera Manager or input mapping. |
 | A custom-channel source is invisible to `Sample Source` | Use World Subsystem `Sample Gravity With Channels`. The Actor convenience node currently queries Channel 0. |
-| All fields are Additive and gravity sampling behaves strangely | See the known v0.1.9 Additive-only influence-reporting issue described in Section 6.3. |
+| All fields are Additive and gravity sampling behaves strangely | See the known Additive-only influence-reporting issue described in Section 6.3. |
 | Physics and Blueprint previews disagree for an inward vortex | Spiral Capture is velocity-aware for rigid bodies. Preview arrows and streamlines show the spatial acceleration field. |
 | Streamline preview becomes expensive | Reduce Steps, Max Lines or Max Segments; consider disabling preview when finished debugging. |
 
@@ -435,7 +448,7 @@ Other relevant nodes, including `Sample Orbit Gravity for Actor`, `Sample Gravit
 
 - Gravity Source visualizations are editor-focused, not a runtime gameplay VFX system.
 - Automatic simulated-body gravity uses game-thread `AddForce(..., bAccelChange = true)`, not an integrated Chaos solver/substep callback.
-- There is no gravity-aware NavMesh, EQS, AI path following or advanced vehicle/cloth/water support in v0.1.9.
+- There is no gravity-aware NavMesh, EQS, AI path following or advanced vehicle/cloth/water support in v0.2.5.
 - A source has no automatic replication. Network consistency and predicted character gravity remain future work.
 - A Gravity Source Actor is **not a Content Browser gravity asset type** in this version.
 - The plugin does not automatically generate planet, torus, hallway or ringworld geometry.
@@ -496,4 +509,55 @@ This guide must be updated whenever `AOrbitGravitySource`, gravity enums, field 
 
 For every future Orbit release, compare both files with the actual plugin headers and implementation, then update their version labels and feature/limitation descriptions. Do not document planned features as implemented.
 
-*Prepared against Orbit v0.1.9 source. Documentation review is not a substitute for an Unreal 5.8.3 compile and runtime test.*
+*Updated against Orbit v0.2.5 source. Documentation review is not a substitute for an Unreal 5.8.3 compile and runtime test.*
+
+
+## Orbit Mover integration (optional internal module)
+
+Gravity Sources also drive the built-in `OrbitMover` module adapter when `Affect Characters` is enabled and Gravity Channels match. The adapter uses the existing source Strength/Direction/Max Distance, not new Mover-specific source settings. For the supported kinematic Mover backend, setup, debug properties and current limitations, see [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md). Chaos Mover is not yet supported.
+
+---
+
+## v0.2.1: Guaranteed runtime Strength changes
+
+`Strength` remains an editable Blueprint property. Orbit normally rebuilds its field snapshots every world tick, so property assignments are picked up during gameplay. Iteration 012 adds:
+
+- **Set Gravity Strength** (Target: this Gravity Source, New Strength in `cm/s²`). The function validates input, sets this source instance's Strength, and synchronously updates the source snapshot in its *own gameplay world*. Use it for a definitive live PIE test.
+- **Refresh Active Sources** (Target: Orbit World Subsystem). If multiple source properties were assigned directly, call this once to publish them immediately in the current gameplay tick.
+- In-editor Details changes on a **PIE-world** source refresh its runtime field immediately. Since v0.2.2, editor-world Details changes to this source can also mirror the edited source property to a matching PIE-world clone when **Mirror Editor Changes to PIE** is enabled (default). The source displays **Last Editor PIE Mirror Count** to confirm how many PIE copies were matched. This is an Editor-only convenience for level actors, not a packaged-game replication mechanism.
+
+The source does not own the new landing or camera behavior. Those are optional consumer-side components on Characters. See [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md) and [`ITERATION_012.md`](ITERATION_012.md).
+
+
+## v0.2.2: Live source property editing in PIE
+
+The Gravity Source now has an `Orbit | Debug | Runtime` group:
+
+| Property | Default | Behavior |
+| --- | --- | --- |
+| Mirror Editor Changes to PIE | true | While a PIE world exists, editing an editable Orbit source property on the **editor-world** actor copies only that property to a matching PIE clone and refreshes its field snapshot. The match uses source actor GUID or exact actor name and matching level package. |
+| Last Editor PIE Mirror Count | 0 (runtime debug) | Number of PIE instances updated by the last editor-world property edit. Usually 1. A 0 means no matching PIE actor was updated. |
+
+This is independent of the `Set Gravity Strength` Blueprint node, which always edits the specific runtime source instance supplied as its Target. Both approaches remain supported.
+
+**Testing:** Start PIE with Point/Inward gravity, press F8, and select the original editor-world gravity source. Edit Strength `980 → 490` in Details. Confirm `Last Editor PIE Mirror Count` becomes 1 and `Last Applied Gravity Scale` on the PIE Character approaches `0.5` with a world gravity magnitude of 980. If the count remains 0, select the PIE-world actor directly and repeat, then inspect actor identity/level matching. Remember that editing the editor-world value may leave an unsimulated level property change; use Undo or reset the value if you don't intend to save it.
+
+The `Mirror Editor Changes to PIE` option does not alter PIE character input/facing, network replication, Chaos solver forces, or Mover backend support. Orbit v0.2.2 also introduces separate gravity frame and transform Blueprint nodes; these are documented in [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md).
+
+
+## Iteration 015 note: Gravity Source is unchanged
+
+The reported initial low-gravity spawn landing and mannequin gait changes belong to the **native Character Movement / Animation Blueprint integration**, not to the Gravity Source field mathematics. Gravity Source properties, shape evaluation, falloff, channels, vortex parameters and preview generation are unchanged in 0.2.3. To diagnose these character behaviors, see [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md) and [`ITERATION_014.md`](ITERATION_014.md). The Source Strength is still exposed for live editing and runtime Blueprint calls as documented above.
+
+---
+
+## Iteration 015: nearby planets and Orient to Gravity
+
+**Two planet transfers:** Equally prioritized overlapping Point/Inward Override sources now hand control to the *closer* Point source at any sampled position. Max Distance still clips the usable regions, and the player still needs enough jump momentum. There is no smooth handoff, orbit transfer assist or automatic Mario Galaxy-style jump. Try overlapping source bounds, a lower falloff near the edges (Linear), and a temporarily stronger native jump to distinguish gravity ownership from insufficient momentum. Full test setup: [`ITERATION_015.md`](ITERATION_015.md).
+
+**Orient to Gravity:** Select one or more ordinary Actors in the Level Editor, then right-click and choose **Orbit > Orient to Gravity**. This is a one-shot Editor authoring operation that rotates local +Z to the resultant gravity Up at each actor pivot, preserves the closest possible forward heading and supports Undo. It respects Orbit Gravity Receiver masks and current source rules, skips invalid directions and **does not rotate Gravity Source actors**. It does not add collision, automatic alignment during play, or attachment to a planet.
+
+
+## Iteration 017 integration packaging update
+
+Orbit Mover gravity is now implemented inside the single Orbit plugin as an internal, runtime-optional `OrbitMover` module. No second plugin must be installed. The source actor's field parameters and gravity/receiver-channel evaluation are unchanged by this packaging work. See [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md) for the changed Mover update timing and supported scenarios.

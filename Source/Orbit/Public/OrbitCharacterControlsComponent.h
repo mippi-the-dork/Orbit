@@ -48,6 +48,18 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing")
     bool bFaceMovementDirection = true;
 
+    /** Face the actual gravity-tangent velocity instead of raw input when moving.
+     *  This reduces visual strafing caused by camera-relative input and acceleration lag.
+     *  This does not rewrite a template Animation Blueprint's world-XY locomotion math. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
+        meta=(EditCondition="bFaceMovementDirection"))
+    bool bFaceVelocityWhenMoving = true;
+
+    /** Speed in cm/s above which actual tangent velocity controls facing. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
+        meta=(EditCondition="bFaceMovementDirection && bFaceVelocityWhenMoving", ClampMin="0.0", Units="cm/s"))
+    float VelocityFacingThreshold = 30.0f;
+
     /** Response rate for changing facing direction, in inverse seconds. Zero snaps. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
         meta=(EditCondition="bFaceMovementDirection", ClampMin="0.0", UIMin="0.0", UIMax="25.0"))

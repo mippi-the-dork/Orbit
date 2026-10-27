@@ -1,3 +1,44 @@
+## 0.2.6 - Iteration 017 - Single Plugin Consolidation
+
+- Consolidated the separate `OrbitMover` plugin source into the main `Orbit` plugin as its third internal module. The release now has only `Orbit/Orbit.uplugin` and installs as one folder.
+- Removed OrbitMover's compile-time dependency on Epic Mover, using validated Blueprint-reflected `SetGravityOverride`, `SetUpDirectionOverride`, `GetUpDirection`, and `IsBackendAsync` calls at runtime instead.
+- Mover gravity is now updated in a pre-physics game-thread tick with a best-effort Mover tick prerequisite; this differs from the prior typed pre-simulation delegate. Documented the resulting timing limitations for network/prediction/independent simulation. Chaos and async remain unsupported.
+- Kept the Orbit Mover Gravity component, its two authored Blueprint nodes and existing three pure Mover policy tests; added a missing-Mover regression test.
+- Updated the maintained Gravity Source, Components/Blueprint, and Mover-specific docs, plus architecture, compatibility, file tree and integration test plan. No engine source modifications.
+
+## 0.2.5 - Iteration 016 - Influence-based gravity arbitration and reusable gravity components
+
+- Implemented Strongest Influence (new project default), Blended Influence and Priority Override (legacy) for equal-priority overriding sources, preserving explicit Priority and channel filters.
+- Added Character Gravity's optional source hysteresis (configurable threshold) and optional smoothed native gravity direction; magnitude stays current.
+- Added the Orbit Gravity Source Scene Component for source fields embedded directly on arbitrary Actors, including spline/vortex settings and runtime subsystem registration.
+- Added Orbit Gravity Orientation component with six signed local axes, optional specific source Actor/Component, smoothing, and Orient Now.
+- Added Get Orbit Gravity Up for Actor, Make Orbit Axis Aligned Rotation, Orient Actor to Orbit Gravity Blueprint nodes; existing editor right-click orient action now considers embedded sources.
+- Added four automation tests; synchronized the three maintained Markdown guides and created Docs/ITERATION_016.md. Optional OrbitMover's source code unchanged.
+
+**Verification:** Static inspection/archive only; UE 5.8.3 compile and runtime tests pending.
+
+## 0.2.4 - Iteration 015 - Planet-to-planet source arbitration and gravity orientation authoring
+
+- Equal-priority Point/Override gravity fields now select whichever point center is nearer to the queried position. Previously the first registered source controlled the entire overlapping region, regardless of distance. Higher explicit Priority always wins; non-Point equal-priority behavior is unchanged.
+- Added **Orbit > Orient to Gravity** on the Level Editor actor right-click context menu, with multi-selection, Undo, per-actor gravity/Receiver channels, preservation of location/scale and projected forward heading. Excludes Gravity Source actors to avoid accidentally changing their field axes.
+- Added `Orbit.Field.EqualPriorityPlanetTransfer` numerical regression test.
+- Bumped the optional OrbitMover plugin metadata to the matching package version, with no OrbitMover source changes. Added a detailed two-planet jump and editor-platform authoring guide in `Docs/ITERATION_015.md` and updated all three maintained feature references.
+- Does **not** add automatic planet jumps, momentum-aware handoff, source hysteresis, field blending or camera transition smoothing. These remain later reliability tasks.
+
+**Verification:** Archive and static checks only. UE 5.8.3 compilation, Outliner/viewport menu placement, Undo behavior and PIE transfer not yet tested.
+
+## 0.2.3 - Iteration 014 - Native initial landing and gravity-relative animation diagnostics
+
+- Responded to the reported difference between initial low-gravity spawning and successful jump re-landing. Switched near-floor observation to `ACharacter::OnCharacterMovementUpdated`, after the Character Movement scope, while continuing to inject gravity direction and magnitude before movement. Grounded characters keep native landing behavior.
+- Raised the default landing-assist approach limit from 100 to 600 cm/s to cover typical first drops. Still requires an actual, sweep-validated, walkable native `K2_FindFloor` result within the configured distance; no fabricated collision, teleport, or arbitrary Walking mode switch. Native Walking still performs its own floor/base validation. Existing saved user overrides remain their values.
+- Added persistent `Last Landing Assist Result`, descent/lateral speed, `Has Been Grounded` and `Pre First Landing Checks` diagnostics to identify why a spawn drop differs from jumping. New floor results are evaluated after native movement.
+- Added **Get Gravity Relative Locomotion** Blueprint node and `FOrbitGravityRelativeLocomotion` structure: tangent-plane Ground Speed, Forward/Right Speed, signed Direction Degrees, tangent velocity and local Up. Unlike generic world-XY animation math, it works at planet equators and poles; **users still need to rewire their own Animation Blueprint**.
+- Added optional `Face Velocity When Moving` (default true, threshold 30 cm/s) to native Orbit Character Controls so actor facing can match physical gravity-tangent velocity rather than camera-relative input alone. Manual animation logic and root motion remain independent.
+- Added two new pure math regression tests for cardinal gravity-frame locomotion and source-strength initial drop eligibility, for **25 authored base Orbit tests** plus three unchanged companion OrbitMover tests. Updated the maintained component/Blueprint guide, Gravity Source guide and Orbit-specific Mover guide; added `Docs/ITERATION_014.md` and current test instructions.
+- No changes to the gravity source field evaluator, physical rigid-body gravity, Mover integration behavior, network rollback, or Unreal Engine source.
+
+**Verification:** Archive integrity and static source inspections only. This release is not UE 5.8.3 build-tested or PIE-validated. Animation Blueprint assets, including the project's `ABP_Manny`/`ABP_Quinn`, are not part of this source ZIP.
+
 ## 0.2.2 - Iteration 013 - Character landing, facing, live Details and transforms
 
 - Reworked the near-floor assist to use UE 5.8.3 native `K2_FindFloor` walkable sweep results instead of incorrectly feeding shortened floor-sweep hits into the actual-landing `IsValidLandingSpot` validation. Added native floor gap and walkability diagnostics. Manual sphere/low-g validation required; do not treat it as a verified fix yet.
