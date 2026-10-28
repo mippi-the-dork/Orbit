@@ -12,6 +12,11 @@ public:
     static bool MakeTangentBasis(const FVector& Up, const FVector& ReferenceForward,
         FVector& OutForward, FVector& OutRight);
 
+    /** Builds a full gravity-relative facing pose: actor +X follows tangent heading,
+     * actor +Z follows gravitational Up. Never extracts Euler yaw. */
+    static bool MakeGravityFacingRotation(const FVector& Up, const FVector& DesiredHeading,
+        FQuat& OutRotation);
+
     /** Aligns local +Z to Up while preserving as much of CurrentRotation's forward heading as possible. */
     static bool MakeAlignedRotation(const FVector& Up, const FQuat& CurrentRotation, FQuat& OutRotation);
 

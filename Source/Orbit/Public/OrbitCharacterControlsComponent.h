@@ -87,7 +87,7 @@ public:
     void ApplyGravityRelativeLook(FVector2D LookAxis);
 
     /** Draw gravity Up (white), requested input (blue), actual velocity (green),
-     * and actor forward (yellow) for debugging locomotion around planets. PIE only. */
+     * desired facing (cyan) and actor forward (yellow). PIE only. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Debug")
     bool bDrawLocomotionDebug = false;
 
@@ -95,15 +95,60 @@ public:
         meta=(EditCondition="bDrawLocomotionDebug", ClampMin="10.0", Units="cm"))
     float DebugVectorLength = 120.0f;
 
+    /** Counts final-facing evaluation on the post-movement Controls tick. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 FacingPostMovementTickCount = 0;
+
+    /** UpdateCharacterFacing entered and chose a nonzero velocity/input heading. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 FacingUpdateAttemptCount = 0;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 FacingHeadingChosenCount = 0;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 FacingRotationAppliedCount = 0;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 FacingRotationRejectedCount = 0;
+
+    /** Angular distance before applying the current desired facing rotation. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastFacingTargetErrorDegrees = 0.0f;
+
+    /** Actual rotation accomplished by SetActorRotation in the last update. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastFacingAppliedDeltaDegrees = 0.0f;
+
+    /** Remaining angular difference to target after SetActorRotation returns. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastFacingRemainingErrorDegrees = 0.0f;
+
+    /** Actor rotation drift between the prior Orbit rotation and the current tick. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    float LastFacingRotationDriftDegrees = 0.0f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    FString LastFacingApplicationStatus = TEXT("Not yet attempted");
+
+    /** Cyan debug arrow; latest gravity-tangent orientation target. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    FVector LastDesiredFacingDirection = FVector::ZeroVector;
+
     /** In-PIE diagnostics. If this stays at zero, the component is not ticking. */
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
     int32 DebugTickCount = 0;
+
+    /** Number of BeginPlay activations that repaired an inactive Blueprint component instance. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
+    int32 FacingBeginPlayActivationCount = 0;
 
     /** Increments when UE Character Movement broadcasts its completed-movement callback. */
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
     int32 NativeMovementCallbackCount = 0;
 
-    /** Increments when the controls tick handles facing because no native callback arrived. */
+    /** Counts ticks where the native movement callback was absent. Facing now always
+     * updates on post-movement tick, whether or not a callback occurred. */
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
     int32 TickFacingFallbackCount = 0;
 
@@ -151,12 +196,14 @@ protected:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
-    /** Native Character Movement post-movement delegate; orientation updates here
-     * so locomotion AnimBP updates see the same-frame gravity-relative facing. */
+    /** Native movement delegate is now diagnostic only. Final actor rotation is
+     * applied by the component's PostUpdateWork tick after native movement. */
     UFUNCTION()
     void OnNativeMovementFinished(float DeltaSeconds, FVector OldLocation, FVector OldVelocity);
 
     bool bReceivedMovementCallbackSinceLastTick = false;
+    bool bHasPreviousFacingResult = false;
+    FQuat LastAppliedActorRotation = FQuat::Identity;
     bool bInitializedCameraFrame = false;
     bool bOwnsSpringArmRotation = false;
     bool bSavedBoomUsePawnControlRotation = false;

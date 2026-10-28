@@ -1,8 +1,10 @@
 #include "OrbitGravityTypes.h"
+#include "OrbitCharacterControlsComponent.h"
 #include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "UObject/UnrealType.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPointGravityTest, "Orbit.Field.PointInwardOutward", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FOrbitPointGravityTest::RunTest(const FString& Parameters)
@@ -244,6 +246,114 @@ bool FOrbitMaxDistanceShapesTest::RunTest(const FString& Parameters)
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVolumeShapeDistanceTest,
+    "Orbit.Field.VolumeMaxDistanceRespectsShape",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitVolumeShapeDistanceTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Volume;
+    Field.MaxDistance = 500.0;
+    Field.Strength = 980.0;
+    FVector Acceleration;
+
+    // A 500-unit cuboid reaches outside a 500-unit sphere in its corners.
+    Field.VolumeShape = EOrbitVolumeShape::Box;
+    Field.BoxExtents = FVector(800.0, 1200.0, 900.0);
+    const FOrbitEffectiveVolumeBounds Box = FOrbitFieldEvaluator::GetEffectiveVolumeBounds(Field);
+    TestTrue(TEXT("Box half-extents cap on all axes"), Box.BoxHalfExtents.Equals(FVector(500.0)));
+    TestTrue(TEXT("Box accepts corner beyond the old spherical cutoff"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(475.0, 475.0, 475.0), Acceleration));
+    TestFalse(TEXT("Box rejects outside the capped local X dimension"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(501.0, 0.0, 0.0), Acceleration));
+    Field.Rotation = FQuat(FVector::UpVector, PI / 4.0);
+    Field.Center = FVector(2000.0, 1000.0, 500.0);
+    TestTrue(TEXT("Box caps operate in rotated source-local space"),
+        FOrbitFieldEvaluator::Evaluate(Field,
+            Field.Center + Field.Rotation.RotateVector(FVector(475.0, 475.0, 475.0)), Acceleration));
+    TestFalse(TEXT("Rotated Box rejects outside capped local Y"),
+        FOrbitFieldEvaluator::Evaluate(Field,
+            Field.Center + Field.Rotation.RotateVector(FVector(0.0, 510.0, 0.0)), Acceleration));
+    Field.Rotation = FQuat::Identity;
+    Field.Center = FVector::ZeroVector;
+
+    Field.Falloff = EOrbitGravityFalloff::Linear;
+    TestTrue(TEXT("Box linear fade also samples beyond old sphere"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(250.0, 250.0, 250.0), Acceleration));
+    TestTrue(TEXT("Box linear fade uses box-relative fraction, not Euclidean radius"),
+        FMath::IsNearlyEqual(Acceleration.Size(), 490.0, 0.01));
+    Field.Falloff = EOrbitGravityFalloff::Constant;
+
+    Field.VolumeShape = EOrbitVolumeShape::Sphere;
+    Field.VolumeRadius = 900.0;
+    TestTrue(TEXT("Sphere includes inside 500 radius"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(300.0, 300.0, 0.0), Acceleration));
+    TestFalse(TEXT("Sphere excludes outside 500 radius"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(400.0, 400.0, 0.0), Acceleration));
+
+    Field.VolumeShape = EOrbitVolumeShape::Cylinder;
+    Field.VolumeRadius = 1000.0;
+    Field.VolumeHalfHeight = 1200.0;
+    TestTrue(TEXT("Cylinder accepts a corner of its capped radial and axial dimensions"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(400.0, 0.0, 400.0), Acceleration));
+    TestFalse(TEXT("Cylinder rejects beyond capped Z"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(0.0, 0.0, 501.0), Acceleration));
+    TestFalse(TEXT("Cylinder rejects beyond capped radial distance"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(400.0, 350.0, 0.0), Acceleration));
+
+    Field.VolumeShape = EOrbitVolumeShape::Capsule;
+    Field.VolumeRadius = 150.0;
+    Field.VolumeHalfHeight = 600.0;
+    Field.MaxDistance = 200.0;
+    const FOrbitEffectiveVolumeBounds Capsule = FOrbitFieldEvaluator::GetEffectiveVolumeBounds(Field);
+    TestTrue(TEXT("Capsule radius is unchanged when already smaller"),
+        FMath::IsNearlyEqual(Capsule.Radius, 150.0));
+    TestTrue(TEXT("Capsule cap height is limited to 200"),
+        FMath::IsNearlyEqual(Capsule.HalfHeight, 200.0));
+    TestTrue(TEXT("Capsule permits Z end despite being outside its radius"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(0.0, 0.0, 195.0), Acceleration));
+    TestFalse(TEXT("Capsule rejects beyond Z end"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(0.0, 0.0, 205.0), Acceleration));
+    TestTrue(TEXT("Capsule accepts rounded shoulder inside the cap"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(140.0, 0.0, 100.0), Acceleration));
+    TestFalse(TEXT("Capsule rejects outside rounded shoulder"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(145.0, 0.0, 100.0), Acceleration));
+    Field.Falloff = EOrbitGravityFalloff::Linear;
+    TestTrue(TEXT("Capsule linear fade uses its local tip-to-center distance"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(0.0, 0.0, 100.0), Acceleration));
+    TestTrue(TEXT("Capsule linear fade is halfway up its central axis"),
+        FMath::IsNearlyEqual(Acceleration.Size(), 490.0, 0.01));
+
+    Field.MaxDistance = 0.0;
+    Field.Falloff = EOrbitGravityFalloff::Constant;
+    TestTrue(TEXT("Unlimited MaxDistance leaves authored capsule height intact"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(0.0, 0.0, 590.0), Acceleration));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitControlsDefaultActivationTest,
+    "Orbit.Character.ControlsAutoActivationDefault",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitControlsDefaultActivationTest::RunTest(const FString& Parameters)
+{
+    const UOrbitCharacterControlsComponent* Template =
+        GetDefault<UOrbitCharacterControlsComponent>();
+    TestNotNull(TEXT("Controls component CDO"), Template);
+    if (!Template) { return false; }
+    // UActorComponent exposes the reflected bAutoActivate property, not a
+    // GetAutoActivate() accessor. Read the bool property on the component CDO.
+    const FBoolProperty* AutoActivateProperty = FindFProperty<FBoolProperty>(
+        UActorComponent::StaticClass(), TEXT("bAutoActivate"));
+    TestNotNull(TEXT("Actor Component has an Auto Activate property"), AutoActivateProperty);
+    if (AutoActivateProperty)
+    {
+        TestTrue(TEXT("New Orbit Controls components Auto Activate"),
+            AutoActivateProperty->GetPropertyValue_InContainer(Template));
+    }
+    TestTrue(TEXT("Movement-facing remains enabled by default"), Template->bFaceMovementDirection);
+    return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAxisVortexTest, "Orbit.Field.AxisVortex", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FOrbitAxisVortexTest::RunTest(const FString& Parameters)
@@ -974,4 +1084,97 @@ bool FOrbitFacingFallbackToInputTest::RunTest(const FString& Parameters)
             FVector::ZeroVector, false, true, 30.0, Heading));
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitFacingEveryGravityAxisTest,
+    "Orbit.Character.Facing.DesiredYawEveryGravityAxis",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitFacingEveryGravityAxisTest::RunTest(const FString& Parameters)
+{
+    const FVector Ups[] = {
+        FVector::UpVector, FVector::DownVector, FVector::ForwardVector,
+        -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector
+    };
+    for (const FVector& Up : Ups)
+    {
+        const FVector Preferred = FMath::Abs(FVector::DotProduct(Up, FVector::ForwardVector)) < 0.5
+            ? FVector::ForwardVector : FVector::RightVector;
+        FVector Forward, Right;
+        TestTrue(TEXT("Valid tangent basis"), FOrbitGravityFrame::MakeTangentBasis(
+            Up, Preferred, Forward, Right));
+        FQuat ForwardQuat, RightQuat, BackQuat;
+        TestTrue(TEXT("Forward facing rotation"),
+            FOrbitGravityFrame::MakeGravityFacingRotation(Up, Forward, ForwardQuat));
+        TestTrue(TEXT("Rightward facing rotation"),
+            FOrbitGravityFrame::MakeGravityFacingRotation(Up, Right, RightQuat));
+        TestTrue(TEXT("Backward facing rotation"),
+            FOrbitGravityFrame::MakeGravityFacingRotation(Up, -Forward, BackQuat));
+        TestTrue(TEXT("Forward actor +X points along heading"),
+            ForwardQuat.GetForwardVector().Equals(Forward, 0.001));
+        TestTrue(TEXT("Right actor +X points along heading"),
+            RightQuat.GetForwardVector().Equals(Right, 0.001));
+        TestTrue(TEXT("Backward actor +X points along heading"),
+            BackQuat.GetForwardVector().Equals(-Forward, 0.001));
+        TestTrue(TEXT("All signed local Up orientations are preserved"),
+            BackQuat.GetUpVector().Equals(Up, 0.001));
+        TestTrue(TEXT("90 degree local yaw produces nonzero target angular error"),
+            FMath::RadiansToDegrees(ForwardQuat.AngularDistance(RightQuat)) > 89.0);
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitFacingSmoothingDoesNotFreezeTest,
+    "Orbit.Character.Facing.SmoothingAdvancesTowardDesiredYaw",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitFacingSmoothingDoesNotFreezeTest::RunTest(const FString& Parameters)
+{
+    for (const FVector Up : {FVector::UpVector, FVector::ForwardVector, FVector::RightVector})
+    {
+        FVector Forward, Right;
+        TestTrue(TEXT("Valid orientation frame"),
+            FOrbitGravityFrame::MakeTangentBasis(Up, FVector::UpVector, Forward, Right));
+        FQuat Current, Target;
+        TestTrue(TEXT("Initial rotation"),
+            FOrbitGravityFrame::MakeGravityFacingRotation(Up, Forward, Current));
+        TestTrue(TEXT("Turn target"),
+            FOrbitGravityFrame::MakeGravityFacingRotation(Up, Right, Target));
+        const double OriginalError = Current.AngularDistance(Target);
+        const float DeltaTime = 1.0f / 60.0f;
+        const float Alpha = 1.0f - FMath::Exp(-12.0f * DeltaTime);
+        for (int32 Frame = 0; Frame < 12; ++Frame)
+        {
+            Current = FQuat::Slerp(Current, Target, Alpha).GetNormalized();
+        }
+        TestTrue(TEXT("Facing makes progress over 12 PostUpdateWork frames"),
+            Current.AngularDistance(Target) < OriginalError * 0.15);
+        TestTrue(TEXT("Smoothing preserves gravity Up"),
+            Current.GetUpVector().Equals(Up, 0.001));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitFacingVelocitySelectsChangingYawTest,
+    "Orbit.Character.Facing.TangentVelocitySteersYaw",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitFacingVelocitySelectsChangingYawTest::RunTest(const FString& Parameters)
+{
+    const FVector Up = FVector::ForwardVector;
+    FVector Heading;
+    TestTrue(TEXT("First movement heading from velocity"),
+        FOrbitGravityFrame::ChooseGravityRelativeFacing(Up, FVector(0, 220, 0),
+            FVector::ZeroVector, false, true, 30.0, Heading));
+    FQuat First, Next;
+    TestTrue(TEXT("First facing rotation"),
+        FOrbitGravityFrame::MakeGravityFacingRotation(Up, Heading, First));
+    TestTrue(TEXT("Changed movement heading from velocity"),
+        FOrbitGravityFrame::ChooseGravityRelativeFacing(Up, FVector(0, 0, 220),
+            FVector::ZeroVector, false, true, 30.0, Heading));
+    TestTrue(TEXT("Next facing rotation"),
+        FOrbitGravityFrame::MakeGravityFacingRotation(Up, Heading, Next));
+    TestTrue(TEXT("Different tangent velocity yields a different actor yaw"),
+        FMath::RadiansToDegrees(First.AngularDistance(Next)) > 89.0);
+    TestTrue(TEXT("Both headings retain planet outward Up"),
+        First.GetUpVector().Equals(Up, 0.001) && Next.GetUpVector().Equals(Up, 0.001));
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

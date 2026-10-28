@@ -31,7 +31,7 @@ The component has **Orient Now**, a Blueprint-callable function that applies a o
 
 ### Orbit Gravity Source Component (`UOrbitGravitySourceComponent`)
 
-Add **Orbit Gravity Source** to any Actor, attach it to an appropriate Scene Component, and choose Shape, Direction, Strength and Max Distance. Its field center, axis, and rotation use the **source component's world transform**, not the owner's pivot. A moving parent moves the field on the next runtime subsystem tick.
+Add **Orbit Gravity Source** to any Actor, attach it to an appropriate Scene Component, and choose Shape, Direction, Strength and Max Distance. For Shape = Volume, finite Max Distance caps the selected Box/Sphere/Cylinder/Capsule dimensions in source-local space (not an additional spherical mask); this applies identically to source Actors and embedded source components. Its field center, axis, and rotation use the **source component's world transform**, not the owner's pivot. A moving parent moves the field on the next runtime subsystem tick.
 
 It shares the dedicated Gravity Source Actor's major field properties: all five shapes, inward/outward and vortex directions, strength, constant/linear/inverse-square falloff, Max Distance, Priority, Override/Additive, channels, Physics/Character flags, volume/bounding masks, and all Spiral Capture controls. A component configured for Spline uses its `Gravity Spline` component reference or the first `USplineComponent` on the owner; oriented spline Up uses the referenced spline roll.
 
@@ -70,7 +70,7 @@ See [ITERATION_016.md](ITERATION_016.md) for a two-planet test that compares the
 
 ## Iteration 018: character facing, animation diagnostics, native rotation ownership
 
-When **Orbit Character Controls** has **Face Movement Direction** enabled on a locally controlled Character, it owns the character's **final** orientation. The Gravity component still updates native Character Movement gravity before movement but skips its independent actor rotation. Controls then calculates one gravity-aligned pose on Character Movement's post-movement delegate, combining native Up and a tangent Forward with parallel-transported heading even when the input is idle. This prevents the earlier two-rotation conflict. Characters without Controls owning facing keep the original Gravity actor alignment behavior.
+When **Orbit Character Controls** has **Face Movement Direction** enabled on a locally controlled or authoritative Character, it owns the character's **final** orientation. The Gravity component still updates native Character Movement gravity before movement but skips its independent actor rotation. Controls then calculates one gravity-aligned pose on its post-movement tick, combining native Up and a tangent Forward with parallel-transported heading even when the input is idle. This prevents the earlier two-rotation conflict. Characters without Controls owning facing keep the original Gravity actor alignment behavior.
 
 `Disable Competing Native Rotation` defaults to true. Orbit temporarily disables native `Orient Rotation to Movement`, `Use Controller Desired Rotation` and Character `Use Controller Rotation Yaw` and restores the original values when it no longer owns facing or on EndPlay. Third-party Blueprint Set Actor Rotation nodes, root-motion orientation, and other custom systems can still compete and should be disabled or deliberately coordinated.
 
@@ -611,14 +611,14 @@ This is one of the **five base Orbit components**, alongside Character Gravity, 
 | Facing Response Rate | 12 | Smooth quaternion response; 0 snaps |
 | Facing Input Threshold | 0.1 | Ignore tiny input; keep heading without movement |
 | Disable Competing Native Rotation | true | Temporarily disable native movement/controller yaw rotation while Controls owns facing; restore original values when released |
-| Draw Locomotion Debug | false | Draw requested input, actual velocity, capsule Forward and gravity Up arrows; no debug draw cost while disabled |
+| Draw Locomotion Debug | false | Draw requested input (blue), actual velocity (green), desired Forward (cyan), actual Actor Forward (yellow) and gravity Up (white); no debug draw cost while disabled |
 | Debug Vector Length | 120 cm | Debug arrow length |
 | Last Velocity to Facing Angle Degrees | runtime | Mismatch between actual gravity-tangent velocity and Actor forward |
 | Last Capsule Up Error Degrees | runtime | Error between Actor local +Z and Movement gravity Up |
 | Last Gravity Relative Ground Speed | runtime | Correct tangent-plane locomotion speed |
 | Last World XY Speed | runtime | Debug comparison for world-horizontal graph bugs |
 | Last Gravity Relative Direction Degrees | runtime | Signed gravity-local movement direction |
-| Last Facing Direction | runtime | Read-only world-space target direction of last facing update |
+| Last Facing Direction | runtime | Read-only world-space actual Actor Forward following a successful rotation |
 | Last Gravity Up | runtime | Read-only sampled movement Up |
 | Last Move Forward / Right | runtime | Read-only tangent input basis for PIE debugging |
 
@@ -749,3 +749,9 @@ The `OrbitMover` code is now inside `Orbit/Source/OrbitMover/` and its component
 ## Orbit Character Controls v0.2.8 diagnostics
 
 When debugging a Character with fixed gravity-relative yaw or missing debug arrows, inspect **the spawned PIE actor's** Orbit Character Controls component. `Draw Locomotion Debug` now works even when Orbit does not own orientation, provided the component ticks. Runtime read-only fields: `Debug Tick Count`, `Native Movement Callback Count`, `Tick Facing Fallback Count`, `Orbit Move Input Count`, `Last Facing Debug Status`. A zero Tick Count indicates that the component did not tick; the status field distinguishes control and facing-ownership conditions. Rotation falls back to the Controls tick when no native movement callback arrived, and tangent velocity can steer facing without the Orbit-specific input bridge if Face Velocity When Moving is enabled. The Blueprint nodes and native component interfaces are unchanged. See `ITERATION_019.md` and `ANIMATION_INTEGRATION.md`.
+
+## Iteration 020: post-movement facing diagnostics (v0.2.9)
+
+`Orbit Character Controls` auto-activates when Face Movement Direction is enabled at BeginPlay, including pre-existing Blueprint component instances with saved Auto Activate off. Explicit runtime deactivation remains possible. `Facing Begin Play Activation Count` diagnoses this repair. `Orbit Character Controls` applies gravity-relative character facing **once per eligible `TG_PostUpdateWork` tick**, regardless of whether `OnCharacterMovementUpdated` broadcast. The callback is diagnostic only. Ownership accepts locally controlled or authoritative Characters; simulated proxies remain excluded. Native orientation flags are actively held off until ownership is released, when their previous settings are restored.
+
+`Draw Locomotion Debug` uses **white Up, blue requested input, green actual tangent velocity, cyan desired facing and yellow actual Actor Forward**. New visible instance-only BlueprintReadOnly properties: `Facing Post Movement Tick Count`, `Facing Update Attempt Count`, `Facing Heading Chosen Count`, `Facing Rotation Applied Count`, `Facing Rotation Rejected Count`, `Last Facing Application Status`, `Last Facing Target Error Degrees`, `Last Facing Applied Delta Degrees`, `Last Facing Remaining Error Degrees`, `Last Facing Rotation Drift Degrees`, `Last Desired Facing Direction`. Their meaning and PIE test workflow are in `ITERATION_020.md`. There are **no new Blueprint-callable functions** in this pass and the established total of 25 base nodes remains unchanged.

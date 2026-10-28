@@ -1,6 +1,6 @@
 # Orbit | Gravity-relative Character Animation Integration
 
-**Plugin:** Orbit 0.2.8, Iteration 019  
+**Plugin:** Orbit 0.2.9, Iteration 020  
 **Target:** UE 5.8.3 Third Person native `ACharacter` with Manny/Quinn animation setup  
 **Scope:** Correct gravity-local locomotion parameters, not automatic mutation of existing Animation Blueprints
 
@@ -82,6 +82,14 @@ Use the **game-thread Event Graph** rather than directly calling arbitrary Chara
 - [Pose Warping in UE 5.8](https://dev.epicgames.com/documentation/unreal-engine/pose-warping-in-unreal-engine): example graphs and native warping debug display.
 
 
+## v0.2.10 inactive controls regression correction
+
+In v0.2.9, an existing Character Blueprint could retain `Auto Activate = false` on its Orbit Character Controls component. Unlike movement-input and debug drawing, facing ownership checks `IsActive()`. A user observed **Debug Tick Count 4144**, **Native Movement Callback Count 4144**, **Orbit Move Input Count 590**, but **Facing Update Attempt Count 0**, `Last Facing Debug Status = Controls component is not active`, and no cyan desired-facing arrow. This is an activation failure, **not evidence that movement vectors or gravity Up are wrong**. v0.2.10 defaults to Auto Activate and activates the component during BeginPlay when Face Movement Direction is enabled, even for saved Blueprint component instances. `Facing Begin Play Activation Count` increments on repair. When disabling facing intentionally during runtime, call `Deactivate` AFTER BeginPlay. Recheck cyan/yellow arrows and facing counters before investigating the AnimBP.
+
 ## v0.2.8 facing/debug visibility correction
 
 In v0.2.7 the debug arrows were incorrectly gated on active facing ownership. If the character was not locally controlled or the component was inactive, the debug display silently disappeared. v0.2.8 draws when requested (provided the component ticks) and adds PIE-visible `Last Facing Debug Status`, `Debug Tick Count`, `Native Movement Callback Count`, `Tick Facing Fallback Count` and `Orbit Move Input Count`. When native Character Movement does not emit a callback for a frame, a post-update Controls tick can perform the facing update. With Face Velocity When Moving enabled, actual gravity-tangent velocity can select a facing heading even if the Orbit IA_Move bridge did not supply a recent input vector. This does **not** alter Animation Blueprint locomotion Blend Spaces or Warping nodes; the manual gravity-relative animation hookup above remains necessary.
+
+## v0.2.9 post-movement facing update and desired-heading debug
+
+The actor yaw remaining fixed while input and velocity were correct in v0.2.8 is treated separately from the Manny/Quinn animation graph problem. Orbit Controls now applies its final actor rotation in **every eligible PostUpdateWork tick**. The native movement callback only records arrival. Enable Draw Locomotion Debug and compare **cyan desired heading** to **yellow actual Actor Forward**; they should converge while holding W around a planet. Runtime read-only counters and angular errors appear on Orbit Character Controls. See `ITERATION_020.md`. Existing AnimBP world-XY locomotion or world-Up warping remains an independent integration task even after actor yaw works.

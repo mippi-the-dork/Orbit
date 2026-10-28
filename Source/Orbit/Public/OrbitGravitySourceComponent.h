@@ -27,6 +27,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
     EOrbitGravityFalloff Falloff = EOrbitGravityFalloff::Constant;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(ClampMin="0.0", Units="cm"))
+    /** For Volume, caps selected shape dimensions, not a spherical intersection. */
     double MaxDistance = 0.0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(ClampMin="1.0", Units="cm"))
     double InverseSquareReferenceDistance = 100.0;

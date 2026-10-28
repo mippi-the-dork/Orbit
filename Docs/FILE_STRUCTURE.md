@@ -1,4 +1,4 @@
-# Orbit File Structure (0.2.6)
+# Orbit File Structure (0.2.10)
 
 **One installable Unreal plugin**, containing three internal modules:
 
@@ -22,7 +22,8 @@ Orbit/
     COMPONENTS_AND_BLUEPRINT_API.md
     GRAVITY_SOURCE_ACTOR.md
     MOVER_INTEGRATION.md
-    ITERATION_017.md
+    ANIMATION_INTEGRATION.md
+    ITERATION_021.md
     ...earlier iteration guides and test plan...
   Source/
     Orbit/

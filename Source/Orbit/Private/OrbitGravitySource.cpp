@@ -287,10 +287,9 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
         }
     }
 
-    // Show an actual finite-distance influence boundary even when the arrow preview
-    // is disabled. This must mirror the evaluator's distance metric:
-    // Point / Directional / Volume: from actor center; Axis: perpendicular to
-    // infinite local Z axis; Spline: distance to closest spline polyline segment.
+    // Show the finite influence boundary even with preview arrows disabled.
+    // Volumes use their selected local shape capped by MaxDistance, not an
+    // unrelated spherical intersection. Other fields retain radial bounds.
     if (bShowMaxDistanceBoundary && MaxDistance > 0.0)
     {
         const FColor BoundColor = bEnabled ? FColor(70, 180, 245) : FColor(110, 110, 110);
@@ -299,9 +298,32 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
         {
         case EOrbitGravityShape::Point:
         case EOrbitGravityShape::Directional:
-        case EOrbitGravityShape::Volume:
             DrawDebugSphere(World, Origin, Radius, 32, BoundColor, false, DebugLifetime, 0, 1.3f);
             break;
+        case EOrbitGravityShape::Volume:
+        {
+            FOrbitFieldDefinition Definition;
+            BuildDefinition(Definition);
+            const FOrbitEffectiveVolumeBounds Bounds = FOrbitFieldEvaluator::GetEffectiveVolumeBounds(Definition);
+            switch (VolumeShape)
+            {
+            case EOrbitVolumeShape::Box:
+                DrawDebugBox(World, Origin, Bounds.BoxHalfExtents, Rotation, BoundColor, false, DebugLifetime, 0, 1.3f);
+                break;
+            case EOrbitVolumeShape::Sphere:
+                DrawDebugSphere(World, Origin, Bounds.Radius, 32, BoundColor, false, DebugLifetime, 0, 1.3f);
+                break;
+            case EOrbitVolumeShape::Cylinder:
+                DrawDebugCylinder(World, Origin - Up * Bounds.HalfHeight, Origin + Up * Bounds.HalfHeight,
+                    Bounds.Radius, 32, BoundColor, false, DebugLifetime, 0, 1.3f);
+                break;
+            case EOrbitVolumeShape::Capsule:
+                DrawDebugCapsule(World, Origin, Bounds.HalfHeight, Bounds.Radius, Rotation,
+                    BoundColor, false, DebugLifetime, 0, 1.3f);
+                break;
+            }
+            break;
+        }
         case EOrbitGravityShape::Axis:
         {
             // The actual field is infinite along the axis. Draw only a finite
@@ -421,20 +443,24 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
                 }
                 else if (Shape == EOrbitGravityShape::Volume)
                 {
+                    const FOrbitEffectiveVolumeBounds Bounds =
+                        FOrbitFieldEvaluator::GetEffectiveVolumeBounds(StreamField);
                     switch (VolumeShape)
                     {
-                    case EOrbitVolumeShape::Box: HalfExtents = BoxHalfExtents.GetAbs(); break;
-                    case EOrbitVolumeShape::Sphere: HalfExtents = FVector(FMath::Max(VolumeRadius, 1.0)); break;
-                    case EOrbitVolumeShape::Cylinder: HalfExtents = FVector(VolumeRadius, VolumeRadius, VolumeHalfHeight); break;
+                    case EOrbitVolumeShape::Box: HalfExtents = Bounds.BoxHalfExtents; break;
+                    case EOrbitVolumeShape::Sphere: HalfExtents = FVector(Bounds.Radius); break;
+                    case EOrbitVolumeShape::Cylinder:
+                        HalfExtents = FVector(Bounds.Radius, Bounds.Radius, Bounds.HalfHeight); break;
                     case EOrbitVolumeShape::Capsule:
-                        HalfExtents = FVector(VolumeRadius, VolumeRadius, FMath::Max(VolumeRadius, VolumeHalfHeight)); break;
+                        HalfExtents = FVector(Bounds.Radius, Bounds.Radius, Bounds.HalfHeight); break;
                     }
-                    // Clip the seed region to the effective displayed area.
-                    const double Limit = MaxDistance > 0.0
-                        ? (bFitPreviewToMaxDistance ? MaxDistance : FMath::Min(Extent, MaxDistance)) : Extent;
-                    HalfExtents.X = FMath::Min(HalfExtents.X, Limit);
-                    HalfExtents.Y = FMath::Min(HalfExtents.Y, Limit);
-                    HalfExtents.Z = FMath::Min(HalfExtents.Z, Limit);
+                    // Auto Fit off limits editor-only sampling, not gameplay.
+                    if (!bFitPreviewToMaxDistance || MaxDistance <= 0.0)
+                    {
+                        HalfExtents.X = FMath::Min(HalfExtents.X, Extent);
+                        HalfExtents.Y = FMath::Min(HalfExtents.Y, Extent);
+                        HalfExtents.Z = FMath::Min(HalfExtents.Z, Extent);
+                    }
                 }
                 if (bLimitToBox)
                 {
@@ -578,25 +604,24 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
         FVector LocalExtents(Extent);
         if (Shape == EOrbitGravityShape::Volume)
         {
+            const FOrbitEffectiveVolumeBounds Bounds = FOrbitFieldEvaluator::GetEffectiveVolumeBounds(Field);
             switch (VolumeShape)
             {
-            case EOrbitVolumeShape::Box: LocalExtents = BoxHalfExtents.GetAbs(); break;
-            case EOrbitVolumeShape::Sphere: LocalExtents = FVector(FMath::Max(VolumeRadius, 1.0)); break;
+            case EOrbitVolumeShape::Box: LocalExtents = Bounds.BoxHalfExtents; break;
+            case EOrbitVolumeShape::Sphere: LocalExtents = FVector(Bounds.Radius); break;
             case EOrbitVolumeShape::Cylinder:
-                LocalExtents = FVector(VolumeRadius, VolumeRadius, VolumeHalfHeight); break;
+                LocalExtents = FVector(Bounds.Radius, Bounds.Radius, Bounds.HalfHeight); break;
             case EOrbitVolumeShape::Capsule:
-                LocalExtents = FVector(VolumeRadius, VolumeRadius, FMath::Max(VolumeRadius, VolumeHalfHeight)); break;
+                LocalExtents = FVector(Bounds.Radius, Bounds.Radius, Bounds.HalfHeight); break;
             }
-            // The visible Volume boundary and finite Max Distance intersect.
-            // Sample the INTERSECTION's bounding box rather than wasting dense
-            // previews in space where Evaluate() will reject every candidate.
-            // With Auto Fit off, Preview Extent is an additional visualization cap.
-            const double VolumePreviewLimit = MaxDistance > 0.0
-                ? (bFitPreviewToMaxDistance ? MaxDistance : FMath::Min(Extent, MaxDistance))
-                : Extent;
-            LocalExtents.X = FMath::Min(LocalExtents.X, VolumePreviewLimit);
-            LocalExtents.Y = FMath::Min(LocalExtents.Y, VolumePreviewLimit);
-            LocalExtents.Z = FMath::Min(LocalExtents.Z, VolumePreviewLimit);
+            // Seed only the actual shape-bounded region. Preview Extent is an
+            // editor-only cap when Auto Fit is off or MaxDistance is unlimited.
+            if (!bFitPreviewToMaxDistance || MaxDistance <= 0.0)
+            {
+                LocalExtents.X = FMath::Min(LocalExtents.X, Extent);
+                LocalExtents.Y = FMath::Min(LocalExtents.Y, Extent);
+                LocalExtents.Z = FMath::Min(LocalExtents.Z, Extent);
+            }
         }
         else if (MaxDistance > 0.0)
         {

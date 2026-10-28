@@ -2,12 +2,28 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.7 (Iteration 018, experimental)  
+**Current version:** 0.2.10 (Iteration 021, experimental)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
 **Status:** Source package prepared; compile, PIE and packaged-game validation are pending.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+
+## Iteration 021: Facing activation and shape-aware Volume Max Distance
+
+- Fixed the v0.2.9 facing gate observed in PIE: `Orbit Character Controls` could tick and receive hundreds of movement events while `IsActive()` was false. New components default to Auto Activate, and an inactive saved Blueprint instance is activated at BeginPlay when Face Movement Direction is enabled. Explicit runtime `Deactivate()` after startup still disables facing ownership.
+- Added `Facing Begin Play Activation Count` diagnostic to confirm an inactive Blueprint component was repaired. The cyan desired-facing and yellow actual-facing arrows should now update if the movement path is healthy.
+- Volume finite Max Distance now caps **the selected shape's local size**, rather than imposing a second spherical influence mask. Editor blue Max Distance bounds, gravity evaluation, previews and Linear falloff all use the effective Box/Sphere/Cylinder/Capsule dimensions. Non-Volume source metrics are unchanged.
+- Added `Orbit.Character.ControlsAutoActivationDefault` and `Orbit.Field.VolumeMaxDistanceRespectsShape` automation regressions. **41 authored core tests + 4 Mover tests** (UE build/PIE not yet verified).
+- See [Iteration 021](Docs/ITERATION_021.md), [Animation Integration](Docs/ANIMATION_INTEGRATION.md) and [Gravity Source Actor](Docs/GRAVITY_SOURCE_ACTOR.md).
+
+## Iteration 020: Character-facing rotation applied after native movement
+
+- Fix the v0.2.8 behavior where requested/actual movement arrows tracked correctly on spheres but the Character's actual Actor Forward remained fixed. Final facing is applied on every eligible post-movement Controls tick, not conditionally skipped when native movement callbacks fire.
+- Add cyan desired-facing debug arrow, leave yellow for actual Actor Forward, and expose precise rotation attempt/success/error/drift counters in PIE.
+- Restore/reassert native rotation ownership flags, allow locally controlled and authoritative Characters, and retain the one-plugin Orbit/OrbitEditor/OrbitMover structure.
+- Three new mathematical facing tests (39 base Orbit + 4 internal Mover authored). See [Iteration 020](Docs/ITERATION_020.md), [Animation Integration](Docs/ANIMATION_INTEGRATION.md) and [Components and Blueprint API](Docs/COMPONENTS_AND_BLUEPRINT_API.md).
+- This source release is **not UE 5.8.3 compiled or PIE verified**. Animation Blueprint wiring remains necessary to repair world-XY or world-up warping in existing Manny/Quinn graphs.
 
 ## Iteration 018: Character facing and gravity-relative animation bridge
 
@@ -66,7 +82,7 @@ These are experimental source changes, **not** a claim of a successful UE 5.8.3 
 | Editor volumetric field arrows and purple streamlines, relative density (1–10), influence wireframes | Implemented; pending UE test |
 | Actor viewport billboard from supplied Orbit artwork | Implemented with Editor-only transient texture; pending UE visual test |
 | Orbit editor icons | Registered for plugin browser, gravity-source actor, character gravity component and class thumbnail; pending UE visual test |
-| Field math and Mover policy automated tests | 34 base Orbit field/character tests plus 4 internal OrbitMover tests authored; pending UE 5.8.3 verification |
+| Field math and Mover policy automated tests | 39 base Orbit field/character tests plus 4 internal OrbitMover tests authored; pending UE 5.8.3 verification |
 | Built-in optional kinematic Mover adapter (internal `OrbitMover` module) | **Experimental**, uses reflection and game-thread pre-physics updates; Chaos/async excluded |
 | Chaos solver callbacks and per-body substep gravity | **Not yet implemented** |
 | Gravity-aware NavMesh, EQS, AI MoveTo | **Not yet implemented** |
@@ -161,7 +177,7 @@ New pure Blueprint nodes: `Get Gravity Tangent Basis` and `Make Gravity Aligned 
 | Streamline Max Segments | Total per-source line-segment budget (default 2048) independent of vector arrow budget |
 | Streamline Direction Markers / Thickness | Optional small arrows along each traced line and adjustable line weight |
 | Fit Preview to Max Distance | Enabled by default; expands arrows through the finite range instead of stopping at Preview Extent |
-| Show Max Distance Boundary | Blue wireframe: sphere for Point/Directional/Volume, radial cylinder for Axis, sampled tube for Spline |
+| Show Max Distance Boundary | Blue wireframe: sphere for Point/Directional, matching capped selected Volume shape, radial cylinder for Axis, sampled tube for Spline |
 | Max Distance 0 (unlimited) | Shows only the finite Preview Extent rather than an infinite visualization |
 | Show Volume Bounds | Draw a green wireframe of the volume boundary even when gravity arrows are disabled |
 | Preview Density | Relative visualization density 1–10, independent of the field size; 3–12 positions per axis, or corresponding spline tube samples |
@@ -189,7 +205,7 @@ The original Vortex Inward continuously applied tangential acceleration, which c
 
 **Corkscrew corridor:** Set Shape = Spline, draw the spline along the corridor's centerline, Direction = **Spline Down (Oriented)**, and author the spline point **Roll** values to keep its Up direction pointing toward the local ceiling. `Max Distance` can confine influence around the corridor, but the current bound is radial, not an actual corridor-shaped collision volume. Orbit's existing character component only sets gravity direction; rotation of the capsule, camera, and controller is still an unfinished movement-integration milestone.
 
-**Volume:** Box uses Box Half Extents. Sphere uses Volume Radius. Cylinder uses Volume Radius and Volume Half Height and is aligned to local Z. Capsule uses Volume Radius and total Volume Half Height (including rounded caps). Select Show Volume Bounds for a viewport wireframe even with gravity arrows off. No Orbit volume shape generates collision geometry. All volumes provide an actor-relative **directional** field, not radial attraction to their boundary.
+**Volume:** Box uses Box Half Extents. Sphere uses Volume Radius. Cylinder uses Volume Radius and Volume Half Height and is aligned to local Z. Capsule uses Volume Radius and total Volume Half Height (including rounded caps). Finite Max Distance caps the selected shape dimensions (Box axes, Sphere radius, Cylinder/Capsule radius and half-height) instead of intersecting with a sphere; Linear falloff follows the selected shape. Select Show Volume Bounds for a viewport wireframe even with gravity arrows off. No Orbit volume shape generates collision geometry. All volumes provide an actor-relative **directional** field, not radial attraction to their boundary.
 
 ## Blueprint API
 

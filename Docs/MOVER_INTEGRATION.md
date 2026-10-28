@@ -1,6 +1,6 @@
 # Orbit: Mover Integration
 
-**Current Orbit version:** 0.2.6, Iteration 017  
+**Current Orbit version:** 0.2.10, Iteration 021  
 **Engine target:** Unreal Engine 5.8.3  
 **Scope:** Orbit functionality specific to Epic's Experimental Mover, not general Mover documentation.
 
@@ -20,6 +20,8 @@ Orbit/
 `OrbitMover` is a module name, **not a second plugin**. There is no `OrbitMover.uplugin` and no separate plugin to enable. Orbit builds without Epic Mover because the internal OrbitMover module does **not** include Mover C++ headers, depend on the `Mover` module, or reference its linked symbols. It recognizes actual enabled Mover components at runtime through UObject reflection.
 
 Enable Epic's **Mover** under Edit > Plugins only if using Mover characters. Restart/build your project after enabling it as required by the engine. The Orbit plugin stays enabled either way.
+
+**Iteration 021 note:** No changes were made to OrbitMover or its reflection-based Mover adapter. The gravity evaluator now caps Volume Max Distance in local shape space, so Orbit sampling through Mover benefits from the same field boundaries as native Characters and physics. This is a core-field change, not a new Mover feature. The Mover backend/timing limitations documented below remain unchanged.
 
 ## 2. What Orbit adds to Mover
 
@@ -123,3 +125,7 @@ No Mover adapter logic, build dependencies, or Mover Blueprint API changed in It
 ## Iteration 019 scope
 
 v0.2.8 changes the **native Character Controls** facing and diagnostic behavior only. The internal OrbitMover adapter, reflected Mover gravity/up calls, load behavior and synchronous kinematic support boundaries are unchanged. The new Character Controls fallback must not be interpreted as adding ChaosMover, async or rollback support.
+
+## Iteration 020 scope
+
+v0.2.9 only changes the native `UOrbitCharacterControlsComponent` rotation application, math helper and diagnostics. The internal `OrbitMover` module, optional reflected Mover integration and synchronous kinematic compatibility scope are unchanged. The new native Character-facing controls are not applied to Mover-driven Pawns. ChaosMover, async prediction and rollback are still unsupported.

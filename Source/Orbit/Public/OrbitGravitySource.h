@@ -91,6 +91,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
     EOrbitGravityFalloff Falloff = EOrbitGravityFalloff::Constant;
 
+    /** For Volume, caps each dimension of the selected local shape (box, sphere,
+     * cylinder or capsule). Other shapes retain their existing radial metric.
+     * Zero means no additional cap beyond a Volume's authored dimensions.
+     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(ClampMin="0.0", Units="cm"))
     double MaxDistance = 0.0;
 
@@ -160,7 +164,8 @@ public:
 
     /** Visualizes the finite Max Distance boundary for Point, Axis, Spline and other sources.
      *  Axis boundaries are infinite along the axis; the displayed tube length is a visual slice.
-     *  For Volume sources Max Distance is an additional sphere around the actor center.
+     *  For Volume sources the blue boundary has the chosen Volume shape,
+     *  with its effective dimensions capped by Max Distance.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug")
     bool bShowMaxDistanceBoundary = true;

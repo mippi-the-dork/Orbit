@@ -137,7 +137,9 @@ struct ORBIT_API FOrbitFieldDefinition
     double VortexMaxFlowSpeed = 1500.0;
     /** Maximum steering acceleration as a multiple of the gravity magnitude. */
     double VortexMaxAccelerationFactor = 3.0;
-    double MaxDistance = 0.0; // 0 means unlimited
+    // For Volumes a positive MaxDistance caps the volume's local extents/radius/half-height;
+    // other source shapes retain their usual distance-based ranges.
+    double MaxDistance = 0.0; // 0 means uncapped
     double ReferenceDistance = 100.0;
     bool bLimitToBox = false;
     bool bPhysics = true;
@@ -176,10 +178,22 @@ struct ORBIT_API FOrbitGravitySample
     int32 DominantSourceId = INDEX_NONE;
 };
 
+/** Effective, rotation-local Volume dimensions. Max Distance caps EACH relevant
+ * shape dimension rather than intersecting the Volume with a world-space sphere.
+ * Capsule HalfHeight includes the rounded end caps. */
+struct ORBIT_API FOrbitEffectiveVolumeBounds
+{
+    FVector BoxHalfExtents = FVector::ZeroVector;
+    double Radius = 0.0;
+    double HalfHeight = 0.0;
+};
+
 /** Pure numerical evaluator, usable by gameplay, tests and future Chaos callbacks. */
 class ORBIT_API FOrbitFieldEvaluator
 {
 public:
+    /** Same effective geometry used by gameplay sampling and editor bounds. */
+    static FOrbitEffectiveVolumeBounds GetEffectiveVolumeBounds(const FOrbitFieldDefinition& Field);
     static bool Evaluate(const FOrbitFieldDefinition& Field, const FVector& Position, FVector& OutAcceleration);
     /** Velocity-aware correction for simulated rigid bodies using Spiral Capture. Other directions/modes use Evaluate. */
     static bool EvaluateForBody(const FOrbitFieldDefinition& Field, const FVector& Position,

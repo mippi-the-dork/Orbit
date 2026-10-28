@@ -1,3 +1,28 @@
+## Orbit 0.2.10 | Iteration 021 | Hotfix 1: Automation test compile correction
+
+- Fixed `Orbit.Character.ControlsAutoActivationDefault` in `OrbitFieldTests.cpp`: UE 5.8.3 `UActorComponent` has no `GetAutoActivate()` accessor. The test now reads the reflected `bAutoActivate` bool on the component class default object using `FBoolProperty`.
+- No changes to runtime gravity, character facing, Volume boundaries, Editor tools or optional Mover integration. All previous Iteration 021 behavior and documentation remain in effect.
+- Build/run verification: the supplied compilation errors identify this specific Orbit test failure; the corrected source and ZIP have been statically validated, but UE 5.8.3 compilation has not been run here.
+
+## 0.2.10 - Iteration 021 - Controls activation and Volume Max Distance shape correction
+
+- Fixed the actual v0.2.9 PIE failure identified by user diagnostics: Orbit Character Controls was ticking/receiving move inputs but `IsActive()` was false, so facing never attempted. Enable Auto Activate in the native constructor and repair inactive saved Blueprint instances during BeginPlay when facing is enabled; explicit runtime deactivation remains possible.
+- Add `Facing Begin Play Activation Count` for PIE diagnosis. This does not automatically change Manny/Quinn's Animation Blueprint warping logic.
+- Volume Max Distance now limits the selected rotated local Box/Sphere/Cylinder/Capsule dimensions. Eliminated the accidental second Euclidean/spherical cutoff and made Volume Linear falloff normalized to the selected shape. Added a single shared effective-volume-bounds helper, used by gameplay evaluation and editor debug/preview.
+- Updated the blue finite-distance boundary visualization, gravity preview seeds and streamline seeds; green wireframe still shows authored volume dimensions. Other gravity source shapes and their Max Distance behavior are unchanged.
+- Added `Orbit.Character.ControlsAutoActivationDefault` and `Orbit.Field.VolumeMaxDistanceRespectsShape` authored automation tests (41 core + 4 Mover, uncompiled).
+- Maintained Source Actor, Components/Blueprint API, Animation, and Mover documentation, plus test plan and Iteration 021 guide.
+
+**Validation:** Source/static and ZIP checks only. Requires real UE 5.8.3 compilation and PIE smoke tests before treating as verified.
+
+## 0.2.9 - Iteration 020 - Post-Movement Character Facing
+
+- Apply character-facing actor rotation exactly once per eligible PostUpdateWork tick after native movement rather than on native movement callbacks. Native callbacks are now diagnostics only.
+- Support local or authoritative character-facing ownership while excluding remote simulated proxies, and reassert native rotation disablement every tick while owned.
+- Add cyan desired-heading debug arrow and 11 read-only runtime diagnostics for chosen heading, rotation success, residual error and rotation being overwritten by another system.
+- Add gravity-relative desired-facing quaternion helper and three math regression tests (39 core tests + 4 Mover tests authored); update full documentation.
+- No changes to core gravity selection, landing assist, Mover integration or Animation Blueprint assets. UE compilation and runtime confirmation still required.
+
 ## 0.2.8 - Iteration 019 - Character Facing and Debug Visibility Regression Fix
 
 - Fix debug arrows being hidden when the facing-ownership predicate is false. Drawing now depends on the explicit `Draw Locomotion Debug` setting and a ticking Controls component, rather than on successful facing ownership.

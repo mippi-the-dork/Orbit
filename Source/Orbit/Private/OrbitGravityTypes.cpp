@@ -25,6 +25,72 @@ FVector FOrbitFieldEvaluator::ClosestOnCurve(const TArray<FVector>& Curve, const
     return Closest;
 }
 
+FOrbitEffectiveVolumeBounds FOrbitFieldEvaluator::GetEffectiveVolumeBounds(const FOrbitFieldDefinition& Field)
+{
+    FOrbitEffectiveVolumeBounds Bounds;
+    const double Limit = Field.MaxDistance > 0.0 ? Field.MaxDistance : TNumericLimits<double>::Max();
+    Bounds.BoxHalfExtents = FVector(
+        FMath::Min(FMath::Abs(Field.BoxExtents.X), Limit),
+        FMath::Min(FMath::Abs(Field.BoxExtents.Y), Limit),
+        FMath::Min(FMath::Abs(Field.BoxExtents.Z), Limit));
+    Bounds.Radius = FMath::Min(FMath::Max(Field.VolumeRadius, 1.0), Limit);
+    Bounds.HalfHeight = FMath::Min(FMath::Max(Field.VolumeHalfHeight, 1.0), Limit);
+    if (Field.VolumeShape == EOrbitVolumeShape::Capsule)
+    {
+        // A capsule's overall half-height cannot be smaller than its radius.
+        Bounds.HalfHeight = FMath::Max(Bounds.HalfHeight, Bounds.Radius);
+    }
+    return Bounds;
+}
+
+/** Distance as a fraction of the selected Volume boundary along the ray from
+ * its center. Used for shape-correct Linear falloff instead of spherical fade. */
+static double OrbitVolumeBoundaryFraction(const FVector& Local, EOrbitVolumeShape Shape,
+    const FOrbitEffectiveVolumeBounds& Bounds)
+{
+    constexpr double Eps = 1.e-9;
+    switch (Shape)
+    {
+    case EOrbitVolumeShape::Box:
+        return FMath::Max3(
+            FMath::Abs(Local.X) / FMath::Max(Bounds.BoxHalfExtents.X, Eps),
+            FMath::Abs(Local.Y) / FMath::Max(Bounds.BoxHalfExtents.Y, Eps),
+            FMath::Abs(Local.Z) / FMath::Max(Bounds.BoxHalfExtents.Z, Eps));
+    case EOrbitVolumeShape::Sphere:
+        return Local.Size() / FMath::Max(Bounds.Radius, Eps);
+    case EOrbitVolumeShape::Cylinder:
+        return FMath::Max(
+            FVector2D(Local.X, Local.Y).Size() / FMath::Max(Bounds.Radius, Eps),
+            FMath::Abs(Local.Z) / FMath::Max(Bounds.HalfHeight, Eps));
+    case EOrbitVolumeShape::Capsule:
+    {
+        const double Length = Local.Size();
+        if (Length <= Eps) { return 0.0; }
+        const double Radius = FMath::Max(Bounds.Radius, Eps);
+        const double SegmentHalf = FMath::Max(Bounds.HalfHeight - Radius, 0.0);
+        const FVector Ray = Local / Length;
+        const double RadialSq = FMath::Square(Ray.X) + FMath::Square(Ray.Y);
+        const double Radial = FMath::Sqrt(RadialSq);
+        double BoundaryDistance = 0.0;
+        if (Radial > Eps && Radius * FMath::Abs(Ray.Z) / Radial <= SegmentHalf)
+        {
+            // Ray exits the cylindrical portion of the capsule.
+            BoundaryDistance = Radius / Radial;
+        }
+        else
+        {
+            // Ray exits a hemisphere centered at +/-SegmentHalf on local Z.
+            const double Dot = SegmentHalf * FMath::Abs(Ray.Z);
+            const double Disc = FMath::Max(0.0,
+                FMath::Square(Radius) - FMath::Square(SegmentHalf) * RadialSq);
+            BoundaryDistance = Dot + FMath::Sqrt(Disc);
+        }
+        return Length / FMath::Max(BoundaryDistance, Eps);
+    }
+    }
+    return 0.0;
+}
+
 bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FVector& Position, FVector& OutAcceleration)
 {
     OutAcceleration = FVector::ZeroVector;
@@ -38,16 +104,19 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
          FMath::Abs(Local.Y) > Field.BoxExtents.Y ||
          FMath::Abs(Local.Z) > Field.BoxExtents.Z)) { return false; }
 
+    FOrbitEffectiveVolumeBounds VolumeBounds;
+    double VolumeBoundaryFraction = 0.0;
     if (Field.Shape == EOrbitGravityShape::Volume)
     {
-        const double Radius = FMath::Max(Field.VolumeRadius, 1.0);
-        const double HalfHeight = FMath::Max(Field.VolumeHalfHeight, 1.0);
+        VolumeBounds = GetEffectiveVolumeBounds(Field);
+        const double Radius = VolumeBounds.Radius;
+        const double HalfHeight = VolumeBounds.HalfHeight;
         switch (Field.VolumeShape)
         {
         case EOrbitVolumeShape::Box:
-            if (FMath::Abs(Local.X) > Field.BoxExtents.X ||
-                FMath::Abs(Local.Y) > Field.BoxExtents.Y ||
-                FMath::Abs(Local.Z) > Field.BoxExtents.Z) { return false; }
+            if (FMath::Abs(Local.X) > VolumeBounds.BoxHalfExtents.X ||
+                FMath::Abs(Local.Y) > VolumeBounds.BoxHalfExtents.Y ||
+                FMath::Abs(Local.Z) > VolumeBounds.BoxHalfExtents.Z) { return false; }
             break;
         case EOrbitVolumeShape::Sphere:
             if (Local.SizeSquared() > FMath::Square(Radius)) { return false; }
@@ -58,12 +127,15 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
             break;
         case EOrbitVolumeShape::Capsule:
         {
-            // Capsule Z is the source actor's local Up axis; HalfHeight includes the caps.
             const double SegmentHalfHeight = FMath::Max(HalfHeight - Radius, 0.0);
             const FVector Closest = FVector(0.0, 0.0, FMath::Clamp(Local.Z, -SegmentHalfHeight, SegmentHalfHeight));
             if ((Local - Closest).SizeSquared() > FMath::Square(Radius)) { return false; }
             break;
         }
+        }
+        if (Field.Falloff == EOrbitGravityFalloff::Linear && Field.MaxDistance > 0.0)
+        {
+            VolumeBoundaryFraction = OrbitVolumeBoundaryFraction(Local, Field.VolumeShape, VolumeBounds);
         }
     }
 
@@ -128,7 +200,10 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
     }
     }
 
-    if (Field.MaxDistance > 0.0 && Distance > Field.MaxDistance) { return false; }
+    // Volumes have already been clipped in their own rotated local shape. A
+    // second center-distance check here would reintroduce a spherical cutoff.
+    if (Field.Shape != EOrbitGravityShape::Volume &&
+        Field.MaxDistance > 0.0 && Distance > Field.MaxDistance) { return false; }
     if ((Field.Shape == EOrbitGravityShape::Point || Field.Shape == EOrbitGravityShape::Axis || Field.Shape == EOrbitGravityShape::Spline) &&
         (Field.Direction == EOrbitGravityDirection::Inward || bVortexInward))
     {
@@ -155,7 +230,9 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
     double Multiplier = 1.0;
     if (Field.Falloff == EOrbitGravityFalloff::Linear && Field.MaxDistance > 0.0)
     {
-        Multiplier = FMath::Clamp(1.0 - Distance / Field.MaxDistance, 0.0, 1.0);
+        const double Fraction = Field.Shape == EOrbitGravityShape::Volume
+            ? VolumeBoundaryFraction : Distance / Field.MaxDistance;
+        Multiplier = FMath::Clamp(1.0 - Fraction, 0.0, 1.0);
     }
     else if (Field.Falloff == EOrbitGravityFalloff::InverseSquare)
     {

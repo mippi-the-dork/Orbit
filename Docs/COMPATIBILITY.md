@@ -19,7 +19,7 @@
 | Directional gravity | Native Orbit evaluator | Implemented, unverified | Automation + PIE |
 | Box / Sphere / Cylinder / Capsule Volume gravity | Native Orbit evaluator | Implemented, unverified | Automation + PIE |
 | Volumetric debug preview and billboard | Runtime/editor visualization | Implemented, unverified | Viewport selection, PIE |
-| Finite Max Distance wireframes and auto-fitted previews | Point sphere, Axis radial cylinder, Spline tubular approximation, additional Volume cutoff | Implemented, unverified | Shape-by-shape viewport validation |
+| Finite Max Distance wireframes and auto-fitted previews | Point sphere, Axis radial cylinder, Spline tubular approximation, shape-aware Volume Max Distance cutoff | Implemented, unverified | Shape-by-shape viewport validation |
 | Streamlines | Editor-only RK2 field integration with signed vortex visualization, cached path rendering and segment budget | Implemented, unverified | Field curves, direction markers, boundaries and dense-spline viewport performance |
 | Gravity Channels 0/1/2 | Source/receiver masks; no receiver component means channel 0 | Implemented, unverified | Physics, actor and character query validation |
 | Rest stabilization | Single-body static mesh contact sleep test, no restitution changes | Experimental | Physics settling, collisions and waking tests |

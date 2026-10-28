@@ -12,6 +12,12 @@
 
 UOrbitCharacterControlsComponent::UOrbitCharacterControlsComponent()
 {
+    // ActorComponents may be spawned from existing Blueprint component templates
+    // whose Auto Activate flag is off. Orbit move input and debug still tick in
+    // that state, but IsManagingCharacterOrientation() correctly refuses to run.
+    // Activate on gameplay startup when facing is enabled; explicit runtime
+    // deactivation AFTER BeginPlay remains supported.
+    bAutoActivate = true;
     PrimaryComponentTick.bCanEverTick = true;
     PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
 }
@@ -19,6 +25,15 @@ UOrbitCharacterControlsComponent::UOrbitCharacterControlsComponent()
 void UOrbitCharacterControlsComponent::BeginPlay()
 {
     Super::BeginPlay();
+    // Some existing Blueprint component instances persist bAutoActivate=false,
+    // even after the native constructor default is corrected. Repair them at
+    // gameplay startup rather than letting an inactive controls component
+    // silently consume input without updating character facing.
+    if (bFaceMovementDirection && !IsActive())
+    {
+        Activate(true);
+        ++FacingBeginPlayActivationCount;
+    }
     if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
     {
         if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
@@ -50,8 +65,12 @@ void UOrbitCharacterControlsComponent::EndPlay(const EEndPlayReason::Type EndPla
 bool UOrbitCharacterControlsComponent::IsManagingCharacterOrientation() const
 {
     const ACharacter* Character = Cast<ACharacter>(GetOwner());
+    // Player-owned client pawns and authoritative characters are permitted to
+    // orient. IsLocallyControlled() alone is not a reliable ownership gate for
+    // all standalone, server-controlled or temporarily controller-less pawns.
+    // Never rotate a simulated proxy (network prediction is still unsupported).
     return bFaceMovementDirection && IsActive() && IsComponentTickEnabled() &&
-        Character && Character->IsLocallyControlled();
+        Character && (Character->IsLocallyControlled() || Character->HasAuthority());
 }
 
 void UOrbitCharacterControlsComponent::RestoreNativeRotationOwnership()
@@ -78,14 +97,18 @@ void UOrbitCharacterControlsComponent::UpdateNativeRotationOwnership()
         RestoreNativeRotationOwnership();
         return;
     }
-    if (bOwnsNativeRotation) { return; }
-    bSavedOrientRotationToMovement = Move->bOrientRotationToMovement;
-    bSavedUseControllerDesiredRotation = Move->bUseControllerDesiredRotation;
-    bSavedUseControllerRotationYaw = Character->bUseControllerRotationYaw;
+    if (!bOwnsNativeRotation)
+    {
+        bSavedOrientRotationToMovement = Move->bOrientRotationToMovement;
+        bSavedUseControllerDesiredRotation = Move->bUseControllerDesiredRotation;
+        bSavedUseControllerRotationYaw = Character->bUseControllerRotationYaw;
+        bOwnsNativeRotation = true;
+    }
+    // Enforce each frame: Character/Blueprint setup may rewrite these flags
+    // after BeginPlay, and a one-time change can silently stop applying.
     Move->bOrientRotationToMovement = false;
     Move->bUseControllerDesiredRotation = false;
     Character->bUseControllerRotationYaw = false;
-    bOwnsNativeRotation = true;
 }
 
 void UOrbitCharacterControlsComponent::RestoreCameraOwnership()
@@ -217,14 +240,23 @@ void UOrbitCharacterControlsComponent::TickComponent(float DeltaTime, ELevelTick
         RefreshCameraFrame(GetCurrentUp());
         ApplyCameraRotation();
     }
-    // Character Movement may skip its update delegate for a frame (e.g. movement
-    // disabled/paused). The old code had no fallback, so native facing could be
-    // suspended indefinitely without Orbit applying a replacement rotation.
-    // This component ticks AFTER Character Movement. Only use the fallback when
-    // a post-movement facing update did not already happen since our last tick.
-    if (!bReceivedMovementCallbackSinceLastTick && IsManagingCharacterOrientation())
+    // This PostUpdateWork tick is the sole rotation-application point. UE's
+    // movement callback may fire before the final component transform settles,
+    // or may carry zero DeltaSeconds. It is now diagnostic only. In v0.2.8 a
+    // callback suppressed the later tick even if facing never actually changed.
+    if (IsManagingCharacterOrientation())
     {
-        ++TickFacingFallbackCount;
+        if (!bReceivedMovementCallbackSinceLastTick) { ++TickFacingFallbackCount; }
+        ++FacingPostMovementTickCount;
+        if (bHasPreviousFacingResult)
+        {
+            const ACharacter* Character = Cast<ACharacter>(GetOwner());
+            if (Character)
+            {
+                LastFacingRotationDriftDegrees = FMath::RadiansToDegrees(
+                    Character->GetActorQuat().AngularDistance(LastAppliedActorRotation));
+            }
+        }
         UpdateCharacterFacing(DeltaTime);
     }
     bReceivedMovementCallbackSinceLastTick = false;
@@ -242,7 +274,8 @@ void UOrbitCharacterControlsComponent::OnNativeMovementFinished(
     // Native gravity was installed by the Orbit Gravity component before movement.
     ++NativeMovementCallbackCount;
     bReceivedMovementCallbackSinceLastTick = true;
-    UpdateCharacterFacing(DeltaSeconds);
+    // Do not modify the Actor here: final facing is applied after native
+    // movement on the Controls post-update tick, exactly once per frame.
 }
 
 void UOrbitCharacterControlsComponent::ApplyGravityRelativeLook(FVector2D LookAxis)
@@ -309,10 +342,19 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
 {
     ACharacter* Character = Cast<ACharacter>(GetOwner());
     UWorld* World = GetWorld();
-    if (!IsManagingCharacterOrientation() || !Character || !World) { return; }
+    if (!IsManagingCharacterOrientation() || !Character || !World)
+    {
+        LastFacingApplicationStatus = TEXT("Facing update skipped: not eligible");
+        return;
+    }
+    ++FacingUpdateAttemptCount;
 
     const FVector Up = GetCurrentUp().GetSafeNormal();
-    if (Up.IsNearlyZero()) { return; }
+    if (Up.IsNearlyZero())
+    {
+        LastFacingApplicationStatus = TEXT("Facing update rejected: invalid gravity Up");
+        return;
+    }
     FVector Forward, Right;
     if (!bOrientationFrameInitialized)
     {
@@ -341,11 +383,27 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
     const bool bHasFacingHeading = FOrbitGravityFrame::ChooseGravityRelativeFacing(
         Up, FacingVelocity, RequestedFacingDirection, bHasRecentInput,
         bFaceVelocityWhenMoving, VelocityFacingThreshold, DesiredHeading);
-    if (bHasFacingHeading) { OrientationFrameForward = DesiredHeading; }
+    if (bHasFacingHeading)
+    {
+        OrientationFrameForward = DesiredHeading;
+        ++FacingHeadingChosenCount;
+    }
 
-    if (!FOrbitGravityFrame::MakeTangentBasis(Up, OrientationFrameForward, Forward, Right)) { return; }
-    const FQuat Target = FRotationMatrix::MakeFromXZ(Forward, Up).ToQuat();
+    FQuat Target;
+    if (!FOrbitGravityFrame::MakeGravityFacingRotation(Up, OrientationFrameForward, Target))
+    {
+        LastFacingApplicationStatus = TEXT("Facing update rejected: invalid tangent heading");
+        return;
+    }
+    FVector BasisRight;
+    if (!FOrbitGravityFrame::MakeTangentBasis(Up, OrientationFrameForward, Forward, BasisRight))
+    {
+        LastFacingApplicationStatus = TEXT("Facing update rejected: tangent basis failed");
+        return;
+    }
+    LastDesiredFacingDirection = Forward;
     const FQuat Current = Character->GetActorQuat();
+    LastFacingTargetErrorDegrees = FMath::RadiansToDegrees(Current.AngularDistance(Target));
 
     // ONE actor-rotation owner when Orbit Controls is active. Character Gravity
     // still sets the native movement gravity direction before movement but skips
@@ -362,10 +420,30 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
     const float Alpha = ResponseRate <= 0.0f ? 1.0f :
         1.0f - FMath::Exp(-ResponseRate * FMath::Max(0.0f, DeltaTime));
     const FQuat NewRotation = FQuat::Slerp(Current, Target, Alpha).GetNormalized();
-    if (!NewRotation.ContainsNaN())
+    if (NewRotation.ContainsNaN())
     {
-        Character->SetActorRotation(NewRotation, ETeleportType::None);
-        LastFacingDirection = Forward;
+        LastFacingApplicationStatus = TEXT("Facing update rejected: invalid quaternion");
+        return;
+    }
+    const bool bRotationAccepted = Character->SetActorRotation(NewRotation, ETeleportType::None);
+    const FQuat Actual = Character->GetActorQuat();
+    LastFacingAppliedDeltaDegrees = FMath::RadiansToDegrees(Current.AngularDistance(Actual));
+    LastFacingRemainingErrorDegrees = FMath::RadiansToDegrees(Actual.AngularDistance(Target));
+    if (bRotationAccepted)
+    {
+        ++FacingRotationAppliedCount;
+        LastFacingDirection = Character->GetActorForwardVector();
+        LastFacingApplicationStatus = bHasFacingHeading
+            ? TEXT("Rotation applied: velocity/input heading")
+            : TEXT("Rotation applied: transported idle heading");
+        LastAppliedActorRotation = Actual;
+        bHasPreviousFacingResult = true;
+    }
+    else
+    {
+        ++FacingRotationRejectedCount;
+        LastFacingApplicationStatus = TEXT("SetActorRotation rejected by actor/root component");
+        bHasPreviousFacingResult = false;
     }
 
     const UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
@@ -404,9 +482,17 @@ void UOrbitCharacterControlsComponent::RefreshFacingDebugStatus()
     {
         LastFacingDebugStatus = TEXT("Face Movement Direction is disabled");
     }
-    else if (!Character->IsLocallyControlled())
+    else if (!Character->IsLocallyControlled() && !Character->HasAuthority())
     {
-        LastFacingDebugStatus = TEXT("Character is not locally controlled; Orbit does not own its facing");
+        LastFacingDebugStatus = TEXT("Character is a remote simulated proxy; Orbit does not own facing");
+    }
+    else if (FacingRotationAppliedCount > 0)
+    {
+        LastFacingDebugStatus = LastFacingApplicationStatus;
+    }
+    else if (FacingUpdateAttemptCount > 0)
+    {
+        LastFacingDebugStatus = LastFacingApplicationStatus;
     }
     else if (NativeMovementCallbackCount > 0)
     {
@@ -445,6 +531,14 @@ void UOrbitCharacterControlsComponent::DrawLocomotionDebug() const
     if (!Velocity.IsNearlyZero())
     {
         DrawDebugDirectionalArrow(World, Start, Start + Velocity * Length, 18.0f, FColor::Green, false, 0.0f, 0, 2.5f);
+    }
+    // Cyan is the desired tangent forward, yellow is the ACTUAL actor forward.
+    // Their separation identifies a failure to apply or retain actor rotation.
+    const FVector Desired = FVector::VectorPlaneProject(LastDesiredFacingDirection, Up).GetSafeNormal();
+    if (!Desired.IsNearlyZero())
+    {
+        DrawDebugDirectionalArrow(World, Start, Start + Desired * (Length * 0.8f),
+            18.0f, FColor::Cyan, false, 0.0f, 0, 2.5f);
     }
     const FVector Facing = FVector::VectorPlaneProject(Character->GetActorForwardVector(), Up).GetSafeNormal();
     if (!Facing.IsNearlyZero())

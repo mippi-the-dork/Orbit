@@ -26,6 +26,16 @@ bool FOrbitGravityFrame::MakeTangentBasis(const FVector& Up, const FVector& Refe
         !OutForward.ContainsNaN() && !OutRight.ContainsNaN();
 }
 
+bool FOrbitGravityFrame::MakeGravityFacingRotation(const FVector& Up,
+    const FVector& DesiredHeading, FQuat& OutRotation)
+{
+    OutRotation = FQuat::Identity;
+    FVector Forward, Right;
+    if (!MakeTangentBasis(Up, DesiredHeading, Forward, Right)) { return false; }
+    OutRotation = FRotationMatrix::MakeFromXZ(Forward, Up.GetSafeNormal()).ToQuat().GetNormalized();
+    return !OutRotation.ContainsNaN();
+}
+
 bool FOrbitGravityFrame::MakeAlignedRotation(const FVector& Up, const FQuat& CurrentRotation, FQuat& OutRotation)
 {
     OutRotation = CurrentRotation;

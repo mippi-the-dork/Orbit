@@ -1,14 +1,14 @@
 # Orbit: Gravity Source Actor Guide
 
-**Version:** Orbit v0.2.6, Iteration 016  
+**Version:** Orbit v0.2.10, Iteration 021  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Level designers, technical artists, Blueprint users and programmers  
 **Primary class:** `AOrbitGravitySource`  
-**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.5.
+**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.10.
 
 This is the guide to the **placeable Orbit Gravity Source Actor** and its properties. For the five base Orbit components, the Orbit Mover component and the corresponding Blueprint APIs, see [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md).
 
-This documents what Orbit v0.2.5 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
+This documents what Orbit v0.2.10 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
 
 ---
 
@@ -122,7 +122,8 @@ A Volume is a **bounded directional gravity field**, not radial attraction towar
 | **Capsule** | `Volume Radius` and `Volume Half Height` (cm) | Long axis follows Actor local +Z; half-height includes end caps |
 
 - **Inward / Down** points local -Z. **Outward / Reversed** points local +Z.
-- A finite **Max Distance** adds a spherical limit centered on the Actor. The **effective region is the intersection** of that sphere and the volume.
+- A finite **Max Distance** caps the selected shape's **local dimensions**, not an additional sphere. Box: each X/Y/Z half-extent is capped independently. Sphere: radius. Cylinder: radius and half-height. Capsule: radius and total half-height including caps (half-height remains at least the radius).
+- `Max Distance = 0` leaves the full authored Volume unchanged. When **Linear falloff** and finite Max Distance are used, fade is based on the distance fraction toward the **selected shape boundary** along the local center-to-sample ray, not on spherical distance. This keeps gravity active in Box corners and Cylinder/Capsule extremities where the geometry permits it.
 - **Limit to Box** adds a second, optional rotated box restriction. For a Box Volume using the same `Box Half Extents`, this is redundant.
 - The green editor wireframe shows the volume shape. The additional box limit is yellow, where applicable. The finite-distance limit is blue.
 
@@ -204,7 +205,7 @@ Properties live under **Orbit > Field**.
 | --- | ---: | --- |
 | **Strength** | `980 cm/s²` | Maximum / reference acceleration before falloff. `0` creates a zero-strength field that can still override other fields. |
 | **Falloff** | `Constant` | Controls how magnitude changes with distance. |
-| **Max Distance** | `0 cm` | `0` means unlimited, except that a Volume still has its selected boundary. A positive value is an extra range limit. |
+| **Max Distance** | `0 cm` | `0` means unlimited, except that a Volume still has its selected boundary. A positive value caps the local dimensions of the selected Volume shape, rather than adding a sphere. Other source shapes use their original distance metrics. |
 | **Inverse Square Reference Distance** | `100 cm` | Defines the distance at which inverse-square acceleration equals authored Strength. |
 
 **Falloff modes:**
@@ -304,7 +305,7 @@ These switches can be used independently. For a disabled source, bounded wirefra
 
 Increasing Max Distance expands the depicted region when Auto Fit is enabled, but does not automatically multiply the number of samples. Raise Preview Density to see finer spatial detail.
 
-**Bounds match the source distance metric:** Point / Directional / Volume show spherical Max Distance bounds, Axis draws a finite **illustrative cylinder** around an infinite axis, and Spline draws an approximated tube around the curve. Volume wireframe and Max Distance sphere intersect.
+**Bounds match gameplay sampling:** Point and Directional show spherical Max Distance bounds, Axis draws a finite **illustrative cylinder** around an infinite axis, and Spline draws an approximated tube around the curve. A Volume draws a blue boundary matching its selected shape with capped dimensions. Its green wireframe shows the unmodified authored Volume. The blue boundary is not a spherical intersection.
 
 ### 7.3 Streamline controls
 
@@ -571,3 +572,7 @@ The dedicated Gravity Source Actor, embedded Source Component, source competitio
 ## Character orientation interaction (0.2.8)
 
 A Character inside a Gravity Source may have its orientation governed by Orbit Character Controls rather than the source itself. The v0.2.8 fix for frozen character-relative yaw and debug visibility does **not** change source sampling, Point/Axis/Volume/Spline falloff, field strength, Priority, or multi-source arbitration. Consult `ITERATION_019.md` and the Character Controls section of `COMPONENTS_AND_BLUEPRINT_API.md` for the runtime-facing diagnostics.
+
+## Iteration 020 orientation note (0.2.9)
+
+Gravity Source Actor field evaluation, volumes, Priority, arbitration and source previews are unchanged. The Character Controls consumer now performs its final heading rotation on its post-native-movement tick, with cyan target/yellow actual debug arrows and additional runtime diagnostics. A frozen yellow arrow is a Character Controls rotation-ownership/apply issue, not evidence that the Gravity Source field is picking the wrong gravity vector. See `ITERATION_020.md` and `COMPONENTS_AND_BLUEPRINT_API.md`.
