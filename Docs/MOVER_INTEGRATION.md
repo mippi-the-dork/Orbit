@@ -1,6 +1,6 @@
 # Orbit: Mover Integration
 
-**Current Orbit version:** 0.2.10, Iteration 021  
+**Current Orbit version:** 0.2.11, Iteration 022  
 **Engine target:** Unreal Engine 5.8.3  
 **Scope:** Orbit functionality specific to Epic's Experimental Mover, not general Mover documentation.
 
@@ -129,3 +129,11 @@ v0.2.8 changes the **native Character Controls** facing and diagnostic behavior 
 ## Iteration 020 scope
 
 v0.2.9 only changes the native `UOrbitCharacterControlsComponent` rotation application, math helper and diagnostics. The internal `OrbitMover` module, optional reflected Mover integration and synchronous kinematic compatibility scope are unchanged. The new native Character-facing controls are not applied to Mover-driven Pawns. ChaosMover, async prediction and rollback are still unsupported.
+
+## Iteration 022 note: native Character animation only
+
+`UOrbitGravityAnimInstance`, `Get Orbit Gravity Animation State` signed vertical speed, and `Calculate Orbit Gravity Vertical Speed` are **native Character Movement animation conveniences**. They do not change the OrbitMover component, synchronous kinematic Mover adapter, reflection bridge, tick order, supported backends, or plugin optionality. A Mover Pawn should query its own velocity/gravity frame and can call the pure `Calculate Orbit Gravity Vertical Speed` helper for an animation transition, but the `UOrbitGravityAnimInstance` default producer expects an `ACharacter` with native Character Movement. Full Mover-specific animation-state integration remains future work.
+
+## Physics Rest Diagnostics (v0.2.13)
+
+Orbit's automatic simulated rigid-body gravity uses center-of-mass sampling and near-contact diagnostics in 0.2.13. **These changes do not alter Orbit's optional synchronous kinematic Mover adapter**, which does not use the rest-contact sweep or rigid-body damping settings. No new Chaos Mover support is implied.
