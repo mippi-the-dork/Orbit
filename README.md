@@ -2,12 +2,37 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.10 (Iteration 021, experimental)  
+**Current version:** 0.2.12 (Iteration 023, experimental)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
 **Status:** Source package prepared; compile, PIE and packaged-game validation are pending.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+
+## Iteration 024: spherical physics diagnostics
+
+- Physics gravity for simulated components samples the **rigid-body center of mass** rather than an imported mesh's Actor/Component pivot.
+- Added a bounded contact-grace window to reduce rest damping flicker from short collision-query misses. The debug visualization now distinguishes verified contact (cyan), grace (blue), unsupported (amber), and surface/field normal mismatch (red).
+- Physics Rest debug displays the Point source's radial alignment and difference from the supporting sphere's bounds center. This helps diagnose spheres drifting toward a preferred equator, which **is not an expected property of Point/Inward gravity**. Do not raise damping to conceal a source offset or conflicting field. [Iteration 024](Docs/ITERATION_024.md) details the isolation test.
+- Does not change characters, animation, Mover, or the gravity-field evaluator. Runtime Chaos testing is still required.
+
+## Iteration 023: supported rigid-body rest and rolling
+
+- Added optional **contact-only** tangential and angular damping to help simulated spheres stop rolling and cubes stop slowly spinning on Point/Inward planets and curved Axis fields. The default rates are 1.5 /s (tangent) and 2.0 /s (angular) under **Project Settings > Plugins > Orbit > Physics > Rest**.
+- Changed support detection from a bounding-sphere center ray to a short sweep of the actual static-mesh collision geometry, accepting only upward supporting normals. Fast gravity-normal impacts and unsupported/free-flying bodies are excluded from damping.
+- Preserved the original slow supported-body sleep gate and component opt-outs (`Orbit.NoRest`, `Orbit.Ignore`). Added optional cyan/amber support debug lines. No Character, Mover, or animation functional changes.
+- Added three physics-rest math tests (47 core + 4 internal Mover tests authored); requires UE 5.8.3 build and PIE physics verification.
+
+See [Iteration 023](Docs/ITERATION_023.md) and [Components & Blueprint API](Docs/COMPONENTS_AND_BLUEPRINT_API.md).
+
+## Iteration 022: Verified gravity-relative animation and jump state
+
+- The user verified that `Get Orbit Gravity Animation State` fixed **semi-strafing while running** by replacing their AnimBP's world-XY `Vector Length XY` (GroundSpeed) and `Calculate Direction` (Direction) values. The supplied `ABP_Unarmed_Orbit` and `BS_Idle_Walk_Run` state-machine/Blend Space graph are transcribed into a complete setup example in [Docs/Examples/ABP_UNARMED_ORBIT_VERIFIED_WORKFLOW.md](Docs/Examples/ABP_UNARMED_ORBIT_VERIFIED_WORKFLOW.md).
+- Animation State now exposes **Gravity Relative Vertical Speed**, **Is Ascending** and **Is Descending** so Jump/Fall transitions can use local Up rather than `Velocity.Z`.
+- New pure **Calculate Orbit Gravity Vertical Speed** node works from any valid velocity and gravity Up.
+- Optional **Orbit Gravity Anim Instance** native parent caches animation state on the game thread. No native `.uasset` graphs are shipped or rewritten; users still need to connect the correct data to their Blend Spaces.
+- Added three math/default-value automation tests: 44 authored core tests plus 4 internal Mover tests. Source-only, not UE 5.8.3 build verified.
+
 
 ## Iteration 021: Facing activation and shape-aware Volume Max Distance
 

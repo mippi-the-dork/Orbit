@@ -26,6 +26,11 @@ public:
         const FVector& ActorForward, double& OutSpeed, double& OutForwardSpeed,
         double& OutRightSpeed, double& OutDirectionDegrees);
 
+    /** Signed speed along arbitrary gravity Up, in cm/s. Positive means rising, negative falling.
+     *  Unlike Velocity.Z this works for sideways, inverted, and tilted gravity. */
+    static bool CalculateGravityRelativeVerticalSpeed(const FVector& Velocity, const FVector& GravityUp,
+        double& OutSignedSpeed);
+
     /** Parallel-transports a tangent heading between changing gravity Up vectors without
      * re-extracting world yaw. Handles vertical, sideways and antiparallel Up changes. */
     static bool TransportTangentHeading(const FVector& PreviousUp, const FVector& PreviousForward,

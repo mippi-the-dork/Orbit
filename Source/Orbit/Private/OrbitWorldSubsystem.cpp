@@ -3,8 +3,11 @@
 #include "OrbitGravitySource.h"
 #include "OrbitGravitySourceComponent.h"
 #include "OrbitGravityReceiverComponent.h"
+#include "OrbitPhysicsRestMath.h"
 #include "GameFramework/Actor.h"
 #include "Engine/EngineTypes.h"
+#include "CollisionQueryParams.h"
+#include "DrawDebugHelpers.h"
 #include "OrbitSettings.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -214,8 +217,11 @@ FOrbitGravitySample UOrbitWorldSubsystem::SampleIndividualSource(const UObject* 
 FOrbitGravitySample UOrbitWorldSubsystem::SampleGravityForComponent(
     const UPrimitiveComponent* Component, EOrbitGravityChannel Channel) const
 {
-    return Component ? SampleGravityForActor(Component->GetOwner(), Component->GetComponentLocation(), Channel)
-                     : FOrbitGravitySample();
+    // For simulating bodies, the force is applied at the physics center of mass,
+    // which can differ from the Actor/Component pivot on imported meshes.
+    return Component ? SampleGravityForActor(Component->GetOwner(),
+        Component->IsSimulatingPhysics() ? Component->GetCenterOfMass(NAME_None) : Component->GetComponentLocation(), Channel)
+        : FOrbitGravitySample();
 }
 
 FVector UOrbitWorldSubsystem::GetGravityAcceleration(const FVector& WorldLocation, EOrbitGravityChannel Channel) const
@@ -283,24 +289,45 @@ void UOrbitWorldSubsystem::RestoreBodyGravity()
     ManagedBodies.Empty();
 }
 
-bool UOrbitWorldSubsystem::IsSupportedAlongGravity(const UPrimitiveComponent* Component, const FVector& Down) const
+UOrbitWorldSubsystem::FRestSupportProbe UOrbitWorldSubsystem::ProbeSupportAlongGravity(
+    UPrimitiveComponent* Component, const FVector& Down, float ProbeDistance) const
 {
+    FRestSupportProbe Probe;
     if (!Component || !GetWorld() || Down.IsNearlyZero() || !Component->GetOwner())
     {
-        return false;
+        return Probe;
     }
-    // Only a supporting blocking collision counts. Checking the surface normal
-    // avoids sleeping against near-vertical walls or ceilings.
-    FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(OrbitGravityRest), false);
-    QueryParams.AddIgnoredActor(Component->GetOwner());
-    FCollisionObjectQueryParams ObjectTypes;
-    ObjectTypes.AddObjectTypesToQuery(ECC_WorldStatic);
-    ObjectTypes.AddObjectTypesToQuery(ECC_WorldDynamic);
-    const FVector Start = Component->Bounds.Origin;
-    const double ProbeLength = FMath::Max(10.0, static_cast<double>(Component->Bounds.SphereRadius) + 4.0);
-    FHitResult Hit;
-    return GetWorld()->LineTraceSingleByObjectType(Hit, Start, Start + Down * ProbeLength, ObjectTypes, QueryParams) &&
-        Hit.bBlockingHit && FVector::DotProduct(Hit.ImpactNormal, -Down) > 0.7;
+
+    // This is still a near-contact query, NOT a Chaos manifold read.
+    // A real hit is required before the short contact grace can be used.
+    const FVector UnitDown = Down.GetSafeNormal();
+    const double Distance = FMath::Max(0.1, static_cast<double>(ProbeDistance));
+    const FVector Origin = Component->GetComponentLocation();
+    const FVector Start = Origin - UnitDown * Distance;
+    const FVector End = Origin + UnitDown * Distance;
+    FComponentQueryParams Params;
+    Params.AddIgnoredActor(Component->GetOwner());
+    Params.bTraceComplex = false;
+
+    TArray<FHitResult> Hits;
+    GetWorld()->ComponentSweepMulti(Hits, Component, Start, End, Component->GetComponentQuat(), Params);
+    double BestAlignment = 0.7;
+    for (const FHitResult& Hit : Hits)
+    {
+        if (!Hit.bBlockingHit || !Hit.GetComponent() || Hit.GetComponent() == Component)
+        {
+            continue;
+        }
+        const double Alignment = OrbitPhysicsRestMath::SupportUpAlignment(Down, Hit.ImpactNormal);
+        if (Alignment < BestAlignment) { continue; }
+        BestAlignment = Alignment;
+        Probe.bHit = true;
+        Probe.bStartedPenetrating = Hit.bStartPenetrating;
+        Probe.Normal = Hit.ImpactNormal.GetSafeNormal();
+        Probe.ImpactPoint = Hit.ImpactPoint;
+        Probe.SupportComponent = Hit.GetComponent();
+    }
+    return Probe;
 }
 
 void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
@@ -325,7 +352,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         }
 
         const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
-            ActiveFields, Component->GetComponentLocation(), Component->GetPhysicsLinearVelocity(),
+            ActiveFields, Component->GetCenterOfMass(NAME_None), Component->GetPhysicsLinearVelocity(),
             GetReceiverChannelMask(Component->GetOwner()), GetDefault<UOrbitSettings>()->OverrideResolution);
         if (!Sample.bHasInfluence &&
             (Settings->bUseWorldGravityOutsideFields ||
@@ -358,15 +385,98 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         }
         Body.LastAcceleration = Acceleration;
 
-        // The game-thread force bridge can inhibit Chaos sleep. For supported
-        // single-body props only, explicitly allow a slow, stable contact to
-        // sleep. This never modifies physical-material restitution or damping.
-        if (Settings->bStabilizeRestingRigidBodies && Cast<UStaticMeshComponent>(Component) &&
+        // Both rest damping and the existing sleep check share an actual
+        // geometry-based near-contact test. Neither applies in free flight,
+        // on a near-vertical obstruction, or during a fast normal impact.
+        const bool bRestCandidate =
+            Cast<UStaticMeshComponent>(Component) != nullptr &&
             !Component->ComponentHasTag(NoRestTag) &&
             Sample.bHasValidDirection && !Acceleration.IsNearlyZero() &&
-            Component->GetPhysicsLinearVelocity().SizeSquared() <= FMath::Square(Settings->RestLinearSpeed) &&
-            Component->GetPhysicsAngularVelocityInRadians().SizeSquared() <= FMath::Square(Settings->RestAngularSpeed) &&
-            IsSupportedAlongGravity(Component, Sample.Down))
+            (Settings->bStabilizeRestingRigidBodies || Settings->bDampSupportedRigidBodyMotion);
+        const FVector LinearVelocity = Component->GetPhysicsLinearVelocity();
+        const FVector AngularVelocity = Component->GetPhysicsAngularVelocityInRadians();
+        const bool bGentle = bRestCandidate && OrbitPhysicsRestMath::IsGentleContact(
+            LinearVelocity, Sample.Down, Settings->RestMaxNormalContactSpeed);
+        const FRestSupportProbe Probe = bGentle
+            ? ProbeSupportAlongGravity(Component, Sample.Down, Settings->RestSupportProbeDistance)
+            : FRestSupportProbe();
+        const bool bFreshSupport = bGentle && Probe.bHit;
+        bool bGraceSupport = false;
+        const FVector BodyPosition = Component->GetCenterOfMass(NAME_None);
+        if (bFreshSupport)
+        {
+            Body.SupportGraceRemaining = FMath::Clamp(Settings->RestSupportContactGraceSeconds, 0.0f, 0.25f);
+            Body.LastSupportedLocation = BodyPosition;
+            Body.LastSupportedUp = Sample.Up;
+            Body.LastSupportNormal = Probe.Normal;
+            Body.LastSupportComponent = Probe.SupportComponent;
+        }
+        else
+        {
+            Body.SupportGraceRemaining = FMath::Max(0.0f, Body.SupportGraceRemaining - FMath::Max(0.0f, DeltaTime));
+            bGraceSupport = bGentle && Body.SupportGraceRemaining > 0.0f &&
+                Body.LastSupportComponent.IsValid() &&
+                OrbitPhysicsRestMath::MayRetainSupport(BodyPosition, Body.LastSupportedLocation,
+                    LinearVelocity, Sample.Down, Body.LastSupportedUp,
+                    Settings->RestSupportProbeDistance + 0.5f, 5.0);
+            if (!bGraceSupport)
+            {
+                Body.SupportGraceRemaining = 0.0f;
+            }
+        }
+        const bool bSupported = bFreshSupport || bGraceSupport;
+
+        if (Settings->bDrawPhysicsRestContactDebug && bRestCandidate)
+        {
+            const FVector Start = BodyPosition;
+            const double NormalAlignment = OrbitPhysicsRestMath::SupportUpAlignment(
+                Sample.Down, bFreshSupport ? Probe.Normal : Body.LastSupportNormal);
+            // RED is reserved for a *verified* surface normal/gravity disagreement.
+            // AMBER means the support query failed; BLUE is a short remembered hit.
+            const bool bMisaligned = bFreshSupport && NormalAlignment < 0.90;
+            const FColor Color = bMisaligned ? FColor::Red :
+                (bFreshSupport ? FColor::Cyan :
+                 (bGraceSupport ? FColor::Blue : FColor(255, 165, 0)));
+            DrawDebugLine(GetWorld(), Start, Start + Sample.Down * 60.0,
+                Color, false, 0.0f, 0, 2.0f);
+            const FOrbitFieldDefinition* DominantField = ActiveFields.FindByPredicate(
+                [&Sample](const FOrbitFieldDefinition& Field) { return Field.SourceId == Sample.DominantSourceId; });
+            const FVector GravityUp = -Sample.Down.GetSafeNormal();
+            const double TangentSpeed = OrbitPhysicsRestMath::TangentialVelocity(
+                LinearVelocity, Sample.Down).Size();
+            FString CenterOffset = TEXT("n/a");
+            FString RadialAlignment = TEXT("n/a");
+            if (DominantField && DominantField->Shape == EOrbitGravityShape::Point)
+            {
+                // A single inward Point field should remain aligned to the planet
+                // radial normal at every latitude, including the equator.
+                const FVector RadialUp = (BodyPosition - DominantField->Center).GetSafeNormal();
+                RadialAlignment = FString::Printf(TEXT("%.3f"),
+                    FVector::DotProduct(GravityUp, RadialUp));
+                const UPrimitiveComponent* Support = bFreshSupport ? Probe.SupportComponent.Get() :
+                    Body.LastSupportComponent.Get();
+                if (Support)
+                {
+                    // Geometry bounds origin is more useful than an imported mesh's pivot.
+                    CenterOffset = FString::Printf(TEXT("%.1f cm"),
+                        FVector::Dist(DominantField->Center, Support->Bounds.Origin));
+                }
+            }
+            const FString Diagnostics = FString::Printf(
+                TEXT("Orbit rest: %s | source=%d | a=%.0f | tangent=%.1f | spin=%.2f | up-normal=%.2f | radial= %s | nativeG=%s (was %s) | center offset=%s"),
+                bMisaligned ? TEXT("NORMAL MISMATCH") :
+                    (bFreshSupport ? TEXT("verified") : (bGraceSupport ? TEXT("query grace") : TEXT("no support"))),
+                Sample.DominantSourceId, Sample.Magnitude, TangentSpeed, AngularVelocity.Size(),
+                NormalAlignment, *RadialAlignment,
+                Component->IsGravityEnabled() ? TEXT("ON") : TEXT("OFF"),
+                Body.bOriginalGravity ? TEXT("ON") : TEXT("OFF"), *CenterOffset);
+            DrawDebugString(GetWorld(), Start + GravityUp * 75.0, Diagnostics,
+                nullptr, Color, 0.0f, false, 0.85f);
+        }
+
+        if (Settings->bStabilizeRestingRigidBodies && bSupported &&
+            LinearVelocity.SizeSquared() <= FMath::Square(Settings->RestLinearSpeed) &&
+            AngularVelocity.SizeSquared() <= FMath::Square(Settings->RestAngularSpeed))
         {
             Body.StableSeconds += FMath::Max(0.0f, DeltaTime);
             if (Body.StableSeconds >= Settings->RestTime)
@@ -379,6 +489,25 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         else
         {
             Body.StableSeconds = 0.0f;
+        }
+
+        if (bSupported && Settings->bDampSupportedRigidBodyMotion)
+        {
+            // These are accelerations (not impulses). Do not scale by DeltaTime;
+            // Chaos integrates forces at its own simulation step. The tangential
+            // force cannot counteract inward gravity or erase vertical jump speed.
+            const FVector LateralDeceleration = OrbitPhysicsRestMath::TangentialDampingAcceleration(
+                LinearVelocity, Sample.Down, Settings->SupportedTangentialDamping);
+            if (!LateralDeceleration.IsNearlyZero())
+            {
+                Component->AddForce(LateralDeceleration, NAME_None, true);
+            }
+            const FVector SpinDeceleration = OrbitPhysicsRestMath::AngularDampingAcceleration(
+                AngularVelocity, Settings->SupportedAngularDamping);
+            if (!SpinDeceleration.IsNearlyZero())
+            {
+                Component->AddTorqueInRadians(SpinDeceleration, NAME_None, true);
+            }
         }
 
         if (!Acceleration.IsNearlyZero())

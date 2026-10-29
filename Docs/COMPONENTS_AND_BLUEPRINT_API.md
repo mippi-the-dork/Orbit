@@ -3,7 +3,7 @@
 **Version:** Orbit v0.2.6, Iteration 017  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Blueprint users, gameplay designers, and developers integrating Orbit into an Unreal project  
-**Source of truth:** Orbit v0.2.6 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
+**Source of truth:** Orbit v0.2.11 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
 
 This document describes **functionality present in the Orbit v0.2.6 source package**, not planned navigation, EQS, camera, or Chaos solver integrations.
 
@@ -77,6 +77,15 @@ When **Orbit Character Controls** has **Face Movement Direction** enabled on a l
 `Draw Locomotion Debug` shows four vectors (Up white, requested input blue, tangent velocity green, actor forward yellow); `Last Velocity to Facing Angle Degrees`, `Last Capsule Up Error Degrees`, `Last Gravity Relative Ground Speed`, `Last World XY Speed` and `Last Gravity Relative Direction Degrees` are visible instance-only diagnostics. World XY speed varying around a planet while gravity-relative speed remains consistent is **expected** and reveals unsuitable world-XY animation math.
 
 New pure node **Get Orbit Gravity Animation State (Character, Min Ground Speed=3, Min Acceleration=0.1)** returns `FOrbitGravityAnimationState`: Valid, Is Falling, Is Moving On Ground, Has Acceleration, Should Move, Ground Speed, Forward Speed, Right Speed, Movement Direction Degrees, Tangent Acceleration Magnitude, Gravity Up/Down, native Floor Normal, Tangent Velocity, World Tangent Move Direction, Tangent Acceleration and World XY Speed (diagnostic only). Query on the AnimBP's **game-thread Event Blueprint Update Animation**, cache the values into AnimBP variables, and connect those variables to the Blend Space / locomotion graph. This does **not** modify the AnimBP graph automatically. See [ANIMATION_INTEGRATION.md](ANIMATION_INTEGRATION.md).
+
+## Iteration 022: Verified locomotion and gravity-relative jump animation
+
+The user verified that replacing the active `ABP_Unarmed_Orbit` Event Graph's world-XY `GroundSpeed` and `Calculate Direction` data producers with **Get Orbit Gravity Animation State** fixed the semi-strafing gait on a curved ring. Four AnimBP variables were rewired: GroundSpeed, Direction, ShouldMove, IsFalling. The directional `BS_Idle_Walk_Run` was unchanged. See [Animation Integration](ANIMATION_INTEGRATION.md) and [Example ABP workflow](Examples/ABP_UNARMED_ORBIT_VERIFIED_WORKFLOW.md).
+
+The existing `Get Orbit Gravity Animation State` node now additionally exposes `Gravity Relative Vertical Speed` (signed cm/s), `Is Ascending` (+1 cm/s threshold), and `Is Descending` (-1 cm/s threshold). Replace world `Velocity.Z > 100` jump transitions with `Is Falling AND Gravity Relative Vertical Speed > 100`. This follows local Up regardless of the ring/sphere orientation.
+
+New pure Blueprint **Calculate Orbit Gravity Vertical Speed** accepts arbitrary world Velocity and Gravity Up and outputs `bool` valid plus signed cm/s. Invalid zero/NaN Up returns false and zero. Newly added optional native class **Orbit Gravity Anim Instance** (`UOrbitGravityAnimInstance`) caches `OrbitAnimationState` each NativeUpdateAnimation on the game thread; parent-class reparenting does **not** rewrite existing state machine variables or Blend Spaces. Existing pure-node Event Graph integration remains supported and unchanged.
+
 
 ## 1. How Orbit is organized
 
@@ -500,6 +509,15 @@ Open **Project Settings > Plugins > Orbit**.
 | Rest Time | `0.65 s` | Required stable contact duration before supported slow bodies are put to sleep. |
 | Rest Linear Speed | `5 cm/s` | Maximum linear velocity for rest stabilization. |
 | Rest Angular Speed | `0.08 rad/s` | Maximum angular velocity for rest stabilization. |
+| Damp Supported Rigid Body Motion | On | Contact-only, friction-like damping for rolling/sleep-resistant simulated props. |
+| Supported Tangential Damping | `1.5 /s` | Opposes sideways-on-surface movement but leaves gravity-normal motion alone. |
+| Supported Angular Damping | `2.0 /s` | Opposes spin for gently supported bodies. |
+| Rest Support Probe Distance | `3 cm` | Short sweep using the component's collision geometry, not its bounding sphere. |
+| Rest Max Normal Contact Speed | `75 cm/s` | Disables contact damping for fast falling/bouncing bodies. |
+| Rest Support Contact Grace Seconds | `0.08 s` | Retain only previously verified contact across a very brief sweep miss, with clearance/launch constraints. |
+| Draw Physics Rest Contact Debug | Off | Cyan verified / blue temporary grace / amber unsupported / red support normal mismatch; displays radial alignment and source-to-surface-center offset. |
+
+**Resting on planets:** If a cube slowly spins like a top or a small sphere rolls indefinitely, start with the new **Damp Supported Rigid Body Motion** setting (default On). Orbit applies sideways drag and angular deceleration only to gently supported static-mesh physics bodies; it does not damp flight. Bodies must have functional simple collision to be detected by the support sweep. If a sphere still rolls or settles at a particular latitude, enable **Draw Physics Rest Contact Debug**: inspect Point **radial** alignment and **center offset**, not just damping. A correctly centered Point/Inward field has no preferred equator. The contact probe may briefly miss as Chaos resolves physics; blue indicates a bounded remembered contact. Do not merely raise damping to conceal a center mismatch or competing force. See [Iteration 024](ITERATION_024.md).
 
 For a basic test, keep the first two enabled and leave the native physics cube's **Simulate Physics** and **Enable Gravity** checked. Orbit disables native gravity *while it owns* that body, to avoid applying world gravity twice, and restores the original state when management ends.
 
@@ -511,7 +529,7 @@ These belong on the **simulated Primitive Component's Component Tags**, not the 
 | --- | --- |
 | `Orbit.Ignore` | Excludes that component from automatic Orbit physics gravity. |
 | `Orbit.Force` | Allows Orbit to manage a component whose native Enable Gravity started disabled. |
-| `Orbit.NoRest` | Prevents experimental rest stabilization for that component. |
+| `Orbit.NoRest` | Prevents supported-body damping AND automatic rest sleeping for that component. Gravity is still applied. |
 
 These are not Blueprint library nodes, and none of them are required for ordinary Channel 0 cubes.
 
@@ -633,7 +651,7 @@ This is one of the **five base Orbit components**, alongside Character Gravity, 
 
 The base `Orbit` plugin now authors **25 Blueprint-callable/pure functions**, plus the two built-in `OrbitMover` module functions documented in [`MOVER_INTEGRATION.md`](MOVER_INTEGRATION.md). Normal UObject property setters, Blueprint Make/Break struct nodes, and engine-native nodes are not included in these counts.
 
-**Iteration 018 additional Blueprint node:** `Get Orbit Gravity Animation State`, declared by `UOrbitBlueprintLibrary`, category `Orbit | Animation`, pure, input `Character`, `Min Ground Speed` (3), `Min Acceleration` (0.1), output `FOrbitGravityAnimationState` with 17 readable properties. This extends the prior 24 base functions to **25**. It is also documented in [ANIMATION_INTEGRATION.md](ANIMATION_INTEGRATION.md).
+**Iteration 018 additional Blueprint node:** `Get Orbit Gravity Animation State`, declared by `UOrbitBlueprintLibrary`, category `Orbit | Animation`, pure, input `Character`, `Min Ground Speed` (3), `Min Acceleration` (0.1), output `FOrbitGravityAnimationState` with 17 readable properties. This was the 25th base function; Iteration 022 adds **Calculate Orbit Gravity Vertical Speed** as another pure Blueprint node (26 base library functions). It is also documented in [ANIMATION_INTEGRATION.md](ANIMATION_INTEGRATION.md).
 
 ### Additional Orbit Character Gravity component settings
 

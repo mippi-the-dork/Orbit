@@ -1,8 +1,38 @@
+## 0.2.13 - Iteration 024 - Spherical rigid-body support diagnosis
+
+- Physics gravity now samples simulating rigid bodies at their actual physics center of mass, eliminating component-pivot offsets from automatic field evaluation and force application.
+- Improved near-contact support query with a bounded, conservative 0.08-second grace after a genuine hit. Adds support normal and support component diagnostics; does not invent contact or damp free flight.
+- Added opt-in four-color support debug (cyan verified / blue grace / amber unsupported / red normal mismatch), plus Point radial alignment, field ID, native gravity state and source-to-support-bounds-center distance. These are for distinguishing misaligned source/geometry from Chaos contact instability.
+- Added `Rest Support Contact Grace Seconds` setting and two physics math tests (`Orbit.Physics.Rest.*`, **49 core + 4 internal Mover** authored tests).
+- The report was with Tangential Damping **3**, not 30. No higher damping defaults or world-axis bias introduced. This is a diagnostic/contact-stability pass, **not yet a confirmed cure for equator settling**.
+- Maintains one Orbit plugin; all required guides and a new Iteration 024 guide updated. Static package checks only; UE 5.8.3 compile and PIE tests pending.
+
+## 0.2.12 - Iteration 023 - Supported rigid-body damping and contact detection
+
+- Diagnosed two resting problems with the existing automatic physics gravity: cubes slowly spinning on a sphere, and small spheres continuing to roll around its surface. The default sleep gate required very low linear AND angular velocities before it could activate.
+- Added independent, contact-gated damping acceleration opposing gravity-tangent movement and angular spin. Default rates are 1.5 /s and 2.0 /s; configurable under Orbit Project Settings > Physics > Rest. Free flight and fast surface impacts are excluded; no artificial world-Z damping.
+- Replaced support center-ray/bounding-sphere approximation with `UWorld::ComponentSweepMulti` using the simulated component's collision geometry, short sweep distance and support-normal check.
+- Added opt-in cyan/amber support debug lines. Preserved the existing auto sleep, source physics behavior, `Orbit.NoRest` opt-out and normal/automatic gravity restoration.
+- Added three authored pure math tests (`Orbit.Physics.Rest.*`, total 47 core tests plus 4 internal Mover tests), Iteration 023 regression plan and reference documentation.
+- Character motion, AnimBP, field evaluation, Editor authoring and internal Mover behavior are unchanged. This remains a game-thread gravity bridge rather than a Chaos substep callback.
+
+**Verification:** Static source and ZIP checks only. UE 5.8.3 compile/PIE runtime validation pending.
+
 ## Orbit 0.2.10 | Iteration 021 | Hotfix 1: Automation test compile correction
 
 - Fixed `Orbit.Character.ControlsAutoActivationDefault` in `OrbitFieldTests.cpp`: UE 5.8.3 `UActorComponent` has no `GetAutoActivate()` accessor. The test now reads the reflected `bAutoActivate` bool on the component class default object using `FBoolProperty`.
 - No changes to runtime gravity, character facing, Volume boundaries, Editor tools or optional Mover integration. All previous Iteration 021 behavior and documentation remain in effect.
 - Build/run verification: the supplied compilation errors identify this specific Orbit test failure; the corrected source and ZIP have been statically validated, but UE 5.8.3 compilation has not been run here.
+
+## 0.2.11 - Iteration 022 - Verified Locomotion and Gravity-relative Jump Animation
+
+- Documented the **user-confirmed** fix for semi-strafing from `ABP_Unarmed_Orbit`: its `Vector Length XY` GroundSpeed and world-horizontal `Calculate Direction` fed inaccurate Speed and Direction inputs into `BS_Idle_Walk_Run` on a large curved ring. Four animation values now use `Get Orbit Gravity Animation State` instead; user confirmed correct forward-running gait.
+- Added signed `GravityRelativeVerticalSpeed` and `bIsAscending` / `bIsDescending` to the animation state, independent of world Z. New `Calculate Orbit Gravity Vertical Speed` pure Blueprint function and math primitive also exposed for custom jump transitions and non-Character graph data.
+- Added optional native `UOrbitGravityAnimInstance` Animation Blueprint base class, caching Orbit animation state during game-thread `NativeUpdateAnimation`. Existing AnimBP graphs are never rewritten automatically; keep the verified pure Blueprint node integration if preferred.
+- Added a complete node-by-node example of the user's graph, including replacing original `Velocity.Z > 100` jump transition with gravity-relative vertical speed; did not bundle or manufacture a broken/untested `.uasset`.
+- Added three authored tests: `Orbit.Character.Animation.GravityVerticalSpeedAllAxes`, `.GravityVerticalSpeedInvalidInput`, `.NativeInstanceDefaults`. Total **44 core + 4 Mover** tests authored.
+- No source gravity evaluator, character rotation, camera, low-g landing, or OrbitMover behavior change. The new release requires UE 5.8.3 compilation/PIE validation.
+
 
 ## 0.2.10 - Iteration 021 - Controls activation and Volume Max Distance shape correction
 

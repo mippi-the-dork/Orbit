@@ -57,6 +57,37 @@ public:
     UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="1.0", Units="rad/s"))
     float RestAngularSpeed = 0.08f;
 
+    /** Apply friction-like drag only when a supported rigid body is near contact; leaves freely flying props unchanged. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(DisplayName="Damp Supported Rigid Body Motion"))
+    bool bDampSupportedRigidBodyMotion = true;
+
+    /** Decay of movement along the surface, in inverse seconds. Higher values stop rolling spheres sooner. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="20.0", UIMin="0.0", UIMax="5.0"))
+    float SupportedTangentialDamping = 1.5f;
+
+    /** Angular deceleration while supported, in inverse seconds. Higher values stop slowly spinning cubes sooner. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="20.0", UIMin="0.0", UIMax="6.0"))
+    float SupportedAngularDamping = 2.0f;
+
+    /** Distance for a short geometry-based support sweep, measured in cm. No damping away from near-contact. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.1", ClampMax="15.0", Units="cm"))
+    float RestSupportProbeDistance = 3.0f;
+
+    /** Avoid applying contact damping during fast impacts or bounce flight (cm/s along local Down). */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="500.0", Units="cm/s"))
+    float RestMaxNormalContactSpeed = 75.0f;
+
+    /** Short hysteresis for transient collision-sweep misses while a body stays near the support.
+     *  Unlike friction, this does not add damping strength or keep bodies supported during lift-off. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="0.25", Units="s"))
+    float RestSupportContactGraceSeconds = 0.08f;
+
+    /** Off by default; cyan=verified, blue=brief query grace, amber=no support.
+     *  Red=verified support normal significantly disagrees with gravity Up.
+     *  Includes source-to-support-center offset and native gravity state diagnostics. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest|Debug")
+    bool bDrawPhysicsRestContactDebug = false;
+
     /** Global safety toggle; disable if another system is responsible for physical gravity. */
     UPROPERTY(EditAnywhere, Config, Category="Physics")
     bool bEnablePhysicsIntegration = true;

@@ -148,6 +148,19 @@ FOrbitGravityRelativeLocomotion UOrbitBlueprintLibrary::GetGravityRelativeLocomo
 }
 
 
+bool UOrbitBlueprintLibrary::CalculateOrbitGravityVerticalSpeed(FVector Velocity,
+    FVector GravityUp, float& SignedVerticalSpeed)
+{
+    SignedVerticalSpeed = 0.0f;
+    double Result = 0.0;
+    if (!FOrbitGravityFrame::CalculateGravityRelativeVerticalSpeed(Velocity, GravityUp, Result))
+    {
+        return false;
+    }
+    SignedVerticalSpeed = static_cast<float>(Result);
+    return true;
+}
+
 FOrbitGravityAnimationState UOrbitBlueprintLibrary::GetOrbitGravityAnimationState(
     const ACharacter* Character, float MinGroundSpeed, float MinAcceleration)
 {
@@ -171,6 +184,15 @@ FOrbitGravityAnimationState UOrbitBlueprintLibrary::GetOrbitGravityAnimationStat
     State.ForwardSpeed = Locomotion.ForwardSpeed;
     State.RightSpeed = Locomotion.RightSpeed;
     State.MovementDirectionDegrees = Locomotion.MovementDirectionDegrees;
+    double SignedVerticalSpeed = 0.0;
+    if (!FOrbitGravityFrame::CalculateGravityRelativeVerticalSpeed(
+        Movement->Velocity, State.GravityUp, SignedVerticalSpeed))
+    {
+        return FOrbitGravityAnimationState();
+    }
+    State.GravityRelativeVerticalSpeed = static_cast<float>(SignedVerticalSpeed);
+    State.bIsAscending = SignedVerticalSpeed > 1.0;
+    State.bIsDescending = SignedVerticalSpeed < -1.0;
     State.TangentAcceleration = FVector::VectorPlaneProject(Acceleration, State.GravityUp);
     State.TangentAccelerationMagnitude = static_cast<float>(State.TangentAcceleration.Size());
     State.bHasAcceleration = State.TangentAccelerationMagnitude > FMath::Max(0.0f, MinAcceleration);

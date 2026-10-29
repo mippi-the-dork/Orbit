@@ -63,6 +63,20 @@ bool FOrbitGravityFrame::MakeAlignedRotation(const FVector& Up, const FQuat& Cur
     return !OutRotation.ContainsNaN();
 }
 
+bool FOrbitGravityFrame::CalculateGravityRelativeVerticalSpeed(const FVector& Velocity,
+    const FVector& GravityUp, double& OutSignedSpeed)
+{
+    OutSignedSpeed = 0.0;
+    if (Velocity.ContainsNaN() || GravityUp.ContainsNaN() || GravityUp.IsNearlyZero())
+    {
+        return false;
+    }
+    const double Result = FVector::DotProduct(Velocity, GravityUp.GetSafeNormal());
+    if (!FMath::IsFinite(Result)) { return false; }
+    OutSignedSpeed = Result;
+    return true;
+}
+
 bool FOrbitGravityFrame::TransportTangentHeading(const FVector& PreviousUp,
     const FVector& PreviousForward, const FVector& NewUp, FVector& OutForward)
 {

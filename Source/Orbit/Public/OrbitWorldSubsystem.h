@@ -70,6 +70,13 @@ private:
         bool bOriginalGravity = false;
         FVector LastAcceleration = FVector::ZeroVector;
         float StableSeconds = 0.0f;
+        // Short tolerance for collision-query misses while maintaining gentle contact.
+        // Never grants support to a body that has not actually had a valid hit.
+        float SupportGraceRemaining = 0.0f;
+        FVector LastSupportedLocation = FVector::ZeroVector;
+        FVector LastSupportedUp = FVector::UpVector;
+        FVector LastSupportNormal = FVector::UpVector;
+        TWeakObjectPtr<UPrimitiveComponent> LastSupportComponent;
     };
 
     TArray<TWeakObjectPtr<AOrbitGravitySource>> Sources;
@@ -79,10 +86,19 @@ private:
     float DiscoveryAccumulator = 0.0f;
     bool bNeedsInitialDiscovery = true;
 
+    struct FRestSupportProbe
+    {
+        bool bHit = false;
+        bool bStartedPenetrating = false;
+        FVector Normal = FVector::ZeroVector;
+        FVector ImpactPoint = FVector::ZeroVector;
+        TWeakObjectPtr<UPrimitiveComponent> SupportComponent;
+    };
+
     void UpdateSourceSnapshot();
     void DiscoverBodies();
     void ApplyPhysicsForces(float DeltaTime);
-    bool IsSupportedAlongGravity(const UPrimitiveComponent* Component, const FVector& Down) const;
+    FRestSupportProbe ProbeSupportAlongGravity(UPrimitiveComponent* Component, const FVector& Down, float ProbeDistance) const;
     void RestoreBodyGravity();
     bool HasManagedBody(const UPrimitiveComponent* Component) const;
     uint8 GetReceiverChannelMask(const AActor* Owner) const;

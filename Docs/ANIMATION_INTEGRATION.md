@@ -1,12 +1,56 @@
 # Orbit | Gravity-relative Character Animation Integration
 
-**Plugin:** Orbit 0.2.9, Iteration 020  
+**Plugin:** Orbit 0.2.11, Iteration 022  
 **Target:** UE 5.8.3 Third Person native `ACharacter` with Manny/Quinn animation setup  
 **Scope:** Correct gravity-local locomotion parameters, not automatic mutation of existing Animation Blueprints
 
+## Confirmed UE 5.8.3 solution: ABP_Unarmed_Orbit + BS_Idle_Walk_Run
+
+**User-verified in PIE, October 28, 2026.** The user supplied their active `ABP_Unarmed_Orbit` Event Graph text, graph screenshots, and `BS_Idle_Walk_Run` asset, captured the movement state while semi-strafing on a large Halo-style ring, then reported **"that fixed it"** after replacing the Event Graph data producers with Orbit's gravity-local animation state. This is an observed integration fix, not a claim that Orbit automatically rewrites existing AnimBP assets.
+
+The graph originally did **two incorrect things** on arbitrary-Up terrain:
+
+1. `MovementComponent.Velocity -> Vector Length XY -> Set GroundSpeed`, ignoring velocity along world Z. At the symptom capture Orbit reported about **600 cm/s** gravity-tangent ground speed but only **234.5 cm/s** world-XY speed.
+2. `Calculate Direction(Velocity, GetActorRotation) -> Clamp/Select by Orient Rotation to Movement -> Set Direction`, calculating a locomotion angle from the wrong world-horizontal frame and using Unreal's native rotation toggle as a proxy for Orbit's facing mode.
+
+The animation graph used `BS_Idle_Walk_Run`, a **directional** Blend Space driven by `Direction` and `GroundSpeed`. Thus bad direction values actually selected strafe/diagonal gait samples. The supplied graph **did not contain Stride Warping or Orientation Warping**; those are optional issues for different projects, not the cause in this case.
+
+**Verified replacement** in `Event Blueprint Update Animation`:
+
+| Existing AnimBP variable | New source | Consumer |
+| --- | --- | --- |
+| `GroundSpeed` | `Get Orbit Gravity Animation State -> Ground Speed` | `BS_Idle_Walk_Run.Speed` |
+| `Direction` | `Get Orbit Gravity Animation State -> Movement Direction Degrees` | `BS_Idle_Walk_Run.Direction` |
+| `ShouldMove` | `Get Orbit Gravity Animation State -> Should Move` | Idle / Walk Run state transition |
+| `IsFalling` | `Get Orbit Gravity Animation State -> Is Falling` | Main States jump/fall/land transitions |
+
+Remove/disable the previous Set nodes; otherwise they can overwrite the correct variables. Keep the separate raw `Velocity` variable only for graph logic that explicitly needs world velocity.
+
+The legacy `Velocity.Z > 100` test in the **To Falling -> Jump** transition remains world-Z-dependent. Starting in v0.2.11, replace it with **Gravity Relative Vertical Speed > 100 cm/s**, additionally AND with `IsFalling` as in the original graph. Positive values mean ascending away from local gravity, including when jumping along negative world Z.
+
+See [the exact example graph wiring](Examples/ABP_UNARMED_ORBIT_VERIFIED_WORKFLOW.md). It is a complete **construction recipe**, not a generated `.uasset`; native Unreal Editor is required to create or edit Animation Blueprints.
+
+## Optional Animation Instance parent (Iteration 022)
+
+`UOrbitGravityAnimInstance` is now a native optional parent class for Animation Blueprints. Its `NativeUpdateAnimation` gathers `OrbitAnimationState` from the owning Character on the game thread. It does **not** replace existing Animation Blueprint state assignments or modify Blend Spaces automatically. Choose **one producer**: use the normal pure `Get Orbit Gravity Animation State` node with a default AnimInstance, or reparent to `Orbit Gravity Anim Instance` and break the inherited cached `OrbitAnimationState` struct. Never drive the same variables from both paths.
+
+The inherited property is valid only with a Character pawn owner and is reset to `bValid=false` otherwise. Parent-class reparenting can affect customized AnimBP bases; duplicate and compile the asset before adopting this approach. Non-Character/Mover-specific animation instances need their own data producers.
+
+## Gravity-relative jump and fall transitions (Iteration 022)
+
+`FOrbitGravityAnimationState` adds:
+
+- **Gravity Relative Vertical Speed** (`cm/s`, signed): `Dot(CharacterMovement.Velocity, GravityUp)`.
+- **Is Ascending:** true for vertical speed greater than `+1 cm/s`.
+- **Is Descending:** true for vertical speed less than `-1 cm/s`.
+
+The pure node **Calculate Orbit Gravity Vertical Speed** accepts a world Velocity and world Gravity Up, returning a validity boolean and signed speed. Invalid Up produces false and speed zero. These values are intended for game-thread AnimBP updates; cache them to AnimBP variables for threaded graph evaluation.
+
+For the supplied ABP's `To Falling -> Jump` transition, replace `Velocity.Z > 100` with `Gravity Relative Vertical Speed > 100`. Do not merely replace it with `Is Ascending`, which has a lower threshold and may trigger differently. `Is Falling` still comes from native Character Movement, so the original movement-mode gate is preserved. If jump animations play while movement mode remains Walking, inspect the native movement mode first; gravity-local speed cannot fix invalid native states.
+
 ## Why forward movement appears to strafe on a planet
 
-Gravity-relative movement can be correct while an existing AnimBP or warping node interprets the velocity in **world XY**. Running along world Z at a planet's equator produces almost zero `Vector Length XY` even if the gravity-tangent ground speed is 300 cm/s. World yaw or world-Z `Calculate Direction` likewise ceases to match the character's local movement frame. The original GIFs showed gait transitions while holding only W or S; the exact AnimBP node responsible is **not proven** without inspecting that asset graph.
+Gravity-relative movement can be correct while an existing AnimBP or warping node interprets the velocity in **world XY**. Running along world Z at a planet's equator produces almost zero `Vector Length XY` even if the gravity-tangent ground speed is 300 cm/s. World yaw or world-Z `Calculate Direction` likewise ceases to match the character's local movement frame. The original GIFs showed gait transitions while holding only W or S; the exact cause was subsequently verified in the supplied ABP graph and corrected as described above.
 
 Iteration 018 addresses a second suspected contributor: Orbit Gravity no longer applies a competing actor rotation when Orbit Controls is responsible for character facing, and Controls now parallel-transports its facing heading over curved surfaces. Orbit can optionally disable and restore native character rotation owners. The final orientation update runs on Character Movement's completed-movement delegate, rather than waiting for a separate late controls tick. These changes alone cannot correct an Animation Blueprint that consumes incompatible values.
 
@@ -55,7 +99,7 @@ Use the **game-thread Event Graph** rather than directly calling arbitrary Chara
 
 `FAnimNode_OrientationWarping` in UE 5.8 can accept a **world-space LocomotionDirection** or an angle calculated from an animation-local rotation frame. Where that is exposed, supply Orbit's **World Tangent Move Direction** or **Movement Direction Degrees**, respectively, accounting for mesh-to-actor facing offsets and the node's chosen Rotation Axis. Check warping evaluation mode and root-motion requirements; do not blindly supply both an angle and a direction if the node chooses one path. These are supported node interfaces, **not automatically wired by Orbit**.
 
-**E. Validate any orientation/stride warping separately.** Unreal's warping nodes or the template's locomotion graph may calculate direction internally from World Velocity, Controller Yaw, mesh root, or a fixed world Up. If the Blend Space and cached state are correct but legs still cross-step, inspect that portion of the AnimGraph next, especially whether Stride Warping still uses world-down gravity or Orientation Warping still receives world-yaw-derived direction. Depending on the chosen animation assets, warping may require a gravity-frame input, a custom node, or disabling warping as a **diagnostic**. Orbit 0.2.7 does **not** claim full Manny/Quinn warping compatibility or automatically modify warping nodes.
+**E. Validate any orientation/stride warping separately.** Unreal's warping nodes or the template's locomotion graph may calculate direction internally from World Velocity, Controller Yaw, mesh root, or a fixed world Up. If the Blend Space and cached state are correct but legs still cross-step, inspect that portion of the AnimGraph next, especially whether Stride Warping still uses world-down gravity or Orientation Warping still receives world-yaw-derived direction. Depending on the chosen animation assets, warping may require a gravity-frame input, a custom node, or disabling warping as a **diagnostic**. Orbit 0.2.11 does **not** claim full Manny/Quinn warping compatibility or automatically modify warping nodes.
 
 ## Practical Planet A + Sphere test
 
@@ -93,3 +137,7 @@ In v0.2.7 the debug arrows were incorrectly gated on active facing ownership. If
 ## v0.2.9 post-movement facing update and desired-heading debug
 
 The actor yaw remaining fixed while input and velocity were correct in v0.2.8 is treated separately from the Manny/Quinn animation graph problem. Orbit Controls now applies its final actor rotation in **every eligible PostUpdateWork tick**. The native movement callback only records arrival. Enable Draw Locomotion Debug and compare **cyan desired heading** to **yellow actual Actor Forward**; they should converge while holding W around a planet. Runtime read-only counters and angular errors appear on Orbit Character Controls. See `ITERATION_020.md`. Existing AnimBP world-XY locomotion or world-Up warping remains an independent integration task even after actor yaw works.
+
+## Scope of v0.2.13 physics diagnostics
+
+Center-of-mass gravity sampling, rigid-body near-contact support grace and physics rest debug apply to simulated physics components only. `Get Orbit Gravity Animation State`, the verified `ABP_Unarmed_Orbit` locomotion workflow, and gravity-relative jump data are unchanged.

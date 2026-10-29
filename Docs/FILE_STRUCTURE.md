@@ -42,3 +42,12 @@ Orbit/
 ```
 
 The module `OrbitMover` is packaged INSIDE `Orbit` and is not a separate `.uplugin`. It does not link or include Epic Mover. Epic Mover is optional at runtime, and can be enabled in the project when needed. All source is intended for UE 5.8.3. No engine source changes.
+
+## Iteration 022 additions
+
+- `Source/Orbit/Public/OrbitGravityAnimInstance.h`
+- `Source/Orbit/Private/OrbitGravityAnimInstance.cpp`
+- `Docs/Examples/ABP_UNARMED_ORBIT_VERIFIED_WORKFLOW.md`
+- `Docs/ITERATION_022.md`
+
+The pure gravity-relative vertical-speed function resides in existing `OrbitGravityFrame` and `OrbitBlueprintLibrary` source files. The single `Orbit.uplugin` now versions 0.2.11.

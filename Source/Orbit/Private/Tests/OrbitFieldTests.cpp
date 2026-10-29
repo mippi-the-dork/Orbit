@@ -1,5 +1,7 @@
 #include "OrbitGravityTypes.h"
 #include "OrbitCharacterControlsComponent.h"
+#include "OrbitGravityAnimInstance.h"
+#include "OrbitPhysicsRestMath.h"
 #include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1177,4 +1179,194 @@ bool FOrbitFacingVelocitySelectsChangingYawTest::RunTest(const FString& Paramete
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAnimationVerticalAxesTest,
+    "Orbit.Character.Animation.GravityVerticalSpeedAllAxes",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitAnimationVerticalAxesTest::RunTest(const FString& Parameters)
+{
+    const FVector Ups[] = {
+        FVector::UpVector, -FVector::UpVector,
+        FVector::ForwardVector, -FVector::ForwardVector,
+        FVector::RightVector, -FVector::RightVector,
+        FVector(0.3, -0.8, 0.5).GetSafeNormal()
+    };
+    for (const FVector& Up : Ups)
+    {
+        FVector TangentForward, TangentRight;
+        TestTrue(TEXT("Tangent basis is valid"),
+            FOrbitGravityFrame::MakeTangentBasis(Up, FVector::ForwardVector, TangentForward, TangentRight));
+        double VerticalSpeed = -1234.0;
+        TestTrue(TEXT("Vertical speed succeeds for arbitrary Up"),
+            FOrbitGravityFrame::CalculateGravityRelativeVerticalSpeed(
+                Up * 240.0 + TangentForward * 600.0, Up, VerticalSpeed));
+        TestTrue(TEXT("Rising velocity is +240 independent of world orientation"),
+            FMath::IsNearlyEqual(VerticalSpeed, 240.0, 0.001));
+        TestTrue(TEXT("Descending speed succeeds"),
+            FOrbitGravityFrame::CalculateGravityRelativeVerticalSpeed(
+                -Up * 150.0 + TangentRight * 500.0, Up, VerticalSpeed));
+        TestTrue(TEXT("Descending velocity is -150 even on planet underside"),
+            FMath::IsNearlyEqual(VerticalSpeed, -150.0, 0.001));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAnimationVerticalInvalidTest,
+    "Orbit.Character.Animation.GravityVerticalSpeedInvalidInput",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitAnimationVerticalInvalidTest::RunTest(const FString& Parameters)
+{
+    double VerticalSpeed = 987.0;
+    TestFalse(TEXT("Invalid zero Up is rejected"),
+        FOrbitGravityFrame::CalculateGravityRelativeVerticalSpeed(
+            FVector::UpVector * 100.0, FVector::ZeroVector, VerticalSpeed));
+    TestTrue(TEXT("Failure resets output to zero"), FMath::IsNearlyZero(VerticalSpeed));
+    const double Bad = std::numeric_limits<double>::quiet_NaN();
+    VerticalSpeed = 12.0;
+    TestFalse(TEXT("NaN velocity is rejected"),
+        FOrbitGravityFrame::CalculateGravityRelativeVerticalSpeed(
+            FVector(Bad, 0, 0), FVector::UpVector, VerticalSpeed));
+    TestTrue(TEXT("NaN failure also resets output"), FMath::IsNearlyZero(VerticalSpeed));
+    float BlueprintSpeed = 999.0f;
+    TestTrue(TEXT("Blueprint function gives positive speed on sideways planet"),
+        UOrbitBlueprintLibrary::CalculateOrbitGravityVerticalSpeed(
+            FVector(-220.0, 0.0, 300.0), FVector::ForwardVector, BlueprintSpeed));
+    TestTrue(TEXT("Blueprint returns expected signed motion"),
+        FMath::IsNearlyEqual(BlueprintSpeed, -220.0f, 0.001f));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAnimationInstanceDefaultsTest,
+    "Orbit.Character.Animation.NativeInstanceDefaults",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitAnimationInstanceDefaultsTest::RunTest(const FString& Parameters)
+{
+    const UOrbitGravityAnimInstance* Instance = GetDefault<UOrbitGravityAnimInstance>();
+    TestNotNull(TEXT("Orbit gravity AnimInstance CDO exists"), Instance);
+    if (!Instance) { return false; }
+    TestTrue(TEXT("Default ShouldMove ground speed threshold"),
+        FMath::IsNearlyEqual(Instance->OrbitMinGroundSpeed, 3.0f));
+    TestTrue(TEXT("Default ShouldMove acceleration threshold"),
+        FMath::IsNearlyEqual(Instance->OrbitMinAcceleration, 0.1f));
+    TestFalse(TEXT("Uninitialized sample should be invalid"), Instance->OrbitAnimationState.bValid);
+    TestTrue(TEXT("Default signed vertical motion is zero"),
+        FMath::IsNearlyZero(Instance->OrbitAnimationState.GravityRelativeVerticalSpeed));
+    return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSupportedDampingTest,
+    "Orbit.Physics.Rest.TangentialDamping", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSupportedDampingTest::RunTest(const FString& Parameters)
+{
+    const FVector GravityDown(0.0, 0.0, -1.0);
+    const FVector Velocity(120.0, -80.0, -50.0);
+    const FVector Lateral = OrbitPhysicsRestMath::TangentialVelocity(Velocity, GravityDown);
+    TestTrue(TEXT("Gravity normal component excluded"), Lateral.Equals(FVector(120.0, -80.0, 0.0), 0.0001));
+    const FVector Decel = OrbitPhysicsRestMath::TangentialDampingAcceleration(Velocity, GravityDown, 2.0);
+    TestTrue(TEXT("Damping opposes tangential travel only"), Decel.Equals(FVector(-240.0, 160.0, 0.0), 0.0001));
+    TestTrue(TEXT("Damping removes kinetic energy"), FVector::DotProduct(Decel, Velocity) < 0.0);
+    TestTrue(TEXT("Angular damping opposes spin"),
+        OrbitPhysicsRestMath::AngularDampingAcceleration(FVector(0.0, 0.0, 0.5), 2.0)
+            .Equals(FVector(0.0, 0.0, -1.0), 0.0001));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestAxisTest,
+    "Orbit.Physics.Rest.ArbitraryGravityAxes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestAxisTest::RunTest(const FString& Parameters)
+{
+    const FVector Directions[] = { FVector::ForwardVector, FVector::BackwardVector,
+        FVector::RightVector, FVector::LeftVector, FVector::UpVector, FVector::DownVector };
+    for (const FVector& Down : Directions)
+    {
+        const FVector Velocity = 50.0 * Down + 60.0 * FVector::CrossProduct(Down, FVector::UpVector);
+        const FVector Decel = OrbitPhysicsRestMath::TangentialDampingAcceleration(Velocity, Down, 1.5);
+        TestTrue(TEXT("Damping always perpendicular to gravity"),
+            FMath::Abs(FVector::DotProduct(Decel, Down)) < 0.0001);
+        TestTrue(TEXT("Strong contact motion fails gentle-contact gate"),
+            !OrbitPhysicsRestMath::IsGentleContact(Velocity, Down, 20.0));
+        TestTrue(TEXT("Slow normal motion passes gentle-contact gate"),
+            OrbitPhysicsRestMath::IsGentleContact(60.0 * FVector::CrossProduct(Down, FVector::UpVector), Down, 20.0));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestDisabledTest,
+    "Orbit.Physics.Rest.DisabledAndInvalid", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestDisabledTest::RunTest(const FString& Parameters)
+{
+    const FVector V(20.0, 40.0, 70.0);
+    TestTrue(TEXT("Zero damping never applies a deceleration"),
+        OrbitPhysicsRestMath::TangentialDampingAcceleration(V, FVector::DownVector, 0.0).IsNearlyZero());
+    TestTrue(TEXT("Negative damping is clamped to zero"),
+        OrbitPhysicsRestMath::AngularDampingAcceleration(V, -3.0).IsNearlyZero());
+    TestTrue(TEXT("Undefined gravity does not add surface damping"),
+        OrbitPhysicsRestMath::TangentialDampingAcceleration(V, FVector::ZeroVector, 3.0).IsNearlyZero());
+    TestTrue(TEXT("Undefined gravity cannot claim gentle supporting contact"),
+        !OrbitPhysicsRestMath::IsGentleContact(V, FVector::ZeroVector, 100.0));
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestSupportRadialTest,
+    "Orbit.Physics.Rest.RadialSupportAllLatitudes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestSupportRadialTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Point;
+    Field.Direction = EOrbitGravityDirection::Inward;
+    Field.Center = FVector(1200.0, -800.0, 450.0);
+    Field.Strength = 980.0;
+    const TArray<FVector> Directions = {
+        FVector::ForwardVector, -FVector::ForwardVector,
+        FVector::RightVector, -FVector::RightVector,
+        FVector::UpVector, -FVector::UpVector,
+        FVector(1.0, 1.0, 1.0).GetSafeNormal()
+    };
+    for (const FVector& Dir : Directions)
+    {
+        FVector Acceleration;
+        const FVector Position = Field.Center + Dir * 950.0;
+        TestTrue(TEXT("Point field evaluates off-origin and at equator"),
+            FOrbitFieldEvaluator::Evaluate(Field, Position, Acceleration));
+        const FVector Down = Acceleration.GetSafeNormal();
+        TestTrue(TEXT("Point gravity is radial at any latitude"),
+            Down.Equals(-Dir, 0.0001));
+        TestTrue(TEXT("Surface normal and gravity Up agree at any latitude"),
+            OrbitPhysicsRestMath::SupportUpAlignment(Down, Dir) > 0.9999);
+        const FVector Tangent = FVector::CrossProduct(Dir,
+            FMath::Abs(Dir.Z) < 0.9 ? FVector::UpVector : FVector::RightVector).GetSafeNormal();
+        const FVector Damp = OrbitPhysicsRestMath::TangentialDampingAcceleration(Tangent * 150.0, Down, 3.0);
+        TestTrue(TEXT("Damping never has a radial/world-down component"),
+            FMath::Abs(FVector::DotProduct(Damp, Dir)) < 0.0001);
+        TestTrue(TEXT("Damping always opposes tangential movement"),
+            FVector::DotProduct(Damp, Tangent) < 0.0);
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestContactGraceTest,
+    "Orbit.Physics.Rest.SupportGraceSafety", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestContactGraceTest::RunTest(const FString& Parameters)
+{
+    const FVector Position(1000.0, 0.0, 0.0);
+    const FVector Down(-1.0, 0.0, 0.0);
+    const FVector Up(1.0, 0.0, 0.0);
+    TestTrue(TEXT("Recent support tolerates very small normal drift"),
+        OrbitPhysicsRestMath::MayRetainSupport(Position + Up * 0.2,
+            Position, FVector::ZeroVector, Down, Up, 3.5, 5.0));
+    TestFalse(TEXT("Recent support cannot mask a lifted-off body"),
+        OrbitPhysicsRestMath::MayRetainSupport(Position + Up * 6.0,
+            Position, FVector::ZeroVector, Down, Up, 3.5, 5.0));
+    TestFalse(TEXT("Recent support cannot mask rapidly outward-travelling body"),
+        OrbitPhysicsRestMath::MayRetainSupport(Position + Up * 0.2,
+            Position, Up * 50.0, Down, Up, 3.5, 5.0));
+    TestFalse(TEXT("Recent support cannot be retained after direction reversal"),
+        OrbitPhysicsRestMath::MayRetainSupport(Position,
+            Position, FVector::ZeroVector, -Down, Up, 3.5, 5.0));
+    return true;
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

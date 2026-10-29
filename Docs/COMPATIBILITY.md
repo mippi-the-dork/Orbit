@@ -1,6 +1,6 @@
 # Orbit Compatibility and Validation Matrix
 
-**Plugin:** Orbit 0.2.4, Iteration 015  
+**Plugin:** Orbit 0.2.11, Iteration 022  
 **Engine target:** Unreal Engine 5.8.3  
 **Verification:** Source and documentation checks only; UE compilation, live simulation, and packaged game tests not yet performed.
 
@@ -81,3 +81,7 @@ An internal `OrbitMover` module (inside the **one Orbit plugin**) exposes a Move
 - Two overlapping Point Override fields at equal Priority now arbitrate by **nearest center**, irrespective of source registration order. Explicit higher Priority still wins and non-Point ties retain prior semantics. This is a gameplay behavior change: test existing maps relying on order-sensitive overlapping Point sources.
 - One-shot **Orient to Gravity** appears in the Level Editor actor context menu. It does not exist in cooked builds and does not change runtime gravity behavior.
 - Crossing the gravity boundary can still abruptly reverse Up, especially between opposing inward Point fields. No source hysteresis, blending or assisted transfer is yet available. Networking/deterministic simulation are not supported in this milestone.
+
+## Iteration 022 runtime evidence
+
+The user-confirmed semi-strafing animation correction is a **project Animation Blueprint integration result**, not proof of engine-wide animation compatibility. Their UE 5.8.3 `ABP_Unarmed_Orbit` now uses gravity-relative Speed and Direction and works when running on a ring, after incorrectly feeding the directional Blend Space from world XY. The new signed vertical speed, pure helper, and optional native AnimInstance parent are source-complete but not yet build/PIE validated. Jump transition behavior remains to be tested in the user project. Core Orbit gravity and optional Mover internals were not changed.

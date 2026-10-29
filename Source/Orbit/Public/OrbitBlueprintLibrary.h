@@ -73,6 +73,19 @@ struct ORBIT_API FOrbitGravityAnimationState
     UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
     float MovementDirectionDegrees = 0.0f;
 
+    /** Signed velocity along local gravity Up (cm/s). Positive = ascending, negative = descending.
+     *  Use this in jump transitions instead of world Velocity.Z. */
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    float GravityRelativeVerticalSpeed = 0.0f;
+
+    /** True when vertical velocity exceeds +1 cm/s, in any gravity direction. */
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bIsAscending = false;
+
+    /** True when vertical velocity is below -1 cm/s, in any gravity direction. */
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
+    bool bIsDescending = false;
+
     UPROPERTY(BlueprintReadOnly, Category="Orbit|Animation")
     float TangentAccelerationMagnitude = 0.0f;
 
@@ -185,6 +198,11 @@ public:
     UFUNCTION(BlueprintPure, Category="Orbit|Animation", meta=(DefaultToSelf="Character"))
     static FOrbitGravityAnimationState GetOrbitGravityAnimationState(const ACharacter* Character,
         float MinGroundSpeed = 3.0f, float MinAcceleration = 0.1f);
+
+    /** Pure signed vertical-speed calculation for custom transition rules and non-Character actors.
+     *  Requires a valid local gravity Up. + ascending, - descending; outputs 0 on failure. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Animation")
+    static bool CalculateOrbitGravityVerticalSpeed(FVector Velocity, FVector GravityUp, float& SignedVerticalSpeed);
 
     /** Convenient Character Blueprint call (no Orbit Controls component target pin). */
     UFUNCTION(BlueprintCallable, Category="Orbit|Controls|Input", meta=(DefaultToSelf="Character", DisplayName="Apply Orbit Gravity Relative Look"))
