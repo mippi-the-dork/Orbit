@@ -1,3 +1,12 @@
+## 0.2.17 - Iteration 028 - Packaging Hotfix 1
+
+- Fix a UE 5.8 Win64 `BuildPlugin` compile error in `Source/OrbitMover/Private/Tests/OrbitMoverTests.cpp`, `Orbit.Mover.MissingMoverSafe`.
+- Construct the test component with `NewObject<UOrbitMoverGravityComponent>()`, using the `NewObject` default transient outer. The prior explicit `GetTransientPackage()` required a complete `UPackage` type to convert to `UObject*` in this translation unit.
+- Include `UObject/UObjectGlobals.h` directly in the test translation unit instead of depending on transitive includes.
+- No runtime gravity, Mover behavior, reflected APIs, or physics diagnostic behavior changed. The release remains v0.2.17 / Iteration 028.
+
+**Validation:** Source and archive checks performed; UE 5.8.3 `BuildPlugin` packaging must be verified in a Windows UE installation.
+
 ## 0.2.17 - Iteration 028 - Curved-surface support evidence and recorder accuracy
 
 - Correct stale sleeping-body motion diagnostics: refresh speed and awake flag from current Chaos velocity when sampled, and refresh reflected read-only receiver values on the resting path.

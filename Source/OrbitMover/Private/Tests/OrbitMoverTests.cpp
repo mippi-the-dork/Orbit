@@ -49,6 +49,7 @@ bool FOrbitMoverDirectionTest::RunTest(const FString& Parameters)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OrbitMoverGravityComponent.h"
+#include "UObject/UObjectGlobals.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMoverMissingMoverSafeTest,
     "Orbit.Mover.MissingMoverSafe",
@@ -56,7 +57,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMoverMissingMoverSafeTest,
 bool FOrbitMoverMissingMoverSafeTest::RunTest(const FString& Parameters)
 {
     // No Epic Mover UObject instance is required to create and query this component.
-    UOrbitMoverGravityComponent* Adapter = NewObject<UOrbitMoverGravityComponent>(GetTransientPackage());
+    UOrbitMoverGravityComponent* Adapter = NewObject<UOrbitMoverGravityComponent>();
     TestNotNull(TEXT("Internal Orbit Mover adapter must be constructible without a Mover dependency"), Adapter);
     if (!Adapter) { return false; }
     Adapter->SetOrbitMoverGravityEnabled(false);
