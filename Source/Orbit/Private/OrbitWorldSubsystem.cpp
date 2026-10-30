@@ -4,6 +4,7 @@
 #include "OrbitGravitySourceComponent.h"
 #include "OrbitGravityReceiverComponent.h"
 #include "OrbitPhysicsRestMath.h"
+#include "OrbitMotionHistoryMath.h"
 #include "GameFramework/Actor.h"
 #include "Engine/EngineTypes.h"
 #include "CollisionQueryParams.h"
@@ -32,6 +33,13 @@ void UOrbitWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UOrbitWorldSubsystem::Deinitialize()
 {
+#if !UE_BUILD_SHIPPING
+    // Preserve an explicitly requested capture if PIE ends before the user runs Export.
+    if (!MotionHistoryRows.IsEmpty() && !bMotionHistoryExported)
+    {
+        ExportMotionHistory(TEXT("OrbitMotion_AutoPIEStop"));
+    }
+#endif
     RestoreBodyGravity();
     ActiveFields.Empty();
     Sources.Empty();
@@ -229,6 +237,22 @@ FVector UOrbitWorldSubsystem::GetGravityAcceleration(const FVector& WorldLocatio
     return SampleGravity(WorldLocation, Channel).Acceleration;
 }
 
+bool UOrbitWorldSubsystem::GetPhysicsBodyDiagnostics(
+    UPrimitiveComponent* Component, FOrbitPhysicsBodyDiagnostics& OutDiagnostics) const
+{
+    OutDiagnostics = FOrbitPhysicsBodyDiagnostics();
+    if (!IsValid(Component)) { return false; }
+    for (const FManagedBody& Body : ManagedBodies)
+    {
+        if (Body.Component.Get() == Component)
+        {
+            OutDiagnostics = Body.LastDiagnostics;
+            return OutDiagnostics.bValid;
+        }
+    }
+    return false;
+}
+
 bool UOrbitWorldSubsystem::HasManagedBody(const UPrimitiveComponent* Component) const
 {
     for (const FManagedBody& Body : ManagedBodies)
@@ -271,9 +295,25 @@ void UOrbitWorldSubsystem::DiscoverBodies()
         FManagedBody NewBody;
         NewBody.Component = Component;
         NewBody.bOriginalGravity = bNativeGravity;
+        NewBody.OriginalLinearDamping = Component->GetLinearDamping();
+        NewBody.OriginalAngularDamping = Component->GetAngularDamping();
         ManagedBodies.Add(NewBody);
         Component->SetEnableGravity(false);
     }
+}
+
+void UOrbitWorldSubsystem::RestoreBodyDamping(FManagedBody& Body)
+{
+    UPrimitiveComponent* Component = Body.Component.Get();
+    if (!Body.bNativeContactDampingApplied || !IsValid(Component) || !Component->IsRegistered())
+    {
+        Body.bNativeContactDampingApplied = false;
+        return;
+    }
+    // Restore the user's component configuration when contact ends or Orbit releases it.
+    Component->SetLinearDamping(Body.OriginalLinearDamping);
+    Component->SetAngularDamping(Body.OriginalAngularDamping);
+    Body.bNativeContactDampingApplied = false;
 }
 
 void UOrbitWorldSubsystem::RestoreBodyGravity()
@@ -283,6 +323,7 @@ void UOrbitWorldSubsystem::RestoreBodyGravity()
         UPrimitiveComponent* Component = Body.Component.Get();
         if (IsValid(Component) && Component->IsRegistered())
         {
+            RestoreBodyDamping(Body);
             Component->SetEnableGravity(Body.bOriginalGravity);
         }
     }
@@ -319,6 +360,19 @@ UOrbitWorldSubsystem::FRestSupportProbe UOrbitWorldSubsystem::ProbeSupportAlongG
             continue;
         }
         const double Alignment = OrbitPhysicsRestMath::SupportUpAlignment(Down, Hit.ImpactNormal);
+        ++Probe.BlockingCandidates;
+        if (Alignment < 0.70)
+        {
+            ++Probe.RejectedNormals;
+            if (Alignment > Probe.BestRejectedAlignment)
+            {
+                Probe.BestRejectedAlignment = Alignment;
+                Probe.BestRejectedNormal = Hit.ImpactNormal.GetSafeNormal();
+                Probe.BestRejectedImpact = Hit.ImpactPoint;
+                Probe.bBestRejectedStartedPenetrating = Hit.bStartPenetrating;
+                Probe.BestRejectedComponent = Hit.GetComponent();
+            }
+        }
         if (Alignment < BestAlignment) { continue; }
         BestAlignment = Alignment;
         Probe.bHit = true;
@@ -346,6 +400,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         }
         if (!Component->IsSimulatingPhysics() || Component->ComponentHasTag(IgnoreTag))
         {
+            RestoreBodyDamping(Body);
             Component->SetEnableGravity(Body.bOriginalGravity);
             ManagedBodies.RemoveAtSwap(Index);
             continue;
@@ -360,6 +415,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         {
             // An unmatched channel is never taken over by Orbit. Outside-field
             // objects also revert to native gravity when fallback is enabled.
+            RestoreBodyDamping(Body);
             Component->SetEnableGravity(Body.bOriginalGravity);
             ManagedBodies.RemoveAtSwap(Index);
             continue;
@@ -380,6 +436,32 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
             }
             else
             {
+                // Refresh read-only snapshots while sleeping; old values reflected the last
+                // awake frame even when Chaos had already zeroed the rigid body's velocities.
+                Body.bLastProbeAttempted = false;
+                Body.bLastFreshSupport = false;
+                Body.bLastGraceSupport = false;
+                Body.bLastRestCandidate = false;
+                Body.bLastGentleContact = false;
+                Body.LastProbe = FRestSupportProbe();
+                Body.LastNormalSpeedCmS = 0.0;
+                Body.LastProbeGraceSeconds = Body.SupportGraceRemaining;
+                Body.LastDiagnostics.bValid = true;
+                Body.LastDiagnostics.bBodyAwake = false;
+                Body.LastDiagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
+                Body.LastDiagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
+                Body.LastDiagnostics.bUsingNativeContactDamping = Body.bNativeContactDampingApplied;
+                Body.LastDiagnostics.DominantSourceId = Sample.DominantSourceId;
+                Body.LastDiagnostics.GravityAcceleration = Acceleration;
+                Body.LastDiagnostics.TangentialSpeed = OrbitMotionHistoryMath::CurrentTangentialSpeed(
+                    Component->GetPhysicsLinearVelocity(), Acceleration);
+                Body.LastDiagnostics.AngularSpeed = Component->GetPhysicsAngularVelocityInRadians().Size();
+                Body.LastDiagnostics.SupportState = TEXT("Sleeping (previous support sample)");
+                if (UOrbitGravityReceiverComponent* Receiver = (IsValid(Component->GetOwner()) ? Component->GetOwner()->FindComponentByClass<UOrbitGravityReceiverComponent>() : nullptr))
+                {
+                    Receiver->LastPhysicsBodyDiagnostics = Body.LastDiagnostics;
+                }
+                CaptureMotionHistory(Component, Body);
                 continue;
             }
         }
@@ -401,6 +483,13 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
             ? ProbeSupportAlongGravity(Component, Sample.Down, Settings->RestSupportProbeDistance)
             : FRestSupportProbe();
         const bool bFreshSupport = bGentle && Probe.bHit;
+        // Store the *existing* sweep's evidence so recording it performs no extra query.
+        Body.LastProbe = Probe;
+        Body.bLastProbeAttempted = bGentle;
+        Body.bLastRestCandidate = bRestCandidate;
+        Body.bLastGentleContact = bGentle;
+        Body.bLastFreshSupport = bFreshSupport;
+        Body.LastNormalSpeedCmS = FVector::DotProduct(LinearVelocity, Sample.Down.GetSafeNormal());
         bool bGraceSupport = false;
         const FVector BodyPosition = Component->GetCenterOfMass(NAME_None);
         if (bFreshSupport)
@@ -409,6 +498,8 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
             Body.LastSupportedLocation = BodyPosition;
             Body.LastSupportedUp = Sample.Up;
             Body.LastSupportNormal = Probe.Normal;
+            Body.LastSupportImpactPoint = Probe.ImpactPoint;
+            Body.bLastSupportStartedPenetrating = Probe.bStartedPenetrating;
             Body.LastSupportComponent = Probe.SupportComponent;
         }
         else
@@ -425,53 +516,56 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
             }
         }
         const bool bSupported = bFreshSupport || bGraceSupport;
+        Body.bLastGraceSupport = bGraceSupport;
+        Body.LastProbeGraceSeconds = Body.SupportGraceRemaining;
+
+        const FOrbitFieldDefinition* DominantField = ActiveFields.FindByPredicate(
+            [&Sample](const FOrbitFieldDefinition& Field) { return Field.SourceId == Sample.DominantSourceId; });
+        const FVector GravityUp = -Sample.Down.GetSafeNormal();
+        const UPrimitiveComponent* SupportComponent = bFreshSupport ? Probe.SupportComponent.Get() :
+            (bGraceSupport ? Body.LastSupportComponent.Get() : nullptr);
+        const FVector SupportNormal = bFreshSupport ? Probe.Normal : Body.LastSupportNormal;
+        const double NormalAlignment = bSupported ? OrbitPhysicsRestMath::SupportUpAlignment(
+            Sample.Down, SupportNormal) : 0.0;
+        const bool bMisaligned = bFreshSupport && NormalAlignment < 0.90;
+        const FColor SupportColor = bMisaligned ? FColor::Red :
+            (bFreshSupport ? FColor::Cyan : (bGraceSupport ? FColor::Blue : FColor(255, 165, 0)));
+
+        FOrbitPhysicsBodyDiagnostics& Diagnostics = Body.LastDiagnostics;
+        Diagnostics.bValid = true;
+        Diagnostics.SupportState = !bRestCandidate ? TEXT("Ineligible (check field and Orbit.NoRest)") :
+            (bMisaligned ? TEXT("Normal mismatch") : (bFreshSupport ? TEXT("Verified") :
+             (bGraceSupport ? TEXT("Query grace") : TEXT("Unsupported"))));
+        Diagnostics.bBodyAwake = true;
+        Diagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
+        Diagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
+        Diagnostics.DominantSourceId = Sample.DominantSourceId;
+        Diagnostics.GravityAcceleration = Acceleration;
+        Diagnostics.TangentialSpeed = OrbitPhysicsRestMath::TangentialVelocity(LinearVelocity, Sample.Down).Size();
+        Diagnostics.AngularSpeed = AngularVelocity.Size();
+        Diagnostics.bHasSupportNormal = bSupported;
+        Diagnostics.SupportUpNormalAlignment = NormalAlignment;
+        Diagnostics.bHasPointRadialAlignment = DominantField && DominantField->Shape == EOrbitGravityShape::Point;
+        Diagnostics.PointRadialAlignment = Diagnostics.bHasPointRadialAlignment ?
+            FVector::DotProduct(GravityUp, (BodyPosition - DominantField->Center).GetSafeNormal()) : 0.0;
+        Diagnostics.bHasSourceToSupportBoundsCenter = Diagnostics.bHasPointRadialAlignment && SupportComponent;
+        Diagnostics.SourceToSupportBoundsCenterCm = Diagnostics.bHasSourceToSupportBoundsCenter ?
+            FVector::Dist(DominantField->Center, SupportComponent->Bounds.Origin) : 0.0;
 
         if (Settings->bDrawPhysicsRestContactDebug && bRestCandidate)
         {
-            const FVector Start = BodyPosition;
-            const double NormalAlignment = OrbitPhysicsRestMath::SupportUpAlignment(
-                Sample.Down, bFreshSupport ? Probe.Normal : Body.LastSupportNormal);
-            // RED is reserved for a *verified* surface normal/gravity disagreement.
-            // AMBER means the support query failed; BLUE is a short remembered hit.
-            const bool bMisaligned = bFreshSupport && NormalAlignment < 0.90;
-            const FColor Color = bMisaligned ? FColor::Red :
-                (bFreshSupport ? FColor::Cyan :
-                 (bGraceSupport ? FColor::Blue : FColor(255, 165, 0)));
-            DrawDebugLine(GetWorld(), Start, Start + Sample.Down * 60.0,
-                Color, false, 0.0f, 0, 2.0f);
-            const FOrbitFieldDefinition* DominantField = ActiveFields.FindByPredicate(
-                [&Sample](const FOrbitFieldDefinition& Field) { return Field.SourceId == Sample.DominantSourceId; });
-            const FVector GravityUp = -Sample.Down.GetSafeNormal();
-            const double TangentSpeed = OrbitPhysicsRestMath::TangentialVelocity(
-                LinearVelocity, Sample.Down).Size();
-            FString CenterOffset = TEXT("n/a");
-            FString RadialAlignment = TEXT("n/a");
-            if (DominantField && DominantField->Shape == EOrbitGravityShape::Point)
-            {
-                // A single inward Point field should remain aligned to the planet
-                // radial normal at every latitude, including the equator.
-                const FVector RadialUp = (BodyPosition - DominantField->Center).GetSafeNormal();
-                RadialAlignment = FString::Printf(TEXT("%.3f"),
-                    FVector::DotProduct(GravityUp, RadialUp));
-                const UPrimitiveComponent* Support = bFreshSupport ? Probe.SupportComponent.Get() :
-                    Body.LastSupportComponent.Get();
-                if (Support)
-                {
-                    // Geometry bounds origin is more useful than an imported mesh's pivot.
-                    CenterOffset = FString::Printf(TEXT("%.1f cm"),
-                        FVector::Dist(DominantField->Center, Support->Bounds.Origin));
-                }
-            }
-            const FString Diagnostics = FString::Printf(
-                TEXT("Orbit rest: %s | source=%d | a=%.0f | tangent=%.1f | spin=%.2f | up-normal=%.2f | radial= %s | nativeG=%s (was %s) | center offset=%s"),
-                bMisaligned ? TEXT("NORMAL MISMATCH") :
-                    (bFreshSupport ? TEXT("verified") : (bGraceSupport ? TEXT("query grace") : TEXT("no support"))),
-                Sample.DominantSourceId, Sample.Magnitude, TangentSpeed, AngularVelocity.Size(),
-                NormalAlignment, *RadialAlignment,
-                Component->IsGravityEnabled() ? TEXT("ON") : TEXT("OFF"),
-                Body.bOriginalGravity ? TEXT("ON") : TEXT("OFF"), *CenterOffset);
-            DrawDebugString(GetWorld(), Start + GravityUp * 75.0, Diagnostics,
-                nullptr, Color, 0.0f, false, 0.85f);
+            DrawDebugLine(GetWorld(), BodyPosition, BodyPosition + Sample.Down * 60.0,
+                SupportColor, false, 0.12f, 0, 2.0f);
+            // Useful where the viewport draws labels, but not the sole diagnostic channel.
+            const FString Label = FString::Printf(
+                TEXT("Orbit %s | radial=%s%.3f | up-normal=%s%.3f | center=%s%.1fcm | nativeG=%s"),
+                *Diagnostics.SupportState,
+                Diagnostics.bHasPointRadialAlignment ? TEXT("") : TEXT("n/a "), Diagnostics.PointRadialAlignment,
+                Diagnostics.bHasSupportNormal ? TEXT("") : TEXT("n/a "), Diagnostics.SupportUpNormalAlignment,
+                Diagnostics.bHasSourceToSupportBoundsCenter ? TEXT("") : TEXT("n/a "),
+                Diagnostics.SourceToSupportBoundsCenterCm, Diagnostics.bNativeGravityEnabled ? TEXT("ON") : TEXT("OFF"));
+            DrawDebugString(GetWorld(), BodyPosition + GravityUp * 85.0,
+                Label, nullptr, SupportColor, 0.15f, true, 1.0f);
         }
 
         if (Settings->bStabilizeRestingRigidBodies && bSupported &&
@@ -483,6 +577,17 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
             {
                 Component->PutRigidBodyToSleep(NAME_None);
                 Body.StableSeconds = 0.0f;
+                Diagnostics.bBodyAwake = false;
+                Diagnostics.SupportState = TEXT("Sleeping after stable support");
+                Diagnostics.bUsingNativeContactDamping = Body.bNativeContactDampingApplied;
+                Diagnostics.TangentialSpeed = OrbitMotionHistoryMath::CurrentTangentialSpeed(
+                    Component->GetPhysicsLinearVelocity(), Acceleration);
+                Diagnostics.AngularSpeed = Component->GetPhysicsAngularVelocityInRadians().Size();
+                if (UOrbitGravityReceiverComponent* Receiver = (IsValid(Component->GetOwner()) ? Component->GetOwner()->FindComponentByClass<UOrbitGravityReceiverComponent>() : nullptr))
+                {
+                    Receiver->LastPhysicsBodyDiagnostics = Diagnostics;
+                }
+                CaptureMotionHistory(Component, Body);
                 continue;
             }
         }
@@ -493,22 +598,34 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
 
         if (bSupported && Settings->bDampSupportedRigidBodyMotion)
         {
-            // These are accelerations (not impulses). Do not scale by DeltaTime;
-            // Chaos integrates forces at its own simulation step. The tangential
-            // force cannot counteract inward gravity or erase vertical jump speed.
-            const FVector LateralDeceleration = OrbitPhysicsRestMath::TangentialDampingAcceleration(
-                LinearVelocity, Sample.Down, Settings->SupportedTangentialDamping);
-            if (!LateralDeceleration.IsNearlyZero())
+            // The former game-thread AddForce/AddTorque rest corrections switched
+            // on/off with support queries and could fight Chaos's contact solver.
+            // Set native damping only when support is established. Chaos integrates
+            // it with its physics updates; the original values are restored on exit.
+            // NOTE: native linear damping affects all velocity components, not only
+            // tangential motion. It is never enabled during unsupported flight.
+            const float DesiredLinear = OrbitPhysicsRestMath::NativeSupportedDamping(Body.OriginalLinearDamping, Settings->SupportedTangentialDamping);
+            const float DesiredAngular = OrbitPhysicsRestMath::NativeSupportedDamping(Body.OriginalAngularDamping, Settings->SupportedAngularDamping);
+            if (!Body.bNativeContactDampingApplied ||
+                !FMath::IsNearlyEqual(Component->GetLinearDamping(), DesiredLinear, 0.01f) ||
+                !FMath::IsNearlyEqual(Component->GetAngularDamping(), DesiredAngular, 0.01f))
             {
-                Component->AddForce(LateralDeceleration, NAME_None, true);
+                Component->SetLinearDamping(DesiredLinear);
+                Component->SetAngularDamping(DesiredAngular);
             }
-            const FVector SpinDeceleration = OrbitPhysicsRestMath::AngularDampingAcceleration(
-                AngularVelocity, Settings->SupportedAngularDamping);
-            if (!SpinDeceleration.IsNearlyZero())
-            {
-                Component->AddTorqueInRadians(SpinDeceleration, NAME_None, true);
-            }
+            Body.bNativeContactDampingApplied = true;
         }
+        else
+        {
+            RestoreBodyDamping(Body);
+        }
+        Diagnostics.bUsingNativeContactDamping = Body.bNativeContactDampingApplied;
+        if (UOrbitGravityReceiverComponent* Receiver = (IsValid(Component->GetOwner()) ? Component->GetOwner()->FindComponentByClass<UOrbitGravityReceiverComponent>() : nullptr))
+        {
+            Receiver->LastPhysicsBodyDiagnostics = Diagnostics;
+        }
+
+        CaptureMotionHistory(Component, Body);
 
         if (!Acceleration.IsNearlyZero())
         {
@@ -530,6 +647,7 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
     {
         if (!ManagedBodies.IsEmpty()) { RestoreBodyGravity(); }
         bNeedsInitialDiscovery = true;
+        if (bMotionHistoryRecording) { FinishMotionHistory(TEXT("Orbit physics integration disabled or no eligible sources")); }
         return;
     }
 
@@ -541,4 +659,40 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
         bNeedsInitialDiscovery = false;
     }
     ApplyPhysicsForces(DeltaTime);
+    if (bMotionHistoryRecording)
+    {
+        // A captured roster is fixed for this session. Removal of an individual body in
+        // all-body mode must not end recording of the other bodies.
+        if (!bMotionHistoryAllBodies &&
+            (MotionHistoryBodies.IsEmpty() || !MotionHistoryBodies[0].Component.IsValid() ||
+             !HasManagedBody(MotionHistoryBodies[0].Component.Get())))
+        {
+            FinishMotionHistory(TEXT("Target no longer managed by Orbit"));
+        }
+        else if (GetWorld()->GetTimeSeconds() - MotionHistoryStartTime >= MotionHistoryDuration)
+        {
+            FinishMotionHistory(TEXT("Duration reached"));
+        }
+        else if (bMotionHistoryAllBodies)
+        {
+            // Iterate only managed bodies; no O(captured x managed) lookups per tick.
+            bool bAnyStillManaged = false;
+            for (const FManagedBody& Body : ManagedBodies)
+            {
+                if (const int32* CaptureIndex = MotionHistoryBodyLookup.Find(Body.Component.Get()))
+                {
+                    if (MotionHistoryBodies.IsValidIndex(*CaptureIndex) &&
+                        MotionHistoryBodies[*CaptureIndex].Component.IsValid())
+                    {
+                        bAnyStillManaged = true;
+                        break;
+                    }
+                }
+            }
+            if (!bAnyStillManaged)
+            {
+                FinishMotionHistory(TEXT("No captured bodies remain managed by Orbit"));
+            }
+        }
+    }
 }

@@ -57,15 +57,18 @@ public:
     UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="1.0", Units="rad/s"))
     float RestAngularSpeed = 0.08f;
 
-    /** Apply friction-like drag only when a supported rigid body is near contact; leaves freely flying props unchanged. */
+    /** Set temporary native Chaos linear/angular damping on supported bodies.
+     *  Orbit restores their original component damping on contact exit.
+     *  Does NOT inject separate corrective AddForce/AddTorque calls. */
     UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(DisplayName="Damp Supported Rigid Body Motion"))
     bool bDampSupportedRigidBodyMotion = true;
 
-    /** Decay of movement along the surface, in inverse seconds. Higher values stop rolling spheres sooner. */
-    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="20.0", UIMin="0.0", UIMax="5.0"))
+    /** Native linear damping applied only while supported (acts on all velocity axes).
+     *  The property name is retained so existing project settings remain readable. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(DisplayName="Supported Linear Damping", ClampMin="0.0", ClampMax="20.0", UIMin="0.0", UIMax="5.0"))
     float SupportedTangentialDamping = 1.5f;
 
-    /** Angular deceleration while supported, in inverse seconds. Higher values stop slowly spinning cubes sooner. */
+    /** Native Chaos angular damping applied only while supported. */
     UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="20.0", UIMin="0.0", UIMax="6.0"))
     float SupportedAngularDamping = 2.0f;
 

@@ -1,11 +1,11 @@
 # Orbit: Components and Blueprint API Guide
 
-**Version:** Orbit v0.2.6, Iteration 017  
+**Version:** Orbit v0.2.17, Iteration 028  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Blueprint users, gameplay designers, and developers integrating Orbit into an Unreal project  
-**Source of truth:** Orbit v0.2.11 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
+**Source of truth:** Orbit v0.2.17 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
 
-This document describes **functionality present in the Orbit v0.2.6 source package**, not planned navigation, EQS, camera, or Chaos solver integrations.
+This document describes **implemented capabilities in the Orbit v0.2.17 source package**, not planned navigation, EQS, camera, or Chaos solver integrations.
 
 For the placeable Gravity Source Actor and the new embedded Gravity Source Component, its property settings, shape and vortex modes, visualization, and level setup examples, see [`GRAVITY_SOURCE_ACTOR.md`](GRAVITY_SOURCE_ACTOR.md).
 
@@ -157,6 +157,15 @@ It runs before native Character Movement, respects the Character's optional Rece
 - No automatic integration with arbitrary custom Pawn movement components.
 
 ---
+
+### Physics runtime diagnostics (Iteration 025)
+
+The optional **Orbit Gravity Receiver** also has transient read-only **Last Physics Body Diagnostics**, populated when automatic physics management processes one of its owner's simulating primitives. The Receiver still only changes gravity channels, not forces. If you attach it solely for diagnostics, leave Channel 0 enabled. Select the **PIE-spawned actor**, not the editor template, after ejecting with F8. For multiple simulated primitives on one Actor, the property represents the latest processed one; use **Orbit World Subsystem > Get Physics Body Diagnostics (Primitive Component)** to request the precise body. The Blueprint query returns `false` if no runtime managed sample exists. This supports real PIE inspection where `DrawDebugString` may be invisible. See [Iteration 025](ITERATION_025.md).
+
+### Physics Motion History (Iteration 028)
+
+The **Orbit World Subsystem** also exposes development-only C++ methods `StartMotionHistory(name, seconds, Hz)` and `StartAllMotionHistory(seconds, Hz)` plus `StopMotionHistory`, `ExportMotionHistory`, `ListMotionCaptureBodies`, and `GetMotionHistoryStatus`. These are **not Blueprint UFUNCTION nodes**. In PIE, `Orbit.Motion.StartAll 20 60` samples all currently managed rigid-body primitives and exports them in one CSV via `Orbit.Motion.Export <label>`. The roster is frozen on start, with a 256-body and 250,000-row bulk limit. CSV fields include live sleeping-state velocities, support-query evidence, effective damping, and sampled contact/sleep transition times. These diagnostics do not change simulation or query eligibility. See [Physics Motion History](PHYSICS_MOTION_HISTORY.md).
+
 
 ## 3. Orbit Gravity Receiver Component
 
@@ -509,15 +518,15 @@ Open **Project Settings > Plugins > Orbit**.
 | Rest Time | `0.65 s` | Required stable contact duration before supported slow bodies are put to sleep. |
 | Rest Linear Speed | `5 cm/s` | Maximum linear velocity for rest stabilization. |
 | Rest Angular Speed | `0.08 rad/s` | Maximum angular velocity for rest stabilization. |
-| Damp Supported Rigid Body Motion | On | Contact-only, friction-like damping for rolling/sleep-resistant simulated props. |
-| Supported Tangential Damping | `1.5 /s` | Opposes sideways-on-surface movement but leaves gravity-normal motion alone. |
-| Supported Angular Damping | `2.0 /s` | Opposes spin for gently supported bodies. |
+| Damp Supported Rigid Body Motion | On | Temporary native Chaos linear/angular damping while gently supported; original settings restored when unsupported. |
+| Supported Linear Damping (formerly Tangential) | `1.5 /s` | Compatibility property name; since v0.2.14 sets **native linear damping**, affecting all velocity axes during eligible support. |
+| Supported Angular Damping | `2.0 /s` | Temporary native Chaos angular damping for gently supported bodies. |
 | Rest Support Probe Distance | `3 cm` | Short sweep using the component's collision geometry, not its bounding sphere. |
 | Rest Max Normal Contact Speed | `75 cm/s` | Disables contact damping for fast falling/bouncing bodies. |
 | Rest Support Contact Grace Seconds | `0.08 s` | Retain only previously verified contact across a very brief sweep miss, with clearance/launch constraints. |
 | Draw Physics Rest Contact Debug | Off | Cyan verified / blue temporary grace / amber unsupported / red support normal mismatch; displays radial alignment and source-to-surface-center offset. |
 
-**Resting on planets:** If a cube slowly spins like a top or a small sphere rolls indefinitely, start with the new **Damp Supported Rigid Body Motion** setting (default On). Orbit applies sideways drag and angular deceleration only to gently supported static-mesh physics bodies; it does not damp flight. Bodies must have functional simple collision to be detected by the support sweep. If a sphere still rolls or settles at a particular latitude, enable **Draw Physics Rest Contact Debug**: inspect Point **radial** alignment and **center offset**, not just damping. A correctly centered Point/Inward field has no preferred equator. The contact probe may briefly miss as Chaos resolves physics; blue indicates a bounded remembered contact. Do not merely raise damping to conceal a center mismatch or competing force. See [Iteration 024](ITERATION_024.md).
+**Resting on planets:** If a cube slowly spins like a top or a small sphere rolls indefinitely, start with **Damp Supported Rigid Body Motion** (default On). As of v0.2.14, this applies *native Chaos linear and angular damping* while gentle contact is detected and restores original component values on contact exit. It no longer adds supplemental per-frame lateral forces and torques; this avoids one source of conflicting game-thread corrections. **Supported Linear Damping** (the former `SupportedTangentialDamping` setting) now maps to temporary native **linear** damping (all velocity axes), while Supported Angular Damping maps to native angular damping. It does not affect free flight. Bodies must have functional simple collision to be detected by the support sweep. If a sphere still rolls or settles at a particular latitude, enable **Draw Physics Rest Contact Debug**: inspect Point **radial** alignment and **center offset**, not just damping. A correctly centered Point/Inward field has no preferred equator. The contact probe may briefly miss as Chaos resolves physics; blue indicates a bounded remembered contact. Do not merely raise damping to conceal a center mismatch or competing force. See [Iteration 025](ITERATION_025.md).
 
 For a basic test, keep the first two enabled and leave the native physics cube's **Simulate Physics** and **Enable Gravity** checked. Orbit disables native gravity *while it owns* that body, to avoid applying world gravity twice, and restores the original state when management ends.
 
@@ -773,3 +782,19 @@ When debugging a Character with fixed gravity-relative yaw or missing debug arro
 `Orbit Character Controls` auto-activates when Face Movement Direction is enabled at BeginPlay, including pre-existing Blueprint component instances with saved Auto Activate off. Explicit runtime deactivation remains possible. `Facing Begin Play Activation Count` diagnoses this repair. `Orbit Character Controls` applies gravity-relative character facing **once per eligible `TG_PostUpdateWork` tick**, regardless of whether `OnCharacterMovementUpdated` broadcast. The callback is diagnostic only. Ownership accepts locally controlled or authoritative Characters; simulated proxies remain excluded. Native orientation flags are actively held off until ownership is released, when their previous settings are restored.
 
 `Draw Locomotion Debug` uses **white Up, blue requested input, green actual tangent velocity, cyan desired facing and yellow actual Actor Forward**. New visible instance-only BlueprintReadOnly properties: `Facing Post Movement Tick Count`, `Facing Update Attempt Count`, `Facing Heading Chosen Count`, `Facing Rotation Applied Count`, `Facing Rotation Rejected Count`, `Last Facing Application Status`, `Last Facing Target Error Degrees`, `Last Facing Applied Delta Degrees`, `Last Facing Remaining Error Degrees`, `Last Facing Rotation Drift Degrees`, `Last Desired Facing Direction`. Their meaning and PIE test workflow are in `ITERATION_020.md`. There are **no new Blueprint-callable functions** in this pass and the established total of 25 base nodes remains unchanged.
+
+### Orbit World Subsystem: Get Physics Body Diagnostics (v0.2.14)
+
+**Node:** `Get Physics Body Diagnostics`
+**Input:** `Component` (`Primitive Component`, for example a simulating Static Mesh)
+**Outputs:** `bool` (true when Orbit manages the component and has sampled it) and `FOrbitPhysicsBodyDiagnostics` (reflected struct).
+
+The struct exposes support status, body awake state, native gravity state, native supported-damping state, source ID, full gravity acceleration, tangent and angular speed, and optional Point radial alignment, support Up-normal alignment, and source-to-support-bounds-center offset. The three optional values have corresponding `Has...` booleans; a zero with `Has... == false` is *not* a measurement of zero.
+
+This diagnostic does not alter any gravity source or apply physics impulses. It supports PIE debugging even when `DrawDebugString` floating text is unavailable. See [Iteration 025](ITERATION_025.md).
+
+## Physics motion-history diagnostics (Iterations 026–027)
+
+Orbit World Subsystem contains a **C++/console-only** bounded diagnostic recorder for a selected managed simulated primitive **or all currently managed primitives**. **This does not introduce a Blueprint node or Actor Component.** The existing `Get Physics Body Diagnostics` Blueprint node and `Orbit Gravity Receiver` component's `Last Physics Body Diagnostics` property remain unchanged. Recording is independent of Receiver components and uses existing field and support measurements.
+
+Use `Orbit.Motion.List`, `Orbit.Motion.Start <unique-body-name> [seconds] [Hz]`, `Orbit.Motion.StartAll [seconds] [Hz]`, `Orbit.Motion.Status`, `Orbit.Motion.Stop` and `Orbit.Motion.Export [label]` during PIE. All-body captures share one CSV and have a 256-body/250,000-row limit; new bodies are not enrolled after capture start. Files are written in the project's `Saved/Orbit/MotionHistory` folder. The console commands are unavailable in Shipping builds. The recorder now refreshes sleeping-body speed from live velocity and reports both rejected and accepted support-query evidence without extra sweeps. It is not a Chaos contact-manifold/substep hook. See [PHYSICS_MOTION_HISTORY.md](PHYSICS_MOTION_HISTORY.md) for complete details.

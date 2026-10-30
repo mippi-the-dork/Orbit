@@ -1,3 +1,37 @@
+## 0.2.17 - Iteration 028 - Curved-surface support evidence and recorder accuracy
+
+- Correct stale sleeping-body motion diagnostics: refresh speed and awake flag from current Chaos velocity when sampled, and refresh reflected read-only receiver values on the resting path.
+- Annotate the existing support sweep with blocking-contact count, rejected-normal count, best rejected surface/geometry, and reasons for skipping or failing support. This adds **no extra sweeps** and changes no accepted contact, gravity, damping or sleep decisions.
+- Append 42 optional analysis fields to the previous 53-column interleaved CSV (95 total), retaining the earlier indices. Capture initial PIE time/body pose/motion/awake state, current settings/effective damping, per-body first sampled fresh support/sleep transitions and support state changes.
+- Three new pure automation tests (eight Motion History tests; previously five). Update Motion History and all three maintained API guides.
+
+**Validation:** Static source and CSV format-count checks only. Requires Unreal Engine 5.8.3 compilation, Automation Framework regression and one PIE export smoke test. Source-based support evidence is **not** a Chaos solver manifold or definitive collision-contact truth.
+
+## 0.2.16 - Iteration 027 - Record all managed physics bodies
+
+- Add `Orbit.Motion.StartAll` to record a frozen snapshot of all Orbit-managed simulated primitives; preserve single-body Start command and the original 49 CSV columns.
+- Capture independent body rate/velocity reversal histories; add stable roster identity, Actor labels, mesh paths and a shared 256-body/250k-row cap. Stream batched CSV writes.
+- Add two automated tests, update the three maintained plugin guides, and provide a test recipe for an 87-body planet scene. No physics-force, damping, sleeping, or Mover functional changes.
+
+**Validation:** Source/static checks only. UE 5.8.3 compilation and PIE CSV export not verified in this environment.
+
+## Orbit 0.2.15 | Iteration 026 | Physics Motion History
+
+- Added explicit single-body motion history via PIE/game-world console commands `Orbit.Motion.List`, `.Start`, `.Status`, `.Stop`, `.Export`, using a bounded in-memory buffer and UTF-8 CSV export in `Saved/Orbit/MotionHistory`.
+- Records game-thread motion, rigid-body center of mass, quaternion, linear/angular velocities, sampled gravity, dominant source center/ID, support-sweep state/normal/impact, source radial alignment, native gravity/damping/awake state, simple collision geometry counts, and significant tangential direction reversals.
+- Auto-export unexported captures on PIE world shutdown where possible. Filename labels are sanitized and exports are uniquely named. No capture by default; one targeted body per world; no gravity/force or solver changes.
+- Added three pure regression tests (`Orbit.Physics.MotionHistory.*`) and new `PHYSICS_MOTION_HISTORY.md` reference / controlled comparison procedure. Updated all three standing Orbit component/source/Mover references to accurately scope this feature.
+- Test count: 54 authored core plus 4 Mover tests. Static inspection and archive validation only; no local UE 5.8.3 compilation or PIE verification.
+
+## 0.2.14 - Iteration 025 - Native contact damping and runtime rigid-body diagnostics
+
+- Replaced game-thread supported-body corrective AddForce/AddTorque with native Chaos linear and angular damping. Original component damping is restored when contact is lost or Orbit stops managing it.
+- Maintains supported-contact eligibility and short grace; stops modifying damping every frame unless the desired value changes. **Supported Linear Damping** (the former `SupportedTangentialDamping` setting) now maps to supported native linear damping, not tangential-only acceleration; clearly documented change in semantics.
+- Exposes read-only runtime `FOrbitPhysicsBodyDiagnostics` via Orbit Gravity Receiver and `GetPhysicsBodyDiagnostics` on the world subsystem. In PIE the Receiver component on a simulated prop now displays radial alignment, support normal, source-to-support-center offset, native gravity/damping state, support status, and speeds; also queryable per primitive from Blueprint.
+- Makes viewport text less transient, while acknowledging it can be invisible in certain PIE setups. Debug line colors unchanged.
+- Two authored pure tests: native damping selection and diagnostic defaults. **51 core + 4 Mover** tests authored. Not a Chaos solver/substep rewrite; equator drift is not yet confirmed resolved.
+- Single plugin, all guides maintained. Static source checks only; UE 5.8.3 build and physics PIE tests required.
+
 ## 0.2.13 - Iteration 024 - Spherical rigid-body support diagnosis
 
 - Physics gravity now samples simulating rigid bodies at their actual physics center of mass, eliminating component-pivot offsets from automatic field evaluation and force application.

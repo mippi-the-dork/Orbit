@@ -1,14 +1,14 @@
 # Orbit: Gravity Source Actor Guide
 
-**Version:** Orbit v0.2.11, Iteration 022  
+**Version:** Orbit v0.2.17, Iteration 028  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Level designers, technical artists, Blueprint users and programmers  
 **Primary class:** `AOrbitGravitySource`  
-**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.11.
+**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.17.
 
 This is the guide to the **placeable Orbit Gravity Source Actor** and its properties. For the five base Orbit components, the Orbit Mover component and the corresponding Blueprint APIs, see [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md).
 
-This documents what Orbit v0.2.11 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
+This documents what Orbit v0.2.17 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
 
 ---
 
@@ -170,7 +170,9 @@ Use the spline-oriented directions **only with Spline shape**. For all other sha
 
 ### Resting simulated props on Point and Axis gravity surfaces
 
-Point/Inward and Axis/Inward can hold an ordinary simulated cube or sphere on curved geometry. A cube may retain tiny spin and a ball may roll for an unusually long time if custom gravity is injected every game frame and the Chaos solver never enters sleep. Under **Project Settings > Plugins > Orbit > Physics > Rest**, **Damp Supported Rigid Body Motion** applies contact-only tangential and angular damping (default 1.5 /s and 2.0 /s). It uses a short shape-based collision sweep, rather than bounding-sphere center-distance, to establish near-contact. This affects all eligible matching physics bodies, not the Point field itself. `Orbit.NoRest` on the simulated **Primitive Component** opts out. See [Iteration 023](ITERATION_023.md) for settings, debug lines, acceptance tests and solver limitations. Damping intentionally does not apply to airborne bodies.
+Point/Inward and Axis/Inward can hold an ordinary simulated cube or sphere on curved geometry. A cube may retain tiny spin and a ball may roll for an unusually long time if custom gravity is injected every game frame and the Chaos solver never enters sleep. Under **Project Settings > Plugins > Orbit > Physics > Rest**, **Damp Supported Rigid Body Motion** applies contact-only native linear and angular damping (default 1.5 /s and 2.0 /s). It uses a short shape-based collision sweep, rather than bounding-sphere center-distance, to establish near-contact. This affects all eligible matching physics bodies, not the Point field itself. `Orbit.NoRest` on the simulated **Primitive Component** opts out. See [Iteration 023](ITERATION_023.md) for settings, debug lines, acceptance tests and solver limitations. Damping intentionally does not apply to airborne bodies.
+
+**All-body diagnostic capture (Iterations 027–028):** In PIE, `Orbit.Motion.StartAll 20 60` records the current set of automatically managed rigid bodies under all compatible Gravity Sources, including their source IDs, gravity vectors and contact/sleep states. `Orbit.Motion.Export Planet_All` produces a single CSV to compare body behavior on curved surfaces. The current CSV additionally includes capture time, body starting state, first sampled support/sleep transitions and evidence from both accepted and rejected support sweep candidates. This observes the world subsystem, not this Source Actor, and does **not** apply additional forces or collision sweeps. See [Physics Motion History](PHYSICS_MOTION_HISTORY.md).
 
 ### 4.2 Vortex Physics Mode
 
@@ -585,6 +587,16 @@ Gravity Source Actor field evaluation, volumes, Priority, arbitration and source
 
 This iteration changes **animation data consumers only**, not Gravity Source Actor logic. `Get Orbit Gravity Animation State` continues reading native Character Movement gravity to form a local frame and now exposes signed vertical motion for Jump/Fall transitions. On a Sphere, Point, or inside a rotated Volume, use `Gravity Relative Vertical Speed > 100` for an ascending jump rather than testing world `Velocity.Z`. The user's confirmed fix for sideways locomotion is documented in `ANIMATION_INTEGRATION.md`.
 
+## Physics rest stability and runtime inspection (v0.2.14)
+
+Orbit v0.2.14 stops applying additional game-thread sideways forces and angular torques to supported simulated bodies. Contact eligibility instead temporarily raises the body's **native Chaos linear and angular damping**, restoring authored values when contact ends or Orbit releases the body. The old **Supported Linear Damping** setting now controls native **linear damping** and therefore affects full velocity while the body is supported, not only surface tangent. Actual gravitational acceleration is still applied with one `AddForce` from the game thread, not within the Chaos contact solver/substep callback.
+
+For inspectable runtime readings, add an **Orbit Gravity Receiver** to the physics prop Actor (default Channel 0 remains selected). After PIE and F8 eject, select the **spawned PIE Actor** and examine `Last Physics Body Diagnostics` on the Receiver. There you can read Point Radial Alignment, Support Up Normal Alignment, Source To Support Bounds Center Cm, Native Gravity Enabled, Using Native Contact Damping, the Dominant Source ID, and contact state. The world subsystem also exposes `Get Physics Body Diagnostics` for a specified Primitive Component. This is more reliable than debug floating text, which can be hidden by PIE viewports. A repeatable latitude attractor in centered Point gravity is not intentional and is not yet claimed solved. See [Iteration 025](ITERATION_025.md).
+
 ## Physics rest diagnostics (v0.2.13)
 
 For simulating static meshes on a sphere, Orbit evaluates Point/Inward physics gravity at each rigid body's **physics center of mass**, not the component pivot. An inward Point field should have no inherent world-Z equator preference. If balls drift toward a consistent location, check whether the Point source center matches the supporting sphere's bounds center, whether multiple fields influence the body, and whether Chaos/another Blueprint supplies additional forces. In **Project Settings > Plugins > Orbit > Physics > Rest**, enable **Draw Physics Rest Contact Debug**. Cyan = verified support; blue = transient missed sweep retaining a recent genuine hit; amber = no qualifying contact; red = surface-normal and gravity-Up mismatch. The debug string reports Point radial alignment, source-to-support bounds-center distance, and native Chaos gravity state. Full procedure: [Iteration 024](ITERATION_024.md).
+
+## Iteration 026: diagnosing a source's effect on resting physics
+
+The Gravity Source Actor's gameplay settings and Blueprint API are **unchanged**. A new world-level diagnostic recorder can capture how a simulated cube or sphere actually moves under a gravity source, including gravity acceleration, dominant source ID/center, radial source alignment, and supporting collision metadata. Recording targets an **Orbit-managed Primitive Component**, not the Gravity Source Actor itself. See [PHYSICS_MOTION_HISTORY.md](PHYSICS_MOTION_HISTORY.md) and [ITERATION_026.md](ITERATION_026.md). The recorder does not change source Strength, falloff, damping, or gravity blending.

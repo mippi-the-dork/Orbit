@@ -21,6 +21,12 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Channels")
     FOrbitGravityChannels GravityChannels;
 
+    /** Runtime status for the last simulated primitive processed on this actor.
+     *  For actors with multiple simulated primitives, query each one through the
+     *  Orbit World Subsystem Get Physics Body Diagnostics function instead. */
+    UPROPERTY(VisibleAnywhere, Transient, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    FOrbitPhysicsBodyDiagnostics LastPhysicsBodyDiagnostics;
+
     UFUNCTION(BlueprintPure, Category="Orbit|Channels")
     int32 GetGravityChannelMask() const { return static_cast<int32>(GravityChannels.ToMask()); }
 };

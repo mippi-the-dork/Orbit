@@ -1,6 +1,6 @@
 # Orbit: Mover Integration
 
-**Current Orbit version:** 0.2.11, Iteration 022  
+**Current Orbit version:** 0.2.17, Iteration 028  
 **Engine target:** Unreal Engine 5.8.3  
 **Scope:** Orbit functionality specific to Epic's Experimental Mover, not general Mover documentation.
 
@@ -137,3 +137,15 @@ v0.2.9 only changes the native `UOrbitCharacterControlsComponent` rotation appli
 ## Physics Rest Diagnostics (v0.2.13)
 
 Orbit's automatic simulated rigid-body gravity uses center-of-mass sampling and near-contact diagnostics in 0.2.13. **These changes do not alter Orbit's optional synchronous kinematic Mover adapter**, which does not use the rest-contact sweep or rigid-body damping settings. No new Chaos Mover support is implied.
+
+## Iteration 025 (v0.2.14) scope
+
+No OrbitMover source, reflected-function wiring, gravity overrides or adapter timing changed. The contact damping and rigid-body diagnostic changes apply only to the core Orbit automatic simulated-physics integration. Mover's synchronous kinematic adapter remains independently driven by its existing Orbit gravity sampling. See `ITERATION_025.md` for physics prop diagnostics; those are not Mover locomotion diagnostics.
+
+## Iteration 026: physics motion-history recorder scope
+
+Orbit's new `Orbit.Motion.*` console recorder operates only on **rigid bodies that the Orbit World Subsystem manages through automatic primitive gravity**. It is **not** a Mover or Chaos Mover trajectory recorder, and it does not alter either Mover integration or its input/rollback behavior. Existing Mover configuration, controls and limitations remain unchanged. See [PHYSICS_MOTION_HISTORY.md](PHYSICS_MOTION_HISTORY.md).
+
+## Iterations 027–028: multi-body motion capture and Mover scope
+
+`Orbit.Motion.StartAll [seconds] [Hz]` now records **all current Orbit-managed simulated physics primitives** (bounded at 256 bodies / 250,000 rows). Mover-driven Pawns are not automatically included unless a separate simulated primitive is independently managed by Orbit's rigid-body subsystem. Iteration 028 adds per-body support query evidence, current sleeping-state speeds and capture/transition timestamps, but it still traces only independent Orbit-managed simulated primitives. This command is **not** a Mover, Chaos Mover, prediction, or rollback trace. It changes neither Mover setup nor adapter timing. See [Physics Motion History](PHYSICS_MOTION_HISTORY.md).

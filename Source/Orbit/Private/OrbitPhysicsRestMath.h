@@ -25,6 +25,12 @@ namespace OrbitPhysicsRestMath
         return -AngularVelocity * FMath::Max(0.0, Rate);
     }
 
+    /** Native damping must never reduce the owner's original physics settings. */
+    inline float NativeSupportedDamping(float Original, float Supported)
+    {
+        return FMath::Max(FMath::Max(0.0f, Original), FMath::Max(0.0f, Supported));
+    }
+
     /** Frame-independent support direction check. No world-Z or world-XY projection. */
     inline double SupportUpAlignment(const FVector& GravityDown, const FVector& SupportNormal)
     {

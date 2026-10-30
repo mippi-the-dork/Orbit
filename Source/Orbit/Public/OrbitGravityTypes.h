@@ -178,6 +178,66 @@ struct ORBIT_API FOrbitGravitySample
     int32 DominantSourceId = INDEX_NONE;
 };
 
+/** Last measured physics contact/field state for one managed simulated primitive.
+ *  Runtime diagnostics, not a Chaos contact-manifold query. Each property reports
+ *  the game-thread snapshot that Orbit actually used for this body. */
+USTRUCT(BlueprintType)
+struct ORBIT_API FOrbitPhysicsBodyDiagnostics
+{
+    GENERATED_BODY()
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bValid = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    FString SupportState = TEXT("Not sampled");
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bBodyAwake = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bNativeGravityEnabled = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bOriginalNativeGravityEnabled = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bUsingNativeContactDamping = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    int32 DominantSourceId = INDEX_NONE;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    FVector GravityAcceleration = FVector::ZeroVector;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    double TangentialSpeed = 0.0;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    double AngularSpeed = 0.0;
+
+    /** 1 = gravity Up points exactly away from the source center. Only valid for Point fields. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    double PointRadialAlignment = 0.0;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bHasPointRadialAlignment = false;
+
+    /** 1 = gravity Up agrees with the supporting collision normal. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    double SupportUpNormalAlignment = 0.0;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bHasSupportNormal = false;
+
+    /** Source center versus the supporting collision component's world bounds origin. Approximate. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    double SourceToSupportBoundsCenterCm = 0.0;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bHasSourceToSupportBoundsCenter = false;
+};
+
 /** Effective, rotation-local Volume dimensions. Max Distance caps EACH relevant
  * shape dimension rather than intersecting the Volume with a world-space sphere.
  * Capsule HalfHeight includes the rounded end caps. */

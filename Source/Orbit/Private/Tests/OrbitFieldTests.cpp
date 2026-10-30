@@ -2,6 +2,7 @@
 #include "OrbitCharacterControlsComponent.h"
 #include "OrbitGravityAnimInstance.h"
 #include "OrbitPhysicsRestMath.h"
+#include "OrbitMotionHistoryMath.h"
 #include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -109,6 +110,39 @@ bool FOrbitFalloffGravityTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Inverse-square strength quarters at twice reference distance"), FMath::IsNearlyEqual(Force.Size(), 250.0, 0.001));
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryBulkBudgetTest,
+    "Orbit.Physics.MotionHistory.AllBodiesBudget", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryBulkBudgetTest::RunTest(const FString& Parameters)
+{
+    TestEqual(TEXT("87 bodies at 20 seconds / 60 Hz fit the bulk budget"),
+        OrbitMotionHistoryMath::BulkRowLimit(87, 20.0, 60), 104574);
+    TestEqual(TEXT("One body's budget is consistent with original sampler"),
+        OrbitMotionHistoryMath::BulkRowLimit(1, 20.0, 60), OrbitMotionHistoryMath::SampleLimit(20.0, 60));
+    TestEqual(TEXT("250k global cap limits dense scenes"),
+        OrbitMotionHistoryMath::BulkRowLimit(OrbitMotionHistoryMath::MaxCapturedBodies, 120.0, 120),
+        OrbitMotionHistoryMath::MaxBulkRows);
+    TestEqual(TEXT("Empty scene allocates no rows"),
+        OrbitMotionHistoryMath::BulkRowLimit(0, 20.0, 60), 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryCadenceTest,
+    "Orbit.Physics.MotionHistory.IndependentBodyCadence", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryCadenceTest::RunTest(const FString& Parameters)
+{
+    TestTrue(TEXT("New body receives its first snapshot even when other bodies were already sampled"),
+        OrbitMotionHistoryMath::ShouldCaptureSample(44.0, -1.0, 60));
+    TestFalse(TEXT("A body cannot capture twice during the same world tick"),
+        OrbitMotionHistoryMath::ShouldCaptureSample(44.0, 44.0, 60));
+    TestFalse(TEXT("A body cannot exceed its per-body sampling rate"),
+        OrbitMotionHistoryMath::ShouldCaptureSample(44.010, 44.0, 60));
+    TestTrue(TEXT("A separate body has an independent previous-sample timestamp"),
+        OrbitMotionHistoryMath::ShouldCaptureSample(44.010, 43.990, 60));
+    TestTrue(TEXT("Next sample allowed at configured interval"),
+        OrbitMotionHistoryMath::ShouldCaptureSample(44.017, 44.0, 60));
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1369,4 +1403,131 @@ bool FOrbitRestContactGraceTest::RunTest(const FString& Parameters)
             Position, FVector::ZeroVector, -Down, Up, 3.5, 5.0));
     return true;
 }
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitNativeContactDampingTest,
+    "Orbit.Physics.Rest.NativeContactDamping", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitNativeContactDampingTest::RunTest(const FString& Parameters)
+{
+    TestTrue(TEXT("Supported damping overrides smaller authored damping"),
+        FMath::IsNearlyEqual(OrbitPhysicsRestMath::NativeSupportedDamping(0.1f, 1.5f), 1.5f));
+    TestTrue(TEXT("Higher authored damping is preserved"),
+        FMath::IsNearlyEqual(OrbitPhysicsRestMath::NativeSupportedDamping(4.0f, 1.5f), 4.0f));
+    TestTrue(TEXT("Negative inputs cannot create negative Chaos damping"),
+        FMath::IsNearlyZero(OrbitPhysicsRestMath::NativeSupportedDamping(-1.0f, -3.0f)));
+    TestTrue(TEXT("Zero damping is permitted"),
+        FMath::IsNearlyZero(OrbitPhysicsRestMath::NativeSupportedDamping(0.0f, 0.0f)));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPhysicsBodyDiagnosticDefaultsTest,
+    "Orbit.Physics.Rest.DiagnosticsDefaults", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitPhysicsBodyDiagnosticDefaultsTest::RunTest(const FString& Parameters)
+{
+    const FOrbitPhysicsBodyDiagnostics Diagnostics;
+    TestFalse(TEXT("Unmeasured component cannot report valid runtime diagnostics"), Diagnostics.bValid);
+    TestFalse(TEXT("Unmeasured source has no radial alignment"), Diagnostics.bHasPointRadialAlignment);
+    TestFalse(TEXT("Unmeasured support has no measured normal"), Diagnostics.bHasSupportNormal);
+    TestFalse(TEXT("Unmeasured source has no surface-center offset"), Diagnostics.bHasSourceToSupportBoundsCenter);
+    TestFalse(TEXT("Unmanaged body has no Orbit native damping"), Diagnostics.bUsingNativeContactDamping);
+    TestTrue(TEXT("Default source is unset"), Diagnostics.DominantSourceId == INDEX_NONE);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryReversalTest,
+    "Orbit.Physics.MotionHistory.TangentialReversals", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryReversalTest::RunTest(const FString& Parameters)
+{
+    const FVector Down(1, 0, 0);
+    TestTrue(TEXT("Opposite tangential velocities count as a reversal"),
+        OrbitMotionHistoryMath::IsTangentialReversal(FVector(0, 4, 0), FVector(0, -3, 0), Down));
+    TestFalse(TEXT("Normal inward/outward reversal is not tangential reversal"),
+        OrbitMotionHistoryMath::IsTangentialReversal(FVector(5, 0, 0), FVector(-5, 0, 0), Down));
+    TestFalse(TEXT("Tiny Chaos jitters below 1 cm/s do not count"),
+        OrbitMotionHistoryMath::IsTangentialReversal(FVector(0, .2, 0), FVector(0, -.2, 0), Down));
+    TestFalse(TEXT("Continuous motion does not count"),
+        OrbitMotionHistoryMath::IsTangentialReversal(FVector(0, 4, 0), FVector(0, 3, 0), Down));
+    TestTrue(TEXT("Down may be any world axis"),
+        OrbitMotionHistoryMath::IsTangentialReversal(FVector(5, 0, 0), FVector(-5, 0, 0), FVector(0, 0, -1)));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryCsvTest,
+    "Orbit.Physics.MotionHistory.CsvEscaping", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryCsvTest::RunTest(const FString& Parameters)
+{
+    TestEqual(TEXT("CSV quotes strings and escapes embedded quote characters"),
+        OrbitMotionHistoryMath::CsvCell(TEXT("Object, \"A\"")), FString(TEXT("\"Object, \"\"A\"\"\"")));
+    TestEqual(TEXT("Export label is path-safe"),
+        OrbitMotionHistoryMath::SafeExportName(TEXT("../../Planet cube:1")), FString(TEXT("______Planet_cube_1")));
+    TestEqual(TEXT("Empty name gets a stable fallback"),
+        OrbitMotionHistoryMath::SafeExportName(TEXT("")), FString(TEXT("Capture")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryCurrentSpeedTest,
+    "Orbit.Physics.MotionHistory.LiveVelocityWhileSleeping", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryCurrentSpeedTest::RunTest(const FString& Parameters)
+{
+    const FVector Down(0.0, 0.0, -980.0);
+    TestTrue(TEXT("Awake tangential motion projects out gravity axis"), FMath::IsNearlyEqual(
+        OrbitMotionHistoryMath::CurrentTangentialSpeed(FVector(3, 4, 120), Down), 5.0, 0.001));
+    TestTrue(TEXT("Sleeping zero Chaos velocity does not retain prior awake speed"), FMath::IsNearlyZero(
+        OrbitMotionHistoryMath::CurrentTangentialSpeed(FVector::ZeroVector, Down)));
+    TestTrue(TEXT("No gravity direction uses full speed"), FMath::IsNearlyEqual(
+        OrbitMotionHistoryMath::CurrentTangentialSpeed(FVector(3, 4, 0), FVector::ZeroVector), 5.0, 0.001));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryProbeOutcomeTest,
+    "Orbit.Physics.MotionHistory.ProbeOutcomeEvidence", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryProbeOutcomeTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitMotionHistoryMath;
+    TestEqual(TEXT("Fresh aligned hit"), FString(ProbeOutcome(true, true, true, true, false, 1, 0.99)), FString(TEXT("Verified")));
+    TestEqual(TEXT("Fresh but misaligned hit remains supported by existing 0.70 threshold"),
+        FString(ProbeOutcome(true, true, true, true, false, 2, 0.78)), FString(TEXT("Verified (normal mismatch)")));
+    TestEqual(TEXT("Blocking hit rejected by normal"), FString(ProbeOutcome(true, true, true, false, false, 2, 0.0)),
+        FString(TEXT("Blocking hit rejected by normal")));
+    TestEqual(TEXT("Sweep found no blocking contact"), FString(ProbeOutcome(true, true, true, false, false, 0, 0.0)),
+        FString(TEXT("No qualifying blocking hit")));
+    TestEqual(TEXT("Grace from actual past contact"), FString(ProbeOutcome(true, true, true, false, true, 0, 0.0)),
+        FString(TEXT("Query miss (grace retained)")));
+    TestEqual(TEXT("Fast impact skips probe"), FString(ProbeOutcome(true, true, false, false, false, 0, 0.0)),
+        FString(TEXT("Normal impact too fast")));
+    TestEqual(TEXT("Sleeping body not probed"), FString(ProbeOutcome(false, false, false, false, false, 0, 0.0)),
+        FString(TEXT("Sleeping (no new probe)")));
+    TestEqual(TEXT("A body put to sleep after an accepted contact still records the probe"),
+        FString(ProbeOutcome(false, true, true, true, false, 1, 1.0)), FString(TEXT("Verified")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryTransitionTest,
+    "Orbit.Physics.MotionHistory.SampledContactSleepTransitions", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryTransitionTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitMotionHistoryMath;
+    TestTrue(TEXT("First new verified support is an event"), IsFirstVerifiedSupport(false, true));
+    TestFalse(TEXT("Query grace is not a first verified support"), IsFirstVerifiedSupport(false, false));
+    TestFalse(TEXT("Already-observed support is not a new event"), IsFirstVerifiedSupport(true, true));
+    TestFalse(TEXT("Already asleep at first capture is not a sleep transition"), IsSleepTransition(false, true, false));
+    TestTrue(TEXT("Awake to asleep is recorded once"), IsSleepTransition(true, true, false));
+    TestFalse(TEXT("Remaining asleep is not another transition"), IsSleepTransition(true, false, false));
+    TestFalse(TEXT("Waking is not a sleep transition"), IsSleepTransition(true, false, true));
+    TestTrue(TEXT("First observed sleep transition is marked"), IsFirstSleepTransition(false, true, true, false));
+    TestFalse(TEXT("Repeated sleep transitions cannot overwrite the first event"),
+        IsFirstSleepTransition(true, true, true, false));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMotionHistoryBoundsTest,
+    "Orbit.Physics.MotionHistory.BoundedCapture", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMotionHistoryBoundsTest::RunTest(const FString& Parameters)
+{
+    TestEqual(TEXT("20 seconds at 60Hz reserves bounded capture"), OrbitMotionHistoryMath::SampleLimit(20.0, 60), 1202);
+    TestEqual(TEXT("Maximum memory guard is bounded"), OrbitMotionHistoryMath::SampleLimit(120.0, 120), 14402);
+    TestEqual(TEXT("Zero capture sample bound"), OrbitMotionHistoryMath::SampleLimit(0.0, 0), 2);
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
