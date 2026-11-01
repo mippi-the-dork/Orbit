@@ -1,3 +1,36 @@
+## 0.2.21 | Iteration 032 | Character pressure isolation and controlled gravity comparison
+
+- Address reported Character Movement behavior when standing/jumping onto Orbit-simulated cubes. Added a selective Character Gravity component option to temporarily reduce the **additional native Character Movement standing force** only on a currently Orbit-managed simulated movement base, with author-value restoration on exit. Default extra standing force on Orbit bases is 0; ordinary impact/push/repulsion impulses are not disabled. This is an isolated mitigation requiring PIE validation, not proof of root cause.
+- Added optional **native world-gravity equivalence A/B** setting, default OFF and restricted to bodies originally using native gravity and effective field vectors matching `(0,0,WorldGravityZ)` within 1 cm/s². The native and Orbit AddForce paths are mutually exclusive. This is a flat-scene diagnostic, not spherical-gravity support or a Chaos callback backend.
+- Added `IsOrbitManagedPhysicsBody` C++ read-only helper and testable policy gates. Two new native Automation Framework tests (33 targeted across Physics Rest, Motion History, Mover, and Integration/Character Interaction). CSV remains 122 columns. New `Docs/ITERATION_032.md` documents the flat 2x2 comparison and planet/character tests.
+- Retains current substep-aware frame `AddForce` path. No unverified low-level Chaos simulation callback, no modified engine, no Probe. User validated Iteration 031 with 31/31 native tests and a full planet PIE capture; Iteration 032 requires UE 5.8.3 rebuild, automation, PIE, and packaging verification.
+
+## 0.2.20 | Iteration 031 | Recoverable resting and support-query cache
+
+- Recoverable manual-sleep suppression: after repeated immediate wakes, require sustained stable support and elapsed retry cooldown; grant a single probationary manual-sleep request, then return to suppression on failure. Native Chaos sleeping, field-change wakes, impulses and collisions remain unchanged.
+- Distinguish simple authored sphere collision from boxes/convex/compound shapes for rest position displacement: sphere envelope defaults to 1.0 cm, generic remains 0.25 cm. Both still require slow tangent/angular motion, stationary contact and bounded solver-normal velocity.
+- Short-lived confirmed side-obstruction cache (default 0.12 s) reduces redundant repeated support sweeps, but expires and invalidates on changed geometry/gravity and falls back to unfiltered queries if support disappears. This affects only the support query, not real physics collisions.
+- Append five motion-history CSV fields (122 total). Add four native Automation Framework tests for stable recovery, sphere geometry rest threshold, cache invalidation and deterministic multi-frame policy, 31 targeted tests expected.
+- Iteration 030 (27/27 targeted) and two 87-body PIE captures were verified by the user. Iteration 031 source/ZIP checks performed here; still requires UE 5.8.3 compile, Automation, PIE and BuildPlugin verification. No Probe dependency.
+
+## v0.2.19 | Iteration 030 | Native wake evidence and rest-episode control
+
+- Bound manual-sleep retries after repeated immediate wakeups. Following two failures per stable-contact episode, Orbit leaves sleep decisions to Chaos until sustained genuine movement/loss of support or an explicit field-change wake starts a new episode. The existing two-second cooldown remains.
+- Require a stationary position envelope while permitting small solver-normal velocities, with separate low tangent/angular speed and verified stable support requirements; does not cancel any gravity forces or alter native contact impulses.
+- Add at most two optional short support-query retries which exclude only rejected sideways blockers, preserving physical collision/stacking and the 0.70 support normal threshold. Default one retry, no extra query when the first sweep finds support.
+- Bind/unbind native component wake/sleep observers without changing the component's Generate Wake Events setting. Log/capture notifications when available, without claiming a notification identifies the actual wake cause. Event counters supplement per-frame awake-state comparisons.
+- Append 12 diagnostics to motion-history CSV (117 total); the first 105 columns are unchanged. Add three pure Automation Framework tests (`RepeatedWakeSuppression`, `StationarySolverVelocity`, `SideObstructionQualification`). 27 targeted tests expected; UE 5.8.3 rebuild, PIE outcomes and standalone BuildPlugin not yet verified for this pass.
+
+## Orbit 0.2.18 | Iteration 029 | Rest stability and moving support selection
+
+- Added a retry cooldown after an immediate wake following Orbit's manual rigid-body sleep request. Field-driven wakes remain permitted. The exact non-Orbit wake source is **not** identified by this game-thread code.
+- Manual sleep now requires fresh, continuous contact with the same support, low body speeds, and an effectively stationary supporting primitive. Brief query grace remains useful for damping but does not accumulate a new manual-sleep timer.
+- The existing single support sweep now prefers a stationary qualifying candidate over a moving candidate when their gravity-relative support-normal alignments are within 0.10; a clearly better-aligned contact may still win. No additional collision sweeps or custom impulses.
+- A fast-moving or fast-spinning simulated support no longer qualifies for Orbit's temporary native supported damping or manual sleep; physical Chaos contact, collision, and gravity continue normally. Static supports and slow stacked bodies retain eligibility. Settings: `RestWakeRetryCooldown` (2 s), `RestMaxMovingSupportSpeed` (5 cm/s), and `RestMaxMovingSupportAngularSpeed` (0.08 rad/s).
+- Added three editor console variables for capture beginning at first eligible body discovery during PIE: `Orbit.Motion.AutoStartAll`, `.AutoDuration`, `.AutoRate`. Capture continues to use the bounded 256-body / 250,000-row budget and existing auto-export safeguards.
+- Added ten appended CSV fields (105 total), covering moving support velocities, manual sleep requests, immediate subsequent wakes, field-change wakes, cooldown and continuous rest timer. Previous 95 fields retain their order.
+- Five new native Unreal Automation Framework math/eligibility tests (12 Rest, 8 Motion History, 4 Mover test cases in the targeted suites). Tests are source-authored; Unreal 5.8.3 compilation, standalone BuildPlugin packaging, runtime transitions and PIE capture remain unverified here. OrbitMover unchanged from Packaging Hotfix 1.
+
 ## 0.2.17 - Iteration 028 - Packaging Hotfix 1
 
 - Fix a UE 5.8 Win64 `BuildPlugin` compile error in `Source/OrbitMover/Private/Tests/OrbitMoverTests.cpp`, `Orbit.Mover.MissingMoverSafe`.

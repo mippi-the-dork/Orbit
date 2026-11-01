@@ -28,6 +28,13 @@ public:
     UFUNCTION(BlueprintCallable, Category="Orbit|Gravity|Runtime")
     void RefreshActiveSources();
 
+    /** Observes physics-dispatched sleep/wake notifications when the mesh has
+     *  Generate Wake Events enabled; not an authoritative classification. */
+    UFUNCTION()
+    void HandlePhysicsComponentWake(UPrimitiveComponent* WakingComponent, FName BoneName);
+    UFUNCTION()
+    void HandlePhysicsComponentSleep(UPrimitiveComponent* SleepingComponent, FName BoneName);
+
     void RegisterSource(AOrbitGravitySource* Source);
     void UnregisterSource(AOrbitGravitySource* Source);
     void RegisterSourceComponent(UOrbitGravitySourceComponent* Component);
@@ -56,6 +63,10 @@ public:
     /** Useful for simulating bodies; respects the owning actor's Receiver. */
     FOrbitGravitySample SampleGravityForComponent(const UPrimitiveComponent* Component, EOrbitGravityChannel Channel) const;
 
+    /** Read-only check for a simulated primitive currently controlled by Orbit physics.
+     *  Used to avoid modifying Character Movement's interactions with unrelated bodies. */
+    bool IsOrbitManagedPhysicsBody(const UPrimitiveComponent* Component) const;
+
     /** Retrieve measured, read-only runtime physics diagnostics for a single simulated primitive.
      *  Unlike transient viewport text, this is inspectable while paused in PIE.
      *  Requires that Orbit discovered and manages this primitive. */
@@ -82,8 +93,8 @@ public:
     int32 GetActiveSourceCount() const { return ActiveFields.Num(); }
 
 private:
-    /** Evidence from the same geometry sweep already used by the rest system.
-     *  Capturing rejected candidates is observation-only, not another sweep. */
+    /** Support-query results and optional bounded side-blocker retry evidence.
+     *  Diagnostics are sampled without issuing additional diagnostic sweeps. */
     struct FRestSupportProbe
     {
         bool bHit = false;
@@ -98,6 +109,12 @@ private:
         FVector BestRejectedImpact = FVector::ZeroVector;
         bool bBestRejectedStartedPenetrating = false;
         TWeakObjectPtr<UPrimitiveComponent> BestRejectedComponent;
+        bool bSecondarySweepAttempted = false;
+        bool bSecondarySweepFoundSupport = false;
+        // First ignored sideways component from an unfiltered sweep, if any.
+        TWeakObjectPtr<UPrimitiveComponent> RecoveredSideObstruction;
+        bool bCachedSideObstructionUsed = false;
+        bool bCachedSideObstructionFallback = false;
     };
 
     struct FManagedBody
@@ -128,6 +145,42 @@ private:
         bool bLastGentleContact = false;
         double LastNormalSpeedCmS = 0.0;
         float LastProbeGraceSeconds = 0.0f;
+        // Per-body manual sleep retry guard; field-change wakes remain distinct from
+        // external/Chaos wakes, whose exact source cannot be read from game-thread state.
+        bool bAwaitingManualSleepWake = false;
+        double LastManualSleepPIETime = -1.0;
+        double ManualSleepRetryAfter = 0.0;
+        bool bLastWokeAfterManualSleep = false;
+        bool bLastFieldChangeWake = false;
+        bool bLastManualSleepRequested = false;
+        TWeakObjectPtr<UPrimitiveComponent> PreviousStableRestSupport;
+        bool bLastStableSupportForRest = false;
+        bool bLastDynamicSupport = false;
+        double LastSupportContactVelocity = 0.0;
+        double LastSupportAngularVelocity = 0.0;
+        double LastRelativeSupportVelocity = 0.0;
+        float LastManualSleepCooldownLeft = 0.0f;
+        int32 ManualSleepFailureCount = 0;
+        bool bManualSleepSuppressed = false;
+        float UnstableRestSeconds = 0.0f;
+        float SuppressedStableSeconds = 0.0f;
+        int32 SuppressedRecoveryCount = 0;
+        float LastRestPositionBudget = 0.0f;
+        TWeakObjectPtr<UPrimitiveComponent> CachedSideObstruction;
+        TWeakObjectPtr<UPrimitiveComponent> CachedRecoveredSupport;
+        FVector CachedBodyPosition = FVector::ZeroVector;
+        FVector CachedBlockerPosition = FVector::ZeroVector;
+        FQuat CachedBlockerRotation = FQuat::Identity;
+        FVector CachedDown = FVector::ZeroVector;
+        double CachedSideObstructionExpiresAt = -1.0;
+        FVector RestAnchorPosition = FVector::ZeroVector;
+        bool bHasRestAnchor = false;
+        float RestAnchorDisplacement = 0.0f;
+        int32 NativeWakeEventCount = 0;
+        int32 NativeSleepEventCount = 0;
+        double LastNativeWakePIETime = -1.0;
+        double LastNativeSleepPIETime = -1.0;
+
     };
 
     struct FMotionHistoryRow
@@ -180,6 +233,34 @@ private:
         float ConfiguredAngularDamping = 0.0f;
         float ConfiguredProbeDistance = 0.0f;
         float ConfiguredMaxContactSpeed = 0.0f;
+        bool bDynamicSupport = false;
+        bool bStableSupportForRest = false;
+        double SupportContactSpeed = 0.0;
+        double SupportAngularSpeed = 0.0;
+        double RelativeSupportSpeed = 0.0;
+        bool bWokeAfterManualSleep = false;
+        bool bWokeForFieldChange = false;
+        bool bManualSleepRequested = false;
+        float ManualSleepCooldownLeft = 0.0f;
+        float StableRestSeconds = 0.0f;
+        int32 NativeWakeEventsTotal = 0;
+        int32 NativeSleepEventsTotal = 0;
+        bool bNativeWakeSinceLastSample = false;
+        bool bNativeSleepSinceLastSample = false;
+        double LastNativeWakePIETime = -1.0;
+        double LastNativeSleepPIETime = -1.0;
+        int32 ManualSleepFailureCount = 0;
+        bool bManualSleepSuppressed = false;
+        float UnstableRestSeconds = 0.0f;
+        float RestAnchorDisplacementCm = 0.0f;
+        bool bSecondarySweepAttempted = false;
+        bool bSecondarySweepFoundSupport = false;
+        float SuppressedStableSeconds = 0.0f;
+        int32 SuppressedRecoveryCount = 0;
+        float RestPositionBudgetCm = 0.0f;
+        bool bCachedSideObstructionUsed = false;
+        bool bCachedSideObstructionFallback = false;
+
     };
 
     struct FMotionHistoryBody
@@ -204,6 +285,8 @@ private:
         bool bHasPreviousSupport = false;
         FString PreviousSupportState;
         bool bSeenFreshSupport = false;
+        int32 PreviousNativeWakeEventCount = 0;
+        int32 PreviousNativeSleepEventCount = 0;
         double FirstVerifiedSupportPIETime = -1.0;
         double FirstSleepTransitionPIETime = -1.0;
     };
@@ -228,6 +311,7 @@ private:
     TArray<FManagedBody> ManagedBodies;
     float DiscoveryAccumulator = 0.0f;
     bool bNeedsInitialDiscovery = true;
+    bool bAutoMotionStartedThisWorld = false;
 
     bool BeginMotionHistory(const TArray<UPrimitiveComponent*>& Targets, bool bAllBodies, double DurationSeconds, int32 SamplesPerSecond);
     void CaptureMotionHistory(UPrimitiveComponent* Component, const FManagedBody& Body);
@@ -236,9 +320,10 @@ private:
     void UpdateSourceSnapshot();
     void DiscoverBodies();
     void ApplyPhysicsForces(float DeltaTime);
-    FRestSupportProbe ProbeSupportAlongGravity(UPrimitiveComponent* Component, const FVector& Down, float ProbeDistance) const;
+    FRestSupportProbe ProbeSupportAlongGravity(UPrimitiveComponent* Component, const FVector& Down, float ProbeDistance, UPrimitiveComponent* CachedSideBlocker = nullptr) const;
     void RestoreBodyGravity();
     void RestoreBodyDamping(FManagedBody& Body);
+    void UnbindBodyEvents(FManagedBody& Body);
     bool HasManagedBody(const UPrimitiveComponent* Component) const;
     uint8 GetReceiverChannelMask(const AActor* Owner) const;
     bool HasCompatiblePhysicsSource(uint8 ReceiverMask) const;

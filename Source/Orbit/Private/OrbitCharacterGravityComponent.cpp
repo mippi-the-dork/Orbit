@@ -4,6 +4,7 @@
 #include "OrbitCharacterControlsComponent.h"
 #include "OrbitWorldSubsystem.h"
 #include "OrbitSettings.h"
+#include "OrbitPhysicsIntegrationMath.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -40,9 +41,16 @@ void UOrbitCharacterGravityComponent::EndPlay(const EEndPlayReason::Type EndPlay
     {
         Character->OnCharacterMovementUpdated.RemoveDynamic(
             this, &UOrbitCharacterGravityComponent::OnCharacterMovementFinished);
+        RestoreOrbitBaseStandingLoad(Character->GetCharacterMovement());
         RestoreMovement(Character->GetCharacterMovement());
     }
     Super::EndPlay(EndPlayReason);
+}
+
+void UOrbitCharacterGravityComponent::Deactivate()
+{
+    RestoreOrbitBaseStandingLoad();
+    Super::Deactivate();
 }
 
 void UOrbitCharacterGravityComponent::RestoreMovement(UCharacterMovementComponent* Movement)
@@ -63,6 +71,15 @@ void UOrbitCharacterGravityComponent::OnCharacterMovementFinished(
     ACharacter* Character = Cast<ACharacter>(GetOwner());
     UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
     if (!Movement) { return; }
+    if (!IsActive())
+    {
+        RestoreOrbitBaseStandingLoad(Movement);
+        return;
+    }
+    // This delegate runs after movement updates the base; adjusting here can
+    // catch the first WALKING frame, before the native downward-force phase.
+    UpdateOrbitBaseStandingLoad(Movement, GetWorld() ?
+        GetWorld()->GetSubsystem<UOrbitWorldSubsystem>() : nullptr);
     if (Movement->IsMovingOnGround())
     {
         bHasBeenGrounded = true;
@@ -72,6 +89,8 @@ void UOrbitCharacterGravityComponent::OnCharacterMovementFinished(
     }
     if (!bHasBeenGrounded && Movement->IsFalling()) { ++PreFirstLandingChecks; }
     TryAssistNearFloorLanding(Movement);
+    UpdateOrbitBaseStandingLoad(Movement, GetWorld() ?
+        GetWorld()->GetSubsystem<UOrbitWorldSubsystem>() : nullptr);
 }
 
 void UOrbitCharacterGravityComponent::TryAssistNearFloorLanding(UCharacterMovementComponent* Movement)
@@ -193,15 +212,69 @@ void UOrbitCharacterGravityComponent::AlignCharacterToUp(const FVector& Up, floa
     }
 }
 
+void UOrbitCharacterGravityComponent::RestoreOrbitBaseStandingLoad(UCharacterMovementComponent* Movement)
+{
+    UCharacterMovementComponent* Owned = StandingLoadMovement.Get();
+    if (bLimitingOrbitBaseStandingLoad && IsValid(Owned))
+    {
+        // Do not overwrite a third-party system that has changed the setting
+        // since Orbit's last update. Restore only the value Orbit still owns.
+        if (FMath::IsNearlyEqual(Owned->StandingDownwardForceScale,
+            LastOrbitAppliedStandingDownwardForceScale, KINDA_SMALL_NUMBER))
+        {
+            Owned->StandingDownwardForceScale = SavedStandingDownwardForceScale;
+        }
+    }
+    bLimitingOrbitBaseStandingLoad = false;
+    StandingLoadMovement.Reset();
+}
+
+void UOrbitCharacterGravityComponent::UpdateOrbitBaseStandingLoad(
+    UCharacterMovementComponent* Movement, const UOrbitWorldSubsystem* Gravity)
+{
+    ACharacter* Character = Cast<ACharacter>(GetOwner());
+    UPrimitiveComponent* Base = Character ? Cast<UPrimitiveComponent>(Character->GetMovementBaseObject()) : nullptr;
+    const bool bShouldLimit = OrbitPhysicsIntegrationMath::ShouldLimitStandingForce(
+        bLimitStandingLoadOnOrbitBodies, bInsideOrbitField,
+        IsValid(Movement) && Movement->IsMovingOnGround(),
+        IsValid(Base) && Base->IsSimulatingPhysics(),
+        IsValid(Gravity) && IsValid(Base) && Gravity->IsOrbitManagedPhysicsBody(Base));
+    if (!bShouldLimit)
+    {
+        RestoreOrbitBaseStandingLoad(Movement);
+        return;
+    }
+    if (StandingLoadMovement.Get() != Movement)
+    {
+        RestoreOrbitBaseStandingLoad();
+    }
+    if (!bLimitingOrbitBaseStandingLoad)
+    {
+        SavedStandingDownwardForceScale = Movement->StandingDownwardForceScale;
+        StandingLoadMovement = Movement;
+        bLimitingOrbitBaseStandingLoad = true;
+    }
+    LastOrbitAppliedStandingDownwardForceScale = FMath::Max(0.0f, OrbitStandingDownwardForceScale);
+    Movement->StandingDownwardForceScale = LastOrbitAppliedStandingDownwardForceScale;
+}
+
 void UOrbitCharacterGravityComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
     ACharacter* Character = Cast<ACharacter>(GetOwner());
     UWorld* World = GetWorld();
-    if (!Character || !World) { return; }
+    if (!Character || !World || !IsActive())
+    {
+        RestoreOrbitBaseStandingLoad();
+        return;
+    }
     UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
     const UOrbitWorldSubsystem* Gravity = World->GetSubsystem<UOrbitWorldSubsystem>();
-    if (!Movement || !Gravity) { return; }
+    if (!Movement || !Gravity)
+    {
+        RestoreOrbitBaseStandingLoad(Movement);
+        return;
+    }
 
     const FOrbitGravitySample Sample = Gravity->SampleGravityForActorStable(
         Character, Character->GetActorLocation(), EOrbitGravityChannel::Character,
@@ -213,6 +286,7 @@ void UOrbitCharacterGravityComponent::TickComponent(float DeltaTime, ELevelTick 
     // Landing diagnostics are generated after CharacterMovement, not reset on pre-movement ticks.
     LastAppliedGravityScale = Movement->GravityScale;
     LastFieldAcceleration = bInsideOrbitField ? Sample.Acceleration : FVector::ZeroVector;
+    UpdateOrbitBaseStandingLoad(Movement, Gravity);
 
     if (!Sample.bHasInfluence)
     {

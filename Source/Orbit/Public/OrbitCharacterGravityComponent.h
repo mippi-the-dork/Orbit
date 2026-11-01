@@ -5,6 +5,7 @@
 #include "OrbitCharacterGravityComponent.generated.h"
 
 class UCharacterMovementComponent;
+class UOrbitWorldSubsystem;
 
 /** Optional bridge to UE 5.8 Character Movement custom gravity, strength and actor orientation.
  *  Does not modify camera, controller, animation or replicated movement prediction.
@@ -73,6 +74,24 @@ public:
         meta=(EditCondition="bEnableNearFloorLandingAssist", ClampMin="1.0", ClampMax="1500.0", UIMax="800.0", Units="cm/s"))
     float NearFloorMaxApproachSpeed = 600.0f;
 
+    /** Limit Character Movement's ADDITIONAL standing downward force while
+     *  Walking on an Orbit-managed simulating base. Collision impulses, normal
+     *  physics pushing, and the base's own gravity remain unchanged.
+     *  Does not alter non-Orbit rigid bodies or static world geometry. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Character|Physics Interaction")
+    bool bLimitStandingLoadOnOrbitBodies = true;
+
+    /** Scale used ONLY while standing on an Orbit-managed physics body.
+     *  Zero disables the extra Character Movement standing load (not collision).
+     *  The user's previous Character Movement value is restored when leaving. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Character|Physics Interaction",
+        meta=(EditCondition="bLimitStandingLoadOnOrbitBodies", ClampMin="0.0", ClampMax="2.0"))
+    float OrbitStandingDownwardForceScale = 0.0f;
+
+    /** True only while this component owns an override of the native setting. */
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Character|Debug")
+    bool bLimitingOrbitBaseStandingLoad = false;
+
     /** One-line readout of the LAST post-movement landing-assist decision. This is an
      *  observation aid, not a guarantee that a floor transition will be possible. */
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Character|Debug")
@@ -130,10 +149,16 @@ public:
 protected:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void Deactivate() override;
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
     bool bControllingMovement = false;
+    float SavedStandingDownwardForceScale = 1.0f;
+    float LastOrbitAppliedStandingDownwardForceScale = 0.0f;
+    TWeakObjectPtr<UCharacterMovementComponent> StandingLoadMovement;
+    void UpdateOrbitBaseStandingLoad(UCharacterMovementComponent* Movement, const UOrbitWorldSubsystem* Gravity);
+    void RestoreOrbitBaseStandingLoad(UCharacterMovementComponent* Movement = nullptr);
     int32 PreferredGravitySourceId = INDEX_NONE;
     bool bHasAlignedActor = false;
     bool bWarnedZeroWorldGravity = false;

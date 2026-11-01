@@ -2,6 +2,7 @@
 #include "OrbitCharacterControlsComponent.h"
 #include "OrbitGravityAnimInstance.h"
 #include "OrbitPhysicsRestMath.h"
+#include "OrbitPhysicsIntegrationMath.h"
 #include "OrbitMotionHistoryMath.h"
 #include <limits>
 
@@ -1530,4 +1531,309 @@ bool FOrbitMotionHistoryBoundsTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitManualSleepCooldownTest,
+    "Orbit.Physics.Rest.ManualSleepCooldown", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitManualSleepCooldownTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsRestMath;
+    TestTrue(TEXT("Next-tick wake qualifies as immediate"), IsImmediateManualSleepWake(1.0167, 1.0));
+    TestFalse(TEXT("Late wake does not imply sleep-cycle failure"), IsImmediateManualSleepWake(2.0, 1.0));
+    TestFalse(TEXT("Missing manual sleep timestamp is not a wake"), IsImmediateManualSleepWake(1.0, -1.0));
+    TestFalse(TEXT("Rest request is blocked during cooldown"),
+        MayRequestManualSleep(true, true, true, true, 1.1, 3.0));
+    TestTrue(TEXT("Rest request resumes when cooldown expires"),
+        MayRequestManualSleep(true, true, true, true, 3.0, 3.0));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMovingSupportTest,
+    "Orbit.Physics.Rest.MovingSupportGate", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMovingSupportTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsRestMath;
+    TestTrue(TEXT("Static sloped geometry remains a valid rest anchor"),
+        IsStableDynamicSupport(false, FVector(999, 0, 0), FVector(0, 1, 0), 5, .08));
+    TestTrue(TEXT("Slow stacked rigid bodies can support one another"),
+        IsStableDynamicSupport(true, FVector(1, 2, 0), FVector(0, 0, .03), 5, .08));
+    TestFalse(TEXT("Moving support cannot force sleeping"),
+        IsStableDynamicSupport(true, FVector(18, 0, 0), FVector::ZeroVector, 5, .08));
+    TestFalse(TEXT("Rotating support cannot force sleeping"),
+        IsStableDynamicSupport(true, FVector::ZeroVector, FVector(0, .20, 0), 5, .08));
+    TestFalse(TEXT("Support grace alone never triggers manual sleep"),
+        MayRequestManualSleep(false, true, true, true, 10, 0));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestContactContinuityTest,
+    "Orbit.Physics.Rest.ConsistentContact", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestContactContinuityTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsRestMath;
+    TestFalse(TEXT("Changed support component restarts stable timer"),
+        MayRequestManualSleep(true, true, false, true, 10, 0));
+    TestFalse(TEXT("High body speed cannot manually sleep"),
+        MayRequestManualSleep(true, true, true, false, 10, 0));
+    TestFalse(TEXT("Moving dynamic support is ineligible"),
+        MayRequestManualSleep(true, false, true, true, 10, 0));
+    TestTrue(TEXT("Steady contact with same component is eligible"),
+        MayRequestManualSleep(true, true, true, true, 10, 0));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSupportCandidateSelectionTest,
+    "Orbit.Physics.Rest.SupportCandidateSelection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSupportCandidateSelectionTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsRestMath;
+    TestTrue(TEXT("First qualifying dynamic contact may be selected"),
+        PreferSupportCandidate(.81, false, .70, false, false));
+    TestTrue(TEXT("Near-equal stationary ground outranks moving neighbor"),
+        PreferSupportCandidate(.79, true, .81, false, true));
+    TestFalse(TEXT("Moving neighbor does not replace near-equal stationary floor"),
+        PreferSupportCandidate(.82, false, .79, true, true));
+    TestTrue(TEXT("Substantially better-aligned moving contact may still win"),
+        PreferSupportCandidate(.98, false, .79, true, true));
+    TestFalse(TEXT("Upright wall does not qualify as floor"),
+        PreferSupportCandidate(.2, true, .70, false, false));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitMovingSupportAxesTest,
+    "Orbit.Physics.Rest.MovingSupportArbitraryAxes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitMovingSupportAxesTest::RunTest(const FString& Parameters)
+{
+    for (const FVector& Down : {FVector::ForwardVector, FVector::RightVector, FVector::DownVector,
+        FVector(0.3, -0.4, 0.5).GetSafeNormal()})
+    {
+        const FVector SupportUp = -Down;
+        TestTrue(TEXT("Normal check remains gravity-relative on every axis"),
+            OrbitPhysicsRestMath::SupportUpAlignment(Down, SupportUp) > .999);
+        TestTrue(TEXT("Stationary dynamic support remains eligible for any gravity axis"),
+            OrbitPhysicsRestMath::IsStableDynamicSupport(true, FVector::ZeroVector,
+                FVector::ZeroVector, 5, .08));
+        TestFalse(TEXT("Moving dynamic support in gravity direction remains ineligible"),
+            OrbitPhysicsRestMath::IsStableDynamicSupport(true, Down * 20,
+                FVector::ZeroVector, 5, .08));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestRepeatedWakeSuppressionTest,
+    "Orbit.Physics.Rest.RepeatedWakeSuppression", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestRepeatedWakeSuppressionTest::RunTest(const FString& Parameters)
+{
+    int32 Failures = OrbitPhysicsRestMath::NextManualSleepFailureCount(0, true, 2);
+    TestEqual(TEXT("One fast wake does not exhaust retries"), Failures, 1);
+    TestFalse(TEXT("One failure is not suppressed"), OrbitPhysicsRestMath::SuppressManualSleep(Failures, 2));
+    Failures = OrbitPhysicsRestMath::NextManualSleepFailureCount(Failures, true, 2);
+    TestTrue(TEXT("Two failures stop Orbit manual sleeping"), OrbitPhysicsRestMath::SuppressManualSleep(Failures, 2));
+    TestEqual(TEXT("Failure count is capped"), OrbitPhysicsRestMath::NextManualSleepFailureCount(Failures, true, 2), 2);
+    TestFalse(TEXT("One frame is insufficient to rearm"), OrbitPhysicsRestMath::ShouldRearmManualSleep(true, .02, .5));
+    TestTrue(TEXT("Sustained departure allows another episode"), OrbitPhysicsRestMath::ShouldRearmManualSleep(true, .51, .5));
+    TestFalse(TEXT("Not suppressed never requests rearm"), OrbitPhysicsRestMath::ShouldRearmManualSleep(false, 10., .5));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestStationaryNormalVelocityTest,
+    "Orbit.Physics.Rest.StationarySolverVelocity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestStationaryNormalVelocityTest::RunTest(const FString& Parameters)
+{
+    const FVector Position(123.0, -456.0, 70.0);
+    for (const FVector Down : {FVector::DownVector, FVector::RightVector, FVector::ForwardVector})
+    {
+        const FVector StableVelocity = Down * -9.0;
+        TestTrue(TEXT("Stationary 9cm/s solver-normal velocity is eligible at any gravity axis"),
+            OrbitPhysicsRestMath::IsStationaryRestCandidate(StableVelocity, FVector::ZeroVector,
+                Down, Position, Position + Down * 0.01, 5, .08, 15, .25));
+        TestFalse(TEXT("True displacement rejects apparently slow stationary contact"),
+            OrbitPhysicsRestMath::IsStationaryRestCandidate(StableVelocity, FVector::ZeroVector,
+                Down, Position, Position + Down * 2, 5, .08, 15, .25));
+        TestFalse(TEXT("Fast normal motion cannot be slept even with steady position sample"),
+            OrbitPhysicsRestMath::IsStationaryRestCandidate(Down * 90, FVector::ZeroVector,
+                Down, Position, Position, 5, .08, 15, .25));
+        TestFalse(TEXT("Fast tangential movement cannot be slept"),
+            OrbitPhysicsRestMath::IsStationaryRestCandidate(Down * 9 + FVector::CrossProduct(Down, FVector(1,2,3)).GetSafeNormal() * 20,
+                FVector::ZeroVector, Down, Position, Position, 5, .08, 15, .25));
+        TestFalse(TEXT("Spinning body cannot be slept"),
+            OrbitPhysicsRestMath::IsStationaryRestCandidate(StableVelocity, FVector(0,0,1),
+                Down, Position, Position, 5, .08, 15, .25));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestSideObstructionQualificationTest,
+    "Orbit.Physics.Rest.SideObstructionQualification", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestSideObstructionQualificationTest::RunTest(const FString& Parameters)
+{
+    const FVector Down(0,0,-1);
+    TestTrue(TEXT("True floor normal accepted"), OrbitPhysicsRestMath::SupportUpAlignment(Down, FVector::UpVector) >= .7);
+    TestTrue(TEXT("Side obstruction rejected"), OrbitPhysicsRestMath::SupportUpAlignment(Down, FVector::ForwardVector) < .7);
+    TestTrue(TEXT("Arbitrary axis support accepted"), OrbitPhysicsRestMath::SupportUpAlignment(FVector(0,-1,0), FVector(0,1,0)) >= .7);
+    TestFalse(TEXT("Side obstruction never masquerades as stable support"),
+        OrbitPhysicsRestMath::PreferSupportCandidate(0.0125, true, .7, false, false));
+    TestTrue(TEXT("Side rejection may trigger one bounded retry"),
+        OrbitPhysicsRestMath::ShouldRetrySupportProbe(false, true, 0, 1));
+    TestFalse(TEXT("Found floor disables retry"),
+        OrbitPhysicsRestMath::ShouldRetrySupportProbe(true, true, 0, 1));
+    TestFalse(TEXT("No rejected side contact disables retry"),
+        OrbitPhysicsRestMath::ShouldRetrySupportProbe(false, false, 0, 1));
+    TestFalse(TEXT("Second pass cannot exceed default retry budget"),
+        OrbitPhysicsRestMath::ShouldRetrySupportProbe(false, true, 1, 1));
+    TestFalse(TEXT("Zero configured retries disables extra queries"),
+        OrbitPhysicsRestMath::ShouldRetrySupportProbe(false, true, 0, 0));
+    TestFalse(TEXT("Extra queries are capped at two"),
+        OrbitPhysicsRestMath::ShouldRetrySupportProbe(false, true, 2, 500));
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitStableSleepRecoveryTest,
+    "Orbit.Physics.Rest.StableSuppressionRecovery", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitStableSleepRecoveryTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsRestMath;
+    TestFalse(TEXT("Early stable interval must not recover"),
+        ShouldRecoverSuppressedSleep(true, true, 5.9, 6.0, 12.0, 11.0));
+    TestFalse(TEXT("Unstable body must not recover even after time expires"),
+        ShouldRecoverSuppressedSleep(true, false, 12.0, 6.0, 15.0, 10.0));
+    TestFalse(TEXT("Cooldown must complete independently of stable interval"),
+        ShouldRecoverSuppressedSleep(true, true, 7.0, 6.0, 10.0, 12.0));
+    TestTrue(TEXT("Sustained contact with elapsed cooldown recovers"),
+        ShouldRecoverSuppressedSleep(true, true, 6.0, 6.0, 12.0, 12.0));
+    TestFalse(TEXT("Not suppressed must not recover"),
+        ShouldRecoverSuppressedSleep(false, true, 20.0, 6.0, 20.0, 0.0));
+    TestEqual(TEXT("Recovered episode allows one probation attempt"), ProbationaryFailureCount(2), 1);
+    TestEqual(TEXT("Immediate failure exhausts probation"), NextManualSleepFailureCount(ProbationaryFailureCount(2), true, 2), 2);
+    TestEqual(TEXT("Single-failure configuration remains bounded"), ProbationaryFailureCount(1), 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSimpleSphereRestEnvelopeTest,
+    "Orbit.Physics.Rest.SphereRestEnvelope", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSimpleSphereRestEnvelopeTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsRestMath;
+    const FVector P(0, 0, 0);
+    const FVector Q(0.0, 0.6, 0.0);
+    for (const FVector Down : {FVector::DownVector, FVector::ForwardVector, FVector::RightVector})
+    {
+        TestEqual(TEXT("Box budget unchanged"), RestDisplacementBudget(false, .25f, 1.f), .25f);
+        TestEqual(TEXT("Simple sphere gets independent budget"), RestDisplacementBudget(true, .25f, 1.f), 1.f);
+        TestFalse(TEXT("Generic body drift is rejected"), IsStationaryRestCandidate(
+            FVector(0, 0.5, 0), FVector::ZeroVector, Down, Q, P, 5, .08, 15, .25));
+        TestTrue(TEXT("Slow supported sphere within bounded envelope remains eligible"), IsStationaryRestCandidate(
+            FVector(0, 0.5, 0), FVector::ZeroVector, Down, Q, P, 5, .08, 15, 1.0));
+        TestFalse(TEXT("Large rolling displacement still rejected"), IsStationaryRestCandidate(
+            FVector::ZeroVector, FVector::ZeroVector, Down, FVector(0,2.0,0), P, 5, .08, 15, 1.0));
+        TestFalse(TEXT("Fast spinning sphere still ineligible"), IsStationaryRestCandidate(
+            FVector::ZeroVector, FVector(0,0,0.5), Down, Q, P, 5, .08, 15, 1.0));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSideObstructionCacheTest,
+    "Orbit.Physics.Rest.BoundedObstructionCache", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSideObstructionCacheTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsRestMath;
+    const FVector Pos(10,20,30), Blocker(20,20,30), Down = FVector::DownVector;
+    auto Eligible = [&](double Time, const FVector& BodyPos, const FVector& ObPos, const FVector& NewDown)
+    {
+        return MayUseCachedSideObstruction(true, true, Time, 3.12, BodyPos, Pos, ObPos, Blocker,
+            FQuat::Identity, FQuat::Identity, NewDown, Down);
+    };
+    TestTrue(TEXT("Confirmed stable side obstruction can bypass briefly"), Eligible(3.02, Pos, Blocker, Down));
+    TestFalse(TEXT("Expired cache refreshes real geometry"), Eligible(3.12, Pos, Blocker, Down));
+    TestFalse(TEXT("Moved body invalidates cache"), Eligible(3.02, Pos+FVector(0,1,0), Blocker, Down));
+    TestFalse(TEXT("Moved blocking object invalidates cache"), Eligible(3.02, Pos, Blocker+FVector(1,0,0), Down));
+    TestFalse(TEXT("Changed gravity direction invalidates cache"), Eligible(3.02, Pos, Blocker, FVector::RightVector));
+    TestFalse(TEXT("Rotated blocker invalidates cache"), MayUseCachedSideObstruction(true, true, 3.02, 3.12,
+        Pos, Pos, Blocker, Blocker, FQuat(FVector::UpVector, .2), FQuat::Identity, Down, Down));
+    TestFalse(TEXT("Missing blocker must not bypass"), MayUseCachedSideObstruction(false, true, 3.02, 3.12, Pos, Pos, Blocker, Blocker, FQuat::Identity, FQuat::Identity, Down, Down));
+    TestFalse(TEXT("Missing recovered floor must not bypass"), MayUseCachedSideObstruction(true, false, 3.02, 3.12, Pos, Pos, Blocker, Blocker, FQuat::Identity, FQuat::Identity, Down, Down));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitRestFrameSequenceTest,
+    "Orbit.Physics.Rest.FrameSequenceRecovery", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitRestFrameSequenceTest::RunTest(const FString& Parameters)
+{
+    // Drive 1,200 deterministic frames of the same pure eligibility helpers.
+    // This is NOT a Chaos simulation: PIE contact/awake regression is still required.
+    using namespace OrbitPhysicsRestMath;
+    constexpr double Dt = 1.0/60.0;
+    double StableSeconds = 0.0, RetryAfter = 2.0;
+    int32 Recoveries = 0, Failures = 2;
+    bool bSuppressed = true;
+    for (int32 Frame = 0; Frame < 1200; ++Frame)
+    {
+        const double Now = Frame*Dt;
+        // Interrupting contact resets the stability window.
+        const bool bStableSupport = Frame < 360 || Frame >= 420;
+        StableSeconds = bSuppressed && bStableSupport ? StableSeconds + Dt : 0.0;
+        if (ShouldRecoverSuppressedSleep(bSuppressed, bStableSupport, StableSeconds, 6.0, Now, RetryAfter))
+        {
+            ++Recoveries;
+            Failures = ProbationaryFailureCount(2);
+            bSuppressed = false;
+            StableSeconds = 0.0;
+            // A hypothetical immediate Chaos wake triggers one more suppression.
+            Failures = NextManualSleepFailureCount(Failures, true, 2);
+            bSuppressed = SuppressManualSleep(Failures, 2);
+            RetryAfter = Now + 6.0;
+        }
+    }
+    TestTrue(TEXT("Recovery can occur repeatedly but only after long stability windows"), Recoveries >= 1 && Recoveries <= 3);
+    TestTrue(TEXT("No permanent suppression; no per-frame retry storm"), Recoveries < 4);
+    return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitCharacterStandingLoadPolicyTest,
+    "Orbit.Character.PhysicsInteraction.StandingBasePolicy",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitCharacterStandingLoadPolicyTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsIntegrationMath;
+    TestTrue(TEXT("Walking on Orbit simulating base qualifies"),
+        ShouldLimitStandingForce(true, true, true, true, true));
+    TestFalse(TEXT("Non-Orbit physics bodies retain authored Character Movement interaction"),
+        ShouldLimitStandingForce(true, true, true, true, false));
+    TestFalse(TEXT("Static geometry is unaffected"),
+        ShouldLimitStandingForce(true, true, true, false, true));
+    TestFalse(TEXT("Jumping/falling releases any standing load override"),
+        ShouldLimitStandingForce(true, true, false, true, true));
+    TestFalse(TEXT("Outside gravity fields retains native interaction"),
+        ShouldLimitStandingForce(true, false, true, true, true));
+    TestFalse(TEXT("User can explicitly opt out"),
+        ShouldLimitStandingForce(false, true, true, true, true));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitNativeGravityABGateTest,
+    "Orbit.Physics.Integration.NativeGravityEquivalence",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitNativeGravityABGateTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsIntegrationMath;
+    TestTrue(TEXT("World-down 980 can use native comparison"),
+        CanCompareWithNativeWorldGravity(true, true, true, FVector(0,0,-980), -980));
+    TestTrue(TEXT("Sub-centimeter acceleration rounding tolerated"),
+        CanCompareWithNativeWorldGravity(true, true, true, FVector(0,0,-979.7), -980));
+    TestFalse(TEXT("Sideways planet gravity must remain custom"),
+        CanCompareWithNativeWorldGravity(true, true, true, FVector(-980,0,0), -980));
+    TestFalse(TEXT("Stronger field cannot use native world gravity"),
+        CanCompareWithNativeWorldGravity(true, true, true, FVector(0,0,-1960), -980));
+    TestFalse(TEXT("Originally zero-G body must not be switched to native"),
+        CanCompareWithNativeWorldGravity(true, false, true, FVector(0,0,-980), -980));
+    TestFalse(TEXT("Outside influence not a native comparison candidate"),
+        CanCompareWithNativeWorldGravity(true, true, false, FVector(0,0,-980), -980));
+    TestFalse(TEXT("Disabled comparison leaves normal Orbit behavior"),
+        CanCompareWithNativeWorldGravity(false, true, true, FVector(0,0,-980), -980));
+    TestFalse(TEXT("Zero WorldSettings gravity cannot produce equivalence"),
+        CanCompareWithNativeWorldGravity(true, true, true, FVector::ZeroVector, 0));
+    return true;
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

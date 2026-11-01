@@ -85,11 +85,88 @@ public:
     UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="0.25", Units="s"))
     float RestSupportContactGraceSeconds = 0.08f;
 
+    /** After a manual sleep is reversed within a short interval, stop reissuing sleep
+     *  requests for this duration. Native Chaos damping remains active on safe support. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="10.0", Units="s"))
+    float RestWakeRetryCooldown = 2.0f;
+
+    /** Suppress additional Orbit manual-sleep attempts after this many immediate
+     *  sleep/wake failures in one resting episode. Chaos may still sleep on its own. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="1", ClampMax="10"))
+    int32 RestMaxManualSleepFailures = 2;
+
+    /** After two failed manual-sleep attempts, retry at most once per sustained
+     *  stable period. This replaces permanent suppression but prevents a rapid
+     *  sleep/wake loop. Not a timer for native Chaos sleeping. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="1.0", ClampMax="30.0", Units="s"))
+    float RestSuppressedStableRetrySeconds = 6.0f;
+
+    /** Continuous loss of support or meaningful motion required before another
+     *  manual sleep episode may start after repeated immediate wake failures. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.1", ClampMax="5.0", Units="s"))
+    float RestRearmUnstableSeconds = 0.5f;
+
+    /** Meaningful linear speed to rearm after repeated manual sleep failures. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="5.0", ClampMax="200.0", Units="cm/s"))
+    float RestRearmLinearSpeed = 20.0f;
+
+    /** Maximum displacement during one continuous support episode before
+     *  Orbit rest timer resets, including with high gravity solver velocities. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.01", ClampMax="5.0", Units="cm"))
+    float RestMaxStationaryDisplacement = 0.25f;
+
+    /** Larger rest position envelope for simple sphere collision, measured
+     *  across the same stable support episode. Cubes/other shapes retain the
+     *  tighter generic displacement threshold. Avoids perpetual re-anchoring
+     *  from very slow supported rolling. Other speed/angular gates still apply. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.05", ClampMax="5.0", Units="cm"))
+    float RestSphereStationaryDisplacement = 1.0f;
+
+    /** Allow a bounded normal-direction solver velocity only while actual
+     *  position and tangential/angular motion stay stationary on verified support. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="75.0", Units="cm/s"))
+    float RestMaxStationaryNormalSpeed = 15.0f;
+
+    /** One extra support sweep can skip a sideways obstruction to find the
+     *  floor behind it; geometry collisions remain unchanged. 0 disables. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0", ClampMax="2"))
+    int32 RestSupportObstructionRetries = 1;
+
+    /** Briefly reuse a confirmed sideways obstruction to avoid a second sweep
+     *  every game tick. Cache is bypassed on significant body/blocker movement,
+     *  changed gravity, or support loss and always expires quickly. Zero disables. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="0.25", Units="s"))
+    float RestObstructionCacheSeconds = 0.12f;
+
+    /** In the Editor, enable Generate Wake Events on the mesh in its Details
+     *  for native callbacks to appear in Motion History (not all force wakes
+     *  dispatch native callbacks). Orbit never overrides that mesh setting. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest|Debug")
+    bool bLogNativeWakeEvents = false;
+
+    /** Manual sleep and contact damping will not use fast-moving simulating supports.
+     *  Static supports are unaffected. This does not disable physical collision/stacking. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="100.0", Units="cm/s"))
+    float RestMaxMovingSupportSpeed = 5.0f;
+
+    /** Angular speed threshold for treating a simulating support as effectively stationary. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Rest", meta=(ClampMin="0.0", ClampMax="5.0", Units="rad/s"))
+    float RestMaxMovingSupportAngularSpeed = 0.08f;
+
     /** Off by default; cyan=verified, blue=brief query grace, amber=no support.
      *  Red=verified support normal significantly disagrees with gravity Up.
      *  Includes source-to-support-center offset and native gravity state diagnostics. */
     UPROPERTY(EditAnywhere, Config, Category="Physics|Rest|Debug")
     bool bDrawPhysicsRestContactDebug = false;
+
+    /** A/B diagnostic for FLAT test scenes only: when a body's Orbit acceleration
+     *  exactly matches WorldSettings gravity (-Z and magnitude), let Chaos integrate
+     *  native world gravity instead of the normal Orbit AddForce call. Never used
+     *  on curved/sideways field samples. Disabled by default; do not use as a
+     *  production physics integration mode until the A/B captures are evaluated. */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Diagnostics",
+        meta=(DisplayName="Compare Native World Gravity on Matching Fields"))
+    bool bCompareNativeWorldGravityWhenEquivalent = false;
 
     /** Global safety toggle; disable if another system is responsible for physical gravity. */
     UPROPERTY(EditAnywhere, Config, Category="Physics")

@@ -1,13 +1,20 @@
 # Orbit: Components and Blueprint API Guide
 
-**Version:** Orbit v0.2.17, Iteration 028  
+**Version:** Orbit v0.2.21, Iteration 032  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Blueprint users, gameplay designers, and developers integrating Orbit into an Unreal project  
-**Source of truth:** Orbit v0.2.17 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
+**Source of truth:** Orbit v0.2.21 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
 
-This document describes **implemented capabilities in the Orbit v0.2.17 source package**, not planned navigation, EQS, camera, or Chaos solver integrations.
+This document describes **implemented capabilities in the Orbit v0.2.21 source package**, not planned navigation, EQS, camera, or Chaos solver integrations.
 
 For the placeable Gravity Source Actor and the new embedded Gravity Source Component, its property settings, shape and vortex modes, visualization, and level setup examples, see [`GRAVITY_SOURCE_ACTOR.md`](GRAVITY_SOURCE_ACTOR.md).
+
+
+## Character Movement and simulated bases (Iteration 032)
+
+`UOrbitCharacterGravityComponent` includes `bLimitStandingLoadOnOrbitBodies` (default `true`), `OrbitStandingDownwardForceScale` (default `0.0`), and `bLimitingOrbitBaseStandingLoad` (runtime read-only). When a native `UCharacterMovementComponent` walks on an Orbit-managed simulating physics component inside an Orbit character field, the native `StandingDownwardForceScale` is temporarily changed. The previous value is restored when the condition no longer holds, on deactivation, or on EndPlay (unless another system has replaced Orbit's temporary value). This **does not disable impact pushes or physics collisions**, and it does not apply to Mover characters. Use `UOrbitWorldSubsystem::IsOrbitManagedPhysicsBody` from C++ to determine whether a primitive is currently managed.
+
+For a controlled gravity delivery comparison, `UOrbitSettings::bCompareNativeWorldGravityWhenEquivalent` is an optional diagnostic, disabled by default. It applies only to world-down gravity matching WorldSettings magnitude for bodies originally using native gravity. Normal arbitrary gravity continues through Orbit `AddForce`. See [`ITERATION_032.md`](ITERATION_032.md).
 
 
 ## Iteration 016: two additional components and Blueprint nodes
@@ -161,6 +168,26 @@ It runs before native Character Movement, respects the Character's optional Rece
 ### Physics runtime diagnostics (Iteration 025)
 
 The optional **Orbit Gravity Receiver** also has transient read-only **Last Physics Body Diagnostics**, populated when automatic physics management processes one of its owner's simulating primitives. The Receiver still only changes gravity channels, not forces. If you attach it solely for diagnostics, leave Channel 0 enabled. Select the **PIE-spawned actor**, not the editor template, after ejecting with F8. For multiple simulated primitives on one Actor, the property represents the latest processed one; use **Orbit World Subsystem > Get Physics Body Diagnostics (Primitive Component)** to request the precise body. The Blueprint query returns `false` if no runtime managed sample exists. This supports real PIE inspection where `DrawDebugString` may be invisible. See [Iteration 025](ITERATION_025.md).
+
+### Rigid-body rest stability (Iteration 029)
+
+**Project Settings > Plugins > Orbit > Physics > Rest** now includes `RestWakeRetryCooldown` (2 seconds), `RestMaxMovingSupportSpeed` (5 cm/s at support contact), and `RestMaxMovingSupportAngularSpeed` (0.08 rad/s). A manual sleep request now needs continuous *fresh* support from the same component, low body velocities, and a sufficiently stationary supporting primitive. A brief query-grace contact may still support temporary damping, but it does not qualify for manual sleep. Immediately reawakened bodies have a configurable manual sleep retry cooldown rather than repeatedly being forced asleep at the rest interval.
+
+The existing support sweep prefers a stationary valid contact to a near-equivalent moving contact; substantially better-aligned contacts remain eligible under the unchanged 0.70 gravity-relative normal threshold. A simulated fast-moving or spinning support may still physically collide but does not qualify for temporary native supported damping or Orbit manual sleeping. This is applied in the world subsystem only, not a new Blueprint node or component API. No engine modifications are needed. Use Motion History's appended diagnostics to identify sleep retries and support movement.
+
+### Physics rest verification (Iteration 030)
+
+Orbit's rigid-body World Subsystem now tracks a continuous support anchor position, rejects a moving body that drifts beyond `RestMaxStationaryDisplacement` (0.25 cm by default) and permits up to `RestMaxStationaryNormalSpeed` (15 cm/s) solver-normal velocity **only** if supported movement is spatially stationary and tangential/angular speed remains low. Once `RestMaxManualSleepFailures` (2) immediate manual sleep/wake attempts occur, Orbit stops issuing manual sleep requests for that contact episode. Rest retries rearm only after `RestRearmUnstableSeconds` (0.5 s) of absent support or meaningful movement (`RestRearmLinearSpeed` default 20 cm/s), or a significant gravity-field change while sleeping. It never disables Chaos's native sleep or collision events.
+
+`RestSupportObstructionRetries` (1 by default, range 0–2) enables a bounded second near-contact sweep if a sideways collision obstructs support detection. The retry ignores only a rejected component in **the query**, not in physics. This does not assert physical contact or replace Chaos manifold analysis.
+
+Orbit subscribes to `OnComponentWake` and `OnComponentSleep` on managed primitives and removes those bindings when releasing them; the mesh's **Generate Wake Events** setting determines whether such notifications are dispatched. The plugin does not override it. Optional `bLogNativeWakeEvents` writes received wake notifications to the log. Recorded awake-state changes continue to work without event notifications and are not proof of a particular wake cause. See [Iteration 030](ITERATION_030.md) and [Physics Motion History](PHYSICS_MOTION_HISTORY.md).
+
+### Rest recovery and sphere collisions (Iteration 031)
+
+Repeated immediate wakes no longer permanently suppress Orbit manual-sleep requests. A suppressed body must retain continuous fresh stable support and remain below its rest movement limits for `RestSuppressedStableRetrySeconds` (default 6 s), and the manual cooldown must also expire. Only one probationary attempt follows recovery. Another immediate wake suppresses further requests again. Real impact wakes, native Chaos sleep, source-change wakes and gravity forces remain active.
+
+Simple sphere collision, identified from the Static Mesh's authored `UBodySetup::AggGeom`, uses `RestSphereStationaryDisplacement` (default 1 cm); boxes, convex, capsule, and compound colliders keep `RestMaxStationaryDisplacement` (0.25 cm). This change does not permit airborne rest or fast angular/tangential movement. A side obstruction that previously required a second sweep can be ignored in the *support query only* for `RestObstructionCacheSeconds` (default 0.12 s) while body, blocker and gravity remain nearly unchanged. Failed cached queries fall back to the original unfiltered sweep and invalidate the hint. Cache never changes Chaos collision or contact response. New settings are properties of `UOrbitSettings` and not extra Blueprint nodes.
 
 ### Physics Motion History (Iteration 028)
 
@@ -524,6 +551,18 @@ Open **Project Settings > Plugins > Orbit**.
 | Rest Support Probe Distance | `3 cm` | Short sweep using the component's collision geometry, not its bounding sphere. |
 | Rest Max Normal Contact Speed | `75 cm/s` | Disables contact damping for fast falling/bouncing bodies. |
 | Rest Support Contact Grace Seconds | `0.08 s` | Retain only previously verified contact across a very brief sweep miss, with clearance/launch constraints. |
+| Rest Wake Retry Cooldown | `2 s` | Delay additional manual sleep requests after a body immediately wakes, without preventing native Chaos behavior. |
+| Rest Max Manual Sleep Failures | `2` | Suppress Orbit manual sleep after repeated immediate wakes, not native Chaos sleep. |
+| Rest Suppressed Stable Retry Seconds | `6 s` | After continuous stable support plus cooldown, allow a single probationary sleep attempt. |
+| Rest Rearm Unstable Seconds | `0.5 s` | Sustained support loss or material movement starts a fresh rest episode. |
+| Rest Rearm Linear Speed | `20 cm/s` | Threshold for meaningful movement rearming a suppressed body. |
+| Rest Max Stationary Displacement | `0.25 cm` | Strict continuous-support position envelope for generic rigid bodies. |
+| Rest Sphere Stationary Displacement | `1 cm` | Separate bounded position envelope for simple-sphere collision only. |
+| Rest Max Stationary Normal Speed | `15 cm/s` | Solver-normal speed tolerated only with verified stationary contact and low tangent/angular motion. |
+| Rest Support Obstruction Retries | `1` | Bounded extra support-only sweep for a rejected sideways blocker. |
+| Rest Obstruction Cache Seconds | `0.12 s` | Briefly reuse a confirmed side blocker to avoid repeated extra sweeps; motion and gravity invalidate. |
+| Rest Max Moving Support Speed | `5 cm/s` | Dynamic support contact-point speed limit for Orbit manual sleep and supported damping. |
+| Rest Max Moving Support Angular Speed | `0.08 rad/s` | Angular speed limit for a dynamic support to be treated as stationary. |
 | Draw Physics Rest Contact Debug | Off | Cyan verified / blue temporary grace / amber unsupported / red support normal mismatch; displays radial alignment and source-to-surface-center offset. |
 
 **Resting on planets:** If a cube slowly spins like a top or a small sphere rolls indefinitely, start with **Damp Supported Rigid Body Motion** (default On). As of v0.2.14, this applies *native Chaos linear and angular damping* while gentle contact is detected and restores original component values on contact exit. It no longer adds supplemental per-frame lateral forces and torques; this avoids one source of conflicting game-thread corrections. **Supported Linear Damping** (the former `SupportedTangentialDamping` setting) now maps to temporary native **linear** damping (all velocity axes), while Supported Angular Damping maps to native angular damping. It does not affect free flight. Bodies must have functional simple collision to be detected by the support sweep. If a sphere still rolls or settles at a particular latitude, enable **Draw Physics Rest Contact Debug**: inspect Point **radial** alignment and **center offset**, not just damping. A correctly centered Point/Inward field has no preferred equator. The contact probe may briefly miss as Chaos resolves physics; blue indicates a bounded remembered contact. Do not merely raise damping to conceal a center mismatch or competing force. See [Iteration 025](ITERATION_025.md).

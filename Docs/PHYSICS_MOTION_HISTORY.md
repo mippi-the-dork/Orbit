@@ -1,6 +1,6 @@
 # Orbit | Physics Motion History
 
-**Since:** v0.2.15 (Iteration 026). **All-body capture:** v0.2.16 (Iteration 027). **Support evidence and live speeds:** v0.2.17 (Iteration 028).  
+**Since:** v0.2.15 (Iteration 026). **All-body capture:** v0.2.16 (Iteration 027). **Support evidence and live speeds:** v0.2.17 (Iteration 028). **Rest and moving-support evidence:** v0.2.18 (Iteration 029). **Wake and obstruction evidence:** v0.2.19 (Iteration 030).  
 **Scope:** Development diagnostics for simulated primitives managed by Orbit's automatic rigid-body gravity. Not a physics solver/substep recorder.
 
 The recorder can monitor **one selected body or every currently managed body** in the PIE world. All-body recording is useful for distinguishing localized collision problems from system-wide gravity, damping, support and sleep behavior.
@@ -21,6 +21,18 @@ Durations are clamped to **0.25–120 seconds**; rates to **1–120 samples/sec*
 `StartAll` freezes the **set of monitored bodies at command time**. Bodies entering the field or becoming Orbit-managed *later* do not automatically join, while bodies leaving Orbit management stop receiving new samples; remaining captured bodies continue. The roster uses deterministic component-path ordering at capture start. Start recording after the scene has finished spawning/discovering bodies, or run `Orbit.Motion.List` first to confirm the expected count.
 
 Starting another recording automatically attempts to export any unexported prior data as `OrbitMotion_AutoReplaced...`; if saving fails the old capture is retained. Stopping PIE with unexported rows attempts an `OrbitMotion_AutoPIEStop...` export. Neither automatic export is guaranteed after a crash.
+
+## Automatic capture from the beginning of PIE
+
+In the **Editor console before starting PIE**, enter:
+
+```text
+Orbit.Motion.AutoStartAll 1
+Orbit.Motion.AutoDuration 20
+Orbit.Motion.AutoRate 60
+```
+
+When the world subsystem first discovers eligible physics bodies, it automatically calls the same bounded `StartAllMotionHistory` implementation used by the manual command. Recording begins before that frame's Orbit physics-force pass, avoiding the 15-second delay caused by manually starting after PIE begins. Bodies discovered later are not automatically added; early source and physics-body registration is still important. Only one automatic start is attempted per world after success. After the run, export during PIE with `Orbit.Motion.Export Planet_029_Auto` or allow the existing auto-export attempt at PIE shutdown. Return `Orbit.Motion.AutoStartAll 0` in the Editor console to disable automatic capture in future PIE sessions. This is not an unattended recording system in Shipping builds.
 
 ## Multi-body CSV schema
 
@@ -71,6 +83,43 @@ Previously observed cases such as `Ball3` (many unsupported samples on an appare
 
 Large `normal_speed_cm_s` may cause a probe to be skipped even when a body looks near the ground. A high `probe_rejected_normals` count does **not** prove a bug, since the sweep can overlap walls and neighboring props as well as the supporting planet.
 
+## Iteration 031: recovery and query-cache evidence
+
+The first **117 CSV headers remain unchanged**, and five fields are appended for **122 fields total**:
+
+| New field | Meaning |
+| --- | --- |
+| `suppressed_stable_seconds` | Continuous fresh stationary contact accumulated while manual sleep is suppressed; zero when contact becomes unstable or sleep recovers. |
+| `suppressed_recovery_count` | Number of recovered, single-attempt manual-sleep trials since this component was discovered. Not a count of successful sleeps. |
+| `rest_position_budget_cm` | Spatial rest envelope used on this body: simple sphere collision defaults to 1 cm, other shapes 0.25 cm. A sleeping body may retain its last sampled budget. |
+| `cached_side_obstruction_used` | The current support query temporarily ignored a recently confirmed sideways blocker. Does not alter actual Chaos collisions. |
+| `cached_side_obstruction_fallback` | Cached query failed to find support; original unfiltered query was rerun to avoid missing contact. |
+
+The 0.12-second cache expires without refresh from cached hits, and invalidates on movement or changed gravity. The recorder measures game-thread support decisions, not native Chaos manifolds. For the 87-body planet regression, compare 20-second captures from initial PIE with `AutoStartAll` and inspect `manual_sleep_requested`, `suppressed_recovery_count`, and `awake` together. Disabling `RestObstructionCacheSeconds` (0) should restore uncached support-query behavior without changing collision geometry.
+
+## Iteration 030: wake-event and rest-episode evidence
+
+**Append-only:** the first 105 CSV columns have identical names and indices. The next 12 columns bring the total to **117**:
+
+| Column(s) | Interpretation |
+| --- | --- |
+| `native_wake_events_total`, `native_sleep_events_total` | Cumulative physics event notifications received by Orbit for a managed component, not actual complete Chaos event counts. |
+| `native_wake_since_previous_sample`, `native_sleep_since_previous_sample` | Increase since the previous persisted sample for that body. These remain useful at downsampled 60 Hz recordings. |
+| `native_last_wake_pie_sec`, `native_last_sleep_pie_sec` | PIE timestamp of last observed component notification, `-1` if none. |
+| `manual_sleep_failure_count`, `manual_sleep_suppressed` | Immediate failed Orbit manual-sleep attempts in current episode and whether Orbit is withholding further attempts. Does **not** affect native Chaos automatic sleeping. |
+| `unstable_rest_seconds`, `rest_anchor_displacement_cm` | Accumulated genuine-motion/no-support duration for rearming and displacement from the same-contact rest anchor. |
+| `secondary_support_sweep_attempted`, `secondary_support_sweep_found_support` | A rejected sideways blocker triggered an extra component sweep, and whether it then found support. Not collision manifold data. |
+
+For native event notifications, select each test body's simulated primitive **before PIE**, enable **Generate Wake Events** in its Physics settings, and run the usual AutoStartAll capture. Orbit does not modify the property or turn it on for the user. Unreal may not broadcast these callbacks for all wake paths, including forces, so treat native event absence as **unknown**, not proof that no wake happened. `awake_state_changed`, `woke_after_manual_sleep`, and `woke_for_field_change` continue to provide independent game-tick evidence. Optional `Log Native Wake Events` in Orbit Project Settings logs events that do arrive. These diagnostics do not identify the responsible collision partner or prove whether a wake was caused by Chaos, an external Blueprint, or Orbit's own later AddForce.
+
+## Iteration 029: moving supports and sleep retries
+
+The first **95 CSV fields remain at exactly the same indices**. Ten fields are appended (105 total): `support_is_dynamic`, `support_stable_for_rest`, `support_contact_speed_cm_s`, `support_angular_speed_rad_s`, `relative_support_speed_cm_s`, `woke_after_manual_sleep`, `woke_for_field_change`, `manual_sleep_requested`, `manual_sleep_cooldown_remaining_s`, `stable_rest_seconds`.
+
+`woke_after_manual_sleep=1` means the physics body was observed awake within 0.15 s of Orbit requesting manual sleep, and Orbit's source-change wake logic did not cause the observed transition. It does **not** prove whether Chaos, another actor, gameplay code or a contact event woke the body. `woke_for_field_change=1` means Orbit explicitly requested wake after significant acceleration change. `manual_sleep_requested=1` marks a new explicit call to `PutRigidBodyToSleep`, not a native Chaos sleep event. A support may remain a valid geometric collision candidate while `support_stable_for_rest=0`; fast simulated supports will not trigger Orbit's manual sleep or its supported native damping. Sleeping-body rows reuse historical contact descriptors and should not be treated as fresh sweeps.
+
+For Ball23/Ball24/Ball53 focus on immediate resleep patterns, moving supports, and how long stable contact accumulates. Record from PIE startup to avoid missing the initial contacts. See [Iteration 029](ITERATION_029.md).
+
 ## Suggested planet experiment
 
 In a planet scene with many physics bodies, run the same level in PIE with the same initial body transforms and gravity setup for each trial. Change **only** Orbit's **Damp Supported Rigid Body Motion** setting between trial A (off) and trial B (on, default rates 1.5/2.0 per second). Keep the rest/sleep system settings unchanged between trials.
@@ -101,4 +150,8 @@ Automation RunTests Orbit.Physics.MotionHistory
 Automation RunTests Orbit.Physics.Rest
 ```
 
-Eight Motion History tests now cover tangential reversal classification, CSV escaping/filename rules, bounded single-body configuration, bounded all-body budgets, independent per-body sampling cadence, current/sleeping velocity truth, support query outcome classification, and first observed contact/sleep transitions. These math/configuration tests do **not** replace actual PIE testing of multi-body collection, streamed CSV output, auto-export, or level-specific physics behavior. Iteration 028 was statically inspected but has not been compiled or run in UE 5.8.3 in the authoring environment.
+Eight Motion History tests continue to cover tangential reversal classification, CSV escaping/filename rules, bounded single-body configuration, bounded all-body budgets, independent per-body sampling cadence, current/sleeping velocity truth, support query outcome classification, and first observed contact/sleep transitions. These math/configuration tests do **not** replace actual PIE testing of multi-body collection, streamed CSV output, auto-export, or level-specific physics behavior. Iteration 028 was statically inspected but has not been compiled or run in UE 5.8.3 in the authoring environment.
+
+## Iteration 032 physics comparison
+
+No change to the 122-column CSV. Native-world gravity A/B uses `native_gravity_enabled` in existing snapshots; only world-down matching gravity qualifies. For physical interaction with a character standing on a cube, combine this recording with direct character `StandingDownwardForceScale`, current Movement Base, and cube floor penetration measurement. See [`ITERATION_032.md`](ITERATION_032.md).

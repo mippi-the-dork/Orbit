@@ -2,12 +2,41 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.17 (Iteration 028, experimental)  
+**Current version:** 0.2.21 (Iteration 032, experimental)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
-**Status:** Iteration 028 source package prepared; UE 5.8.3 compilation and PIE capture/export validation are pending.
+**Status:** Iteration 031 compiled with 31/31 targeted UE 5.8.3 native automation tests passed; 87-body PIE recording reviewed. Iteration 032 requires UE compilation, packaging, and character-on-cube PIE validation.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+
+## Iteration 032: character standing-load isolation and gravity A/B diagnostics
+
+- Character Gravity now selectively limits **Character Movement's extra standing force** while Walking on an Orbit-managed simulating base. Enabled by default, with `Orbit Standing Downward Force Scale = 0`. Authored Character Movement values are restored upon leaving the base/field or disabling the component. Native collision, push and bounce forces remain functional; this does not promise to eliminate penetration from other causes.
+- Optional **Compare Native World Gravity on Matching Fields** (Project Settings > Orbit > Physics > Diagnostics) is OFF by default. Only world-down field accelerations matching WorldSettings gravity can use native Chaos gravity for a diagnostic flat-world A/B, never also Orbit AddForce. It is not a planet-wide gravity mode.
+- Two native policy regression tests are added (33 tests in five targeted suites), CSV unchanged at 122 fields, and [`Iteration 032`](Docs/ITERATION_032.md) contains a real PIE character/cube 2x2 test matrix. A direct Chaos pre-integration backend remains future work pending evidence.
+
+## Iteration 031: recoverable sleep suppression, sphere rest and bounded support caching
+
+- A body with repeated immediate manual-sleep wakeups can recover after six continuously stable seconds and its cooldown, instead of remaining indefinitely suppressed. Recovery allows a single probationary sleep attempt; another immediate wake returns to the longer hold. Native Chaos sleeping and external wakes remain unaffected.
+- Simple **sphere-only collision** uses a 1 cm continuous support-position envelope, while boxes, convex and compound shapes retain the conservative 0.25 cm default. The same low tangent/angular speed, stationary support, no-flight and solver-normal velocity gates still apply. Intended to address the measured sphere rest-timer resets.
+- A confirmed sideways obstruction may be temporarily ignored by the *support query only* for up to 0.12 s. Motion, changed gravity, new support or cache expiry returns to the original unfiltered sweep. A failed cached query falls back to the original query and bounded retry. No actual physics collision is ignored.
+- Motion History appends five columns to 117 existing fields (122 total). Four native Automation Framework tests cover stability recovery, simple sphere displacement, cache invalidation, and multi-frame policy sequence (19 Rest, 8 History, 4 Mover = 31 targeted tests). These are helper/policy tests, **not a real Chaos PIE integration test**. See [Iteration 031](Docs/ITERATION_031.md).
+
+## Iteration 030: Chaos wake evidence and bounded rest retries
+
+- Stop *Orbit manual sleep attempts* for the current stable-contact episode after two immediate reawakening failures (configurable); rearm only after sustained real movement or loss of support. Native Chaos sleeping, contact response, and gravity remain enabled. The earlier 2-second retry cooldown continues to apply before the limit is reached.
+- Measure actual displacement across a continuous support episode. A body may qualify for manual rest despite small normal-direction solver velocity when it remains spatially stationary, has low tangential/angular motion, and is within the configured conservative normal-velocity limit. Real motion, bounce, or drifting resets the timer.
+- When the short gravity-relative support sweep finds only a sideways blocking obstacle, allow at most one additional query (configurable 0–2) ignoring **only that rejected component**. Does not ignore real collisions, change Chaos contacts, or perform retries on successful support queries.
+- Observe native `OnComponentWake` / `OnComponentSleep` when the simulated component has **Generate Wake Events** enabled. The plugin does not alter that physics setting. Unreal does not guarantee notifications for all wakes; sampled awake transitions and explicit Orbit field-change flags remain distinct. Optional `bLogNativeWakeEvents` prints observed events.
+- CSV now has **117 columns**, preserving the first 105 from Iteration 029 and appending event counters, retry suppression, stable displacement, and secondary-sweep evidence. Added three new native Automation Framework tests (15 Rest + 8 Motion History + 4 Mover = 27 targeted). See [Iteration 030](Docs/ITERATION_030.md).
+
+## Iteration 029: conservative rest stability and support selection
+
+- After a manual sleep followed by an immediate non-field-change wake (within 0.15 s), pause further Orbit **manual sleep requests** for a configurable 2 seconds. Normal Chaos physics, collision, gravity and eligible supported damping continue.
+- Require fresh support, a consistent supporting component, and stable body/support speeds for the full rest time before manual sleeping. Favor stationary support candidates over near-equivalent moving candidates during the **existing** near-contact sweep; preserve normal-alignment acceptance and legitimate slopes/stacking.
+- Fast-moving simulated supports are no longer eligible as stationary anchors for Orbit's artificial sleep or temporary native supported damping. Static geometry and slow stacked bodies work as before. The new settings are under **Project Settings > Plugins > Orbit > Physics > Rest**.
+- For capture from near PIE startup, set `Orbit.Motion.AutoStartAll 1` in the Editor console before PIE; optionally change `Orbit.Motion.AutoDuration 20` / `Orbit.Motion.AutoRate 60`. Restore `Orbit.Motion.AutoStartAll 0` when finished. CSV expands from 95 to **105 fields**, appending support motion and sleep-retry evidence; previous fields are unchanged.
+- Five additional pure Automation Framework tests (8 Motion History, 12 Rest, 4 Mover); runtime PIE/contact behavior still needs verification. See [Iteration 029](Docs/ITERATION_029.md).
 
 ## Iteration 028: measured support evidence and truthful sleep-state diagnostics
 

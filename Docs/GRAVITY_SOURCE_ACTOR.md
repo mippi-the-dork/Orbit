@@ -1,16 +1,21 @@
 # Orbit: Gravity Source Actor Guide
 
-**Version:** Orbit v0.2.17, Iteration 028  
+**Version:** Orbit v0.2.21, Iteration 032  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Level designers, technical artists, Blueprint users and programmers  
 **Primary class:** `AOrbitGravitySource`  
-**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.17.
+**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.21.
 
 This is the guide to the **placeable Orbit Gravity Source Actor** and its properties. For the five base Orbit components, the Orbit Mover component and the corresponding Blueprint APIs, see [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md).
 
-This documents what Orbit v0.2.17 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
+This documents what Orbit v0.2.21 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
 
 ---
+
+## Native-world gravity comparison diagnostic (Iteration 032)
+
+The World Subsystem offers a diagnostic `Compare Native World Gravity on Matching Fields` setting (off by default) under Physics / Diagnostics. For *flat* source setups where effective Orbit acceleration is world-down and matches the WorldSettings gravity magnitude, originally gravity-enabled simulated bodies can temporarily use native Chaos world gravity instead of Orbit's custom AddForce, never both. This does not replace Point/Axis/Spline/Volume arbitrary gravity, which uses normal Orbit force integration. The source Actor settings and field evaluation behavior are unchanged. See [`ITERATION_032.md`](ITERATION_032.md).
+
 
 ## Iteration 016: field competition and embedded sources
 
@@ -171,6 +176,10 @@ Use the spline-oriented directions **only with Spline shape**. For all other sha
 ### Resting simulated props on Point and Axis gravity surfaces
 
 Point/Inward and Axis/Inward can hold an ordinary simulated cube or sphere on curved geometry. A cube may retain tiny spin and a ball may roll for an unusually long time if custom gravity is injected every game frame and the Chaos solver never enters sleep. Under **Project Settings > Plugins > Orbit > Physics > Rest**, **Damp Supported Rigid Body Motion** applies contact-only native linear and angular damping (default 1.5 /s and 2.0 /s). It uses a short shape-based collision sweep, rather than bounding-sphere center-distance, to establish near-contact. This affects all eligible matching physics bodies, not the Point field itself. `Orbit.NoRest` on the simulated **Primitive Component** opts out. See [Iteration 023](ITERATION_023.md) for settings, debug lines, acceptance tests and solver limitations. Damping intentionally does not apply to airborne bodies.
+
+**Rest and supported contact (Iteration 029):** The World Subsystem chooses a qualifying near-contact from its existing collision sweep. When normal alignments are similar (within 0.10), a stationary support is preferred over a moving simulated neighbor. Manual sleep requires one persistent freshly verified support for the configured Rest Time, plus low velocities for both the body and any simulated support; query grace alone does not accumulate manual sleep time. A body that wakes within 0.15 seconds of an Orbit manual sleep request enters a configurable manual-sleep retry cooldown. This does not affect native Chaos collision impulses or the gravity source's field calculations. Dynamic supports that move too quickly no longer qualify for temporary supported damping. Relevant settings live on `UOrbitSettings`, not on this Source Actor. See [Iteration 029](ITERATION_029.md).
+
+**Rest recovery and simple sphere behavior (Iteration 031):** If two immediate manual-sleep wakes occur, Orbit can retry once after sustained stable contact (6 s by default) instead of remaining permanently suppressed. Simple-sphere collision permits a 1 cm spatial rest envelope; boxes/convex keep 0.25 cm. Slow movement, low angular speed and verified stationary support remain mandatory. A verified sideways blocker can be cached for a short time so the support query need not run two sweeps every game tick; cache validity is limited to 0.12 s and invalidated by motion or changed gravity. These properties belong to Project Settings > Orbit > Physics > Rest, **not** the Gravity Source Actor. The source strength and force composition logic are unchanged. See [Iteration 031](ITERATION_031.md).
 
 **All-body diagnostic capture (Iterations 027–028):** In PIE, `Orbit.Motion.StartAll 20 60` records the current set of automatically managed rigid bodies under all compatible Gravity Sources, including their source IDs, gravity vectors and contact/sleep states. `Orbit.Motion.Export Planet_All` produces a single CSV to compare body behavior on curved surfaces. The current CSV additionally includes capture time, body starting state, first sampled support/sleep transitions and evidence from both accepted and rejected support sweep candidates. This observes the world subsystem, not this Source Actor, and does **not** apply additional forces or collision sweeps. See [Physics Motion History](PHYSICS_MOTION_HISTORY.md).
 
@@ -600,3 +609,10 @@ For simulating static meshes on a sphere, Orbit evaluates Point/Inward physics g
 ## Iteration 026: diagnosing a source's effect on resting physics
 
 The Gravity Source Actor's gameplay settings and Blueprint API are **unchanged**. A new world-level diagnostic recorder can capture how a simulated cube or sphere actually moves under a gravity source, including gravity acceleration, dominant source ID/center, radial source alignment, and supporting collision metadata. Recording targets an **Orbit-managed Primitive Component**, not the Gravity Source Actor itself. See [PHYSICS_MOTION_HISTORY.md](PHYSICS_MOTION_HISTORY.md) and [ITERATION_026.md](ITERATION_026.md). The recorder does not change source Strength, falloff, damping, or gravity blending.
+
+
+## Iteration 030: rigid-body sleep and obstruction-query behavior
+
+The Gravity Source field shapes, strengths, channels and combination rules are unchanged. For independently simulating cubes/spheres on a solid planet, Orbit now tracks stationary contact position as well as tangential/normal speeds; permitted low normal contact-solver velocity must not conceal actual displacement. Repeated immediate wakeups after Orbit manually requests sleep eventually suppress only further *manual Orbit sleep* attempts until genuine motion/loss of contact or a gravity-field change rearms the episode. Chaos native collision, gravity acceleration, and automatic sleeping remain active.
+
+The optional bounded extra support sweep runs only after the initial short sweep finds no qualifying support and a rejected sideways blocking component was observed. It excludes that component **for the follow-up query only**; real collision geometry and Chaos contacts remain enabled. Set `RestSupportObstructionRetries = 0` to disable. For native wake/sleep event evidence, enable **Generate Wake Events** on the physics mesh before PIE. Orbit observes those notifications but cannot infer their true causes from the delegate alone. See [Iteration 030](ITERATION_030.md) for capture and test instructions.

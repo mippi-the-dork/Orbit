@@ -18,6 +18,19 @@
 #include "Serialization/Archive.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOrbitMotionHistory, Log, All);
+#if !UE_BUILD_SHIPPING
+// Set these in the editor console BEFORE PIE, so first-frame motion is recorded.
+static TAutoConsoleVariable<int32> GOrbitMotionAutoStartAll(
+    TEXT("Orbit.Motion.AutoStartAll"), 0,
+    TEXT("1: auto-start a bounded all-body motion capture when the first managed physics bodies are discovered in each PIE/game world."));
+static TAutoConsoleVariable<float> GOrbitMotionAutoDuration(
+    TEXT("Orbit.Motion.AutoDuration"), 20.0f,
+    TEXT("Seconds per automatic Orbit motion capture (0.25-120)."));
+static TAutoConsoleVariable<int32> GOrbitMotionAutoRate(
+    TEXT("Orbit.Motion.AutoRate"), 60,
+    TEXT("Maximum game-tick motion samples per second per body (1-120)."));
+#endif
+
 
 FString UOrbitWorldSubsystem::DescribeCollisionGeometry(const UPrimitiveComponent* Component)
 {
@@ -263,6 +276,36 @@ void UOrbitWorldSubsystem::CaptureMotionHistory(UPrimitiveComponent* Component, 
     Row.ConfiguredAngularDamping = CaptureSettings->SupportedAngularDamping;
     Row.ConfiguredProbeDistance = CaptureSettings->RestSupportProbeDistance;
     Row.ConfiguredMaxContactSpeed = CaptureSettings->RestMaxNormalContactSpeed;
+    Row.bDynamicSupport = Body.bLastDynamicSupport;
+    Row.bStableSupportForRest = Body.bLastStableSupportForRest;
+    Row.SupportContactSpeed = Body.LastSupportContactVelocity;
+    Row.SupportAngularSpeed = Body.LastSupportAngularVelocity;
+    Row.RelativeSupportSpeed = Body.LastRelativeSupportVelocity;
+    Row.bWokeAfterManualSleep = Body.bLastWokeAfterManualSleep;
+    Row.bWokeForFieldChange = Body.bLastFieldChangeWake;
+    Row.bManualSleepRequested = Body.bLastManualSleepRequested;
+    Row.ManualSleepCooldownLeft = Body.LastManualSleepCooldownLeft;
+    Row.StableRestSeconds = Body.StableSeconds;
+    Row.NativeWakeEventsTotal = Body.NativeWakeEventCount;
+    Row.NativeSleepEventsTotal = Body.NativeSleepEventCount;
+    Row.bNativeWakeSinceLastSample = Body.NativeWakeEventCount > CaptureBody.PreviousNativeWakeEventCount;
+    Row.bNativeSleepSinceLastSample = Body.NativeSleepEventCount > CaptureBody.PreviousNativeSleepEventCount;
+    CaptureBody.PreviousNativeWakeEventCount = Body.NativeWakeEventCount;
+    CaptureBody.PreviousNativeSleepEventCount = Body.NativeSleepEventCount;
+    Row.LastNativeWakePIETime = Body.LastNativeWakePIETime;
+    Row.LastNativeSleepPIETime = Body.LastNativeSleepPIETime;
+    Row.ManualSleepFailureCount = Body.ManualSleepFailureCount;
+    Row.bManualSleepSuppressed = Body.bManualSleepSuppressed;
+    Row.UnstableRestSeconds = Body.UnstableRestSeconds;
+    Row.RestAnchorDisplacementCm = Body.RestAnchorDisplacement;
+    Row.bSecondarySweepAttempted = Body.LastProbe.bSecondarySweepAttempted;
+    Row.bSecondarySweepFoundSupport = Body.LastProbe.bSecondarySweepFoundSupport;
+    Row.SuppressedStableSeconds = Body.SuppressedStableSeconds;
+    Row.SuppressedRecoveryCount = Body.SuppressedRecoveryCount;
+    Row.RestPositionBudgetCm = Body.LastRestPositionBudget;
+    Row.bCachedSideObstructionUsed = Body.LastProbe.bCachedSideObstructionUsed;
+    Row.bCachedSideObstructionFallback = Body.LastProbe.bCachedSideObstructionFallback;
+
     Row.bFreshSupport = Body.bLastFreshSupport;
     Row.bGraceSupport = Body.bLastGraceSupport;
     Row.bRestCandidate = Body.bLastRestCandidate;
@@ -384,7 +427,7 @@ bool UOrbitWorldSubsystem::ExportMotionHistory(const FString& Label, FString* Ou
         FTCHARToUTF8 Utf8(*Text);
         Writer->Serialize((void*)Utf8.Get(), Utf8.Length());
     };
-    WriteUtf8(TEXT("body,body_geometry,t_sec,position_x,position_y,position_z,com_x,com_y,com_z,source_center_valid,source_center_x,source_center_y,source_center_z,quat_x,quat_y,quat_z,quat_w,velocity_x,velocity_y,velocity_z,angular_rad_x,angular_rad_y,angular_rad_z,gravity_x,gravity_y,gravity_z,gravity_source_id,support_state,support_name,support_geometry,support_normal_x,support_normal_y,support_normal_z,support_impact_x,support_impact_y,support_impact_z,support_start_penetrating,has_support_normal,up_normal_alignment,radial_alignment,has_radial_alignment,has_source_support_bounds_offset,source_support_bounds_offset_cm,native_gravity_enabled,using_native_damping,awake,tangential_speed,angular_speed,tangential_reversal,body_id,actor_name,actor_label,mesh_asset,capture_start_pie_sec,pie_time_sec,initial_x,initial_y,initial_z,initial_awake,initial_linear_speed,initial_angular_speed,first_verified_support_pie_sec,first_sleep_transition_pie_sec,first_verified_support_event,first_sleep_transition_event,support_state_changed,awake_state_changed,probe_outcome,rest_candidate,gentle_contact,probe_attempted,probe_blocking_hits,probe_rejected_normals,best_rejected_alignment,best_rejected_normal_x,best_rejected_normal_y,best_rejected_normal_z,best_rejected_impact_x,best_rejected_impact_y,best_rejected_impact_z,best_rejected_start_penetrating,best_rejected_component,best_rejected_geometry,normal_speed_cm_s,grace_remaining_sec,fresh_support,grace_support,effective_linear_damping,effective_angular_damping,config_supported_damping_enabled,config_rest_sleep_enabled,config_supported_linear_damping,config_supported_angular_damping,config_probe_distance_cm,config_max_contact_speed_cm_s\n"));
+    WriteUtf8(TEXT("body,body_geometry,t_sec,position_x,position_y,position_z,com_x,com_y,com_z,source_center_valid,source_center_x,source_center_y,source_center_z,quat_x,quat_y,quat_z,quat_w,velocity_x,velocity_y,velocity_z,angular_rad_x,angular_rad_y,angular_rad_z,gravity_x,gravity_y,gravity_z,gravity_source_id,support_state,support_name,support_geometry,support_normal_x,support_normal_y,support_normal_z,support_impact_x,support_impact_y,support_impact_z,support_start_penetrating,has_support_normal,up_normal_alignment,radial_alignment,has_radial_alignment,has_source_support_bounds_offset,source_support_bounds_offset_cm,native_gravity_enabled,using_native_damping,awake,tangential_speed,angular_speed,tangential_reversal,body_id,actor_name,actor_label,mesh_asset,capture_start_pie_sec,pie_time_sec,initial_x,initial_y,initial_z,initial_awake,initial_linear_speed,initial_angular_speed,first_verified_support_pie_sec,first_sleep_transition_pie_sec,first_verified_support_event,first_sleep_transition_event,support_state_changed,awake_state_changed,probe_outcome,rest_candidate,gentle_contact,probe_attempted,probe_blocking_hits,probe_rejected_normals,best_rejected_alignment,best_rejected_normal_x,best_rejected_normal_y,best_rejected_normal_z,best_rejected_impact_x,best_rejected_impact_y,best_rejected_impact_z,best_rejected_start_penetrating,best_rejected_component,best_rejected_geometry,normal_speed_cm_s,grace_remaining_sec,fresh_support,grace_support,effective_linear_damping,effective_angular_damping,config_supported_damping_enabled,config_rest_sleep_enabled,config_supported_linear_damping,config_supported_angular_damping,config_probe_distance_cm,config_max_contact_speed_cm_s,support_is_dynamic,support_stable_for_rest,support_contact_speed_cm_s,support_angular_speed_rad_s,relative_support_speed_cm_s,woke_after_manual_sleep,woke_for_field_change,manual_sleep_requested,manual_sleep_cooldown_remaining_s,stable_rest_seconds,native_wake_events_total,native_sleep_events_total,native_wake_since_previous_sample,native_sleep_since_previous_sample,native_last_wake_pie_sec,native_last_sleep_pie_sec,manual_sleep_failure_count,manual_sleep_suppressed,unstable_rest_seconds,rest_anchor_displacement_cm,secondary_support_sweep_attempted,secondary_support_sweep_found_support,suppressed_stable_seconds,suppressed_recovery_count,rest_position_budget_cm,cached_side_obstruction_used,cached_side_obstruction_fallback\n"));
     FString CsvBatch;
     CsvBatch.Reserve(128 * 1024);
     for (const FMotionHistoryRow& Row : MotionHistoryRows)
@@ -434,7 +477,7 @@ bool UOrbitWorldSubsystem::ExportMotionHistory(const FString& Label, FString* Ou
             static_cast<int32>(Row.bProbeAttempted), Row.ProbeBlockingCandidates, Row.ProbeRejectedNormals,
             Row.BestRejectedAlignment);
         CsvBatch += FString::Printf(
-            TEXT("%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%s,%s,%.6f,%.6f,%d,%d,%.6f,%.6f,%d,%d,%.6f,%.6f,%.6f,%.6f\n"),
+            TEXT("%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%s,%s,%.6f,%.6f,%d,%d,%.6f,%.6f,%d,%d,%.6f,%.6f,%.6f,%.6f"),
             Row.BestRejectedNormal.X, Row.BestRejectedNormal.Y, Row.BestRejectedNormal.Z,
             Row.BestRejectedImpact.X, Row.BestRejectedImpact.Y, Row.BestRejectedImpact.Z,
             static_cast<int32>(Row.bBestRejectedStartedPenetrating),
@@ -449,6 +492,35 @@ bool UOrbitWorldSubsystem::ExportMotionHistory(const FString& Label, FString* Ou
             static_cast<double>(Row.ConfiguredAngularDamping),
             static_cast<double>(Row.ConfiguredProbeDistance),
             static_cast<double>(Row.ConfiguredMaxContactSpeed));
+        // Append-only v0.2.18 diagnostics: prior 95 fields remain unchanged.
+        CsvBatch += FString::Printf(
+            TEXT(",%d,%d,%.6f,%.6f,%.6f,%d,%d,%d,%.6f,%.6f"),
+            static_cast<int32>(Row.bDynamicSupport),
+            static_cast<int32>(Row.bStableSupportForRest),
+            Row.SupportContactSpeed, Row.SupportAngularSpeed, Row.RelativeSupportSpeed,
+            static_cast<int32>(Row.bWokeAfterManualSleep),
+            static_cast<int32>(Row.bWokeForFieldChange),
+            static_cast<int32>(Row.bManualSleepRequested),
+            static_cast<double>(Row.ManualSleepCooldownLeft),
+            static_cast<double>(Row.StableRestSeconds));
+        // Iteration 030 append-only diagnostics, 105 original headers untouched.
+        CsvBatch += FString::Printf(
+            TEXT(",%d,%d,%d,%d,%.6f,%.6f,%d,%d,%.6f,%.6f,%d,%d"),
+            Row.NativeWakeEventsTotal, Row.NativeSleepEventsTotal,
+            static_cast<int32>(Row.bNativeWakeSinceLastSample),
+            static_cast<int32>(Row.bNativeSleepSinceLastSample),
+            Row.LastNativeWakePIETime, Row.LastNativeSleepPIETime,
+            Row.ManualSleepFailureCount, static_cast<int32>(Row.bManualSleepSuppressed),
+            static_cast<double>(Row.UnstableRestSeconds),
+            static_cast<double>(Row.RestAnchorDisplacementCm),
+            static_cast<int32>(Row.bSecondarySweepAttempted),
+            static_cast<int32>(Row.bSecondarySweepFoundSupport));
+        // Iteration 031 diagnostics remain append-only (117 original fields).
+        CsvBatch += FString::Printf(TEXT(",%.6f,%d,%.6f,%d,%d\n"),
+            static_cast<double>(Row.SuppressedStableSeconds), Row.SuppressedRecoveryCount,
+            static_cast<double>(Row.RestPositionBudgetCm),
+            static_cast<int32>(Row.bCachedSideObstructionUsed),
+            static_cast<int32>(Row.bCachedSideObstructionFallback));
         if (CsvBatch.Len() >= 65536)
         {
             WriteUtf8(CsvBatch);

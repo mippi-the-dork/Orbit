@@ -78,3 +78,5 @@ The runtime plugin still contains the same **three modules** (`Orbit`, `OrbitEdi
 - `OrbitMotionHistoryMath.h` and `OrbitFieldTests.cpp`: current velocity, probe outcome, first observed event and bounded-capture tests using Unreal's native Automation Framework.
 - `Docs/PHYSICS_MOTION_HISTORY.md`: 95-column CSV schema and usage.
 - `Docs/ITERATION_027.md` and `Docs/ITERATION_028.md`: per-iteration testing and limits.
+
+- `Docs/ITERATION_030.md` documents the native wake callback, bounded secondary support query, stable-contact/manual-rest gates, and 117-column capture checks.
