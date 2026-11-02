@@ -1,11 +1,17 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "OrbitGravityTypes.h"
 #include "OrbitSettings.generated.h"
+
+/** Only affects automatically managed simulating rigid bodies. Existing projects remain Standard. */
+UENUM(BlueprintType)
+enum class EOrbitRigidBodyGravityMethod : uint8
+{
+    Standard UMETA(DisplayName="Standard (Existing AddForce)"),
+    ExperimentalChaosUniform UMETA(DisplayName="Experimental Chaos Uniform Gravity (Directional Only)")
+};
 
 /** Project Settings > Plugins > Orbit. Settings apply to new and existing play worlds. */
 UCLASS(Config=Game, DefaultConfig, meta=(DisplayName="Orbit"))
@@ -18,6 +24,15 @@ public:
     /** Enables experimental automatic game-thread gravity on ordinary simulating components. */
     UPROPERTY(EditAnywhere, Config, Category="Physics", meta=(DisplayName="Automatically Apply to Physics Bodies"))
     bool bAutomaticRigidBodyGravity = true;
+
+    /**
+     * Standard preserves the exact existing Orbit force path. Experimental uses an
+     * otherwise unused Chaos gravity group for ONE unrestricted, constant-strength
+     * directional physics source. All other scenes fall back to Standard.
+     * Experimental is not validated for production and requires an exclusive group.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration", meta=(DisplayName="Rigid Body Gravity Application"))
+    EOrbitRigidBodyGravityMethod RigidBodyGravityMethod = EOrbitRigidBodyGravityMethod::Standard;
 
     /** Do not silently turn objects intentionally configured for zero gravity into normal gravity objects. */
     UPROPERTY(EditAnywhere, Config, Category="Physics")

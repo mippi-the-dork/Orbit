@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 using UnrealBuildTool;
 
 public class Orbit : ModuleRules
@@ -8,6 +6,8 @@ public class Orbit : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DeveloperSettings" });
+        // Opt-in Chaos solver gravity path. The Standard path remains unchanged.
+        PrivateDependencyModuleNames.AddRange(new string[] { "Chaos", "PhysicsCore" });
         // Editor-only billboard sprite is loaded from the plugin's Resources directory.
         if (Target.bBuildEditor)
         {

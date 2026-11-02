@@ -155,3 +155,7 @@ Eight Motion History tests continue to cover tangential reversal classification,
 ## Iteration 032 physics comparison
 
 No change to the 122-column CSV. Native-world gravity A/B uses `native_gravity_enabled` in existing snapshots; only world-down matching gravity qualifies. For physical interaction with a character standing on a cube, combine this recording with direct character `StandingDownwardForceScale`, current Movement Base, and cube floor penetration measurement. See [`ITERATION_032.md`](ITERATION_032.md).
+
+### Iteration 034 path evidence
+
+The CSV appends column 123, `experimental_chaos_uniform_gravity`, after the original 122 columns (which retain their indices). 1 identifies a body currently assigned to the opt-in Chaos uniform group-7 solver path; 0 indicates it is not. This allows the same ten-cube recordings to distinguish the experimental solver path from fallback Standard without inferring from native gravity flags. Disable both resting and supported damping for natural Chaos sleep comparisons. See `ITERATION_034.md`.

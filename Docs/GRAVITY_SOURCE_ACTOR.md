@@ -620,3 +620,7 @@ The optional bounded extra support sweep runs only after the initial short sweep
 ## Character camera-facing mode (Iteration 033)
 
 Character-facing selection belongs to the **Orbit Character Controls** component, **not** the Gravity Source Actor. Setting `Facing Mode = Camera Direction` is opt-in and makes an eligible locally controlled Character follow camera heading about gravity Up without changing the source's authored direction, strength, channels, competition, field blending, falloff or previews. Source and Physics Body behavior are unchanged. See `COMPONENTS_AND_BLUEPRINT_API.md` and `ITERATION_033.md`.
+
+### Physics gravity application (Iteration 034 experiment)
+
+One unlimited, constant-falloff, physics-enabled **Directional** source can use the opt-in `Experimental Chaos Uniform Gravity` mode for eligible static-mesh bodies. Point, Axis, Spline, bounded Volume, falloff and multi-source arrangements continue using Standard AddForce, even with the experimental setting selected. The default remains Standard, preserving the existing gravity behavior and source settings. A per-body diagnostic indicates which path is active. See `ITERATION_034.md` for group-7 limitations.

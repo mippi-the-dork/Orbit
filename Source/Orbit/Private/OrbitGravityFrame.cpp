@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitGravityFrame.h"
 
 #include "Math/RotationMatrix.h"

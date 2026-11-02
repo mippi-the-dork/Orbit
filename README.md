@@ -2,12 +2,16 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.22 (Iteration 033, camera-facing opt-in; physics integration remains experimental)  
+**Current version:** 0.2.23 (Iteration 034, opt-in uniform Chaos gravity experiment; existing integration remains the default)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
-**Status:** Iteration 032 Orbit modules compiled and linked in UE 5.8.3 (full project build was blocked by unrelated code). Iteration 033 needs UE compilation, native automation, first-person PIE validation and BuildPlugin packaging. The reported character-on-cube regression remains under investigation.
+**Status:** Experimental Iteration 034 requires UE 5.8.3 compilation, Automation Framework, PIE and BuildPlugin validation. Default Standard physics behavior is retained. Previous character-on-cube penetration was traced during testing to an incorrect character Skeletal Mesh collision preset rather than confirmed as an Orbit regression.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+
+## Iteration 034: opt-in Chaos solver gravity for one uniform directional field
+
+Under **Project Settings > Plugins > Orbit > Physics > Gravity Integration**, **Rigid Body Gravity Application** defaults to **Standard (Existing AddForce)** and changes no existing project's gravity. The opt-in **Experimental Chaos Uniform Gravity (Directional Only)** option uses Chaos solver gravity group 7 for eligible static-mesh rigid bodies when the scene contains exactly one unlimited, constant-strength Directional physics field. No `AddForce` is submitted for those bodies. Other shapes (including planets/Point sources), unsupported bodies, group conflicts and multi-source fields keep the existing Standard code path. The selected path is inspectable via Receiver diagnostics and the new append-only Motion History CSV column. This is an **unvalidated proof of concept**, not a general Chaos arbitrary-gravity integration. See [Iteration 034](Docs/ITERATION_034.md) for constraints and exact test sequence. Rest Stabilization and Supported Damping are separate preexisting toggles; disable both for the controlled sleep A/B.
 
 ## Iteration 033: opt-in camera-relative facing for first-person Characters
 

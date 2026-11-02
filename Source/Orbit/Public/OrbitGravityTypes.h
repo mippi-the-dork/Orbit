@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -199,6 +197,10 @@ struct ORBIT_API FOrbitPhysicsBodyDiagnostics
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
     bool bNativeGravityEnabled = false;
+
+    /** True only when the opt-in Chaos uniform-direction solver path owns this body. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bExperimentalChaosUniformGravity = false;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
     bool bOriginalNativeGravityEnabled = false;

@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -11,6 +9,7 @@ class AOrbitGravitySource;
 class UOrbitGravitySourceComponent;
 class AActor;
 class UPrimitiveComponent;
+class FOrbitChaosGravityBridge;
 
 /** A single gravity authority per runtime world. Existing sources register automatically in BeginPlay. */
 UCLASS()
@@ -123,6 +122,8 @@ private:
     {
         TWeakObjectPtr<UPrimitiveComponent> Component;
         bool bOriginalGravity = false;
+        bool bExperimentalChaosGroupAssigned = false;
+        int32 OriginalChaosGravityGroup = 0;
         float OriginalLinearDamping = 0.0f;
         float OriginalAngularDamping = 0.0f;
         bool bNativeContactDampingApplied = false;
@@ -311,6 +312,10 @@ private:
     TArray<TWeakObjectPtr<UOrbitGravitySourceComponent>> SourceComponents;
     TArray<FOrbitFieldDefinition> ActiveFields;
     TArray<FManagedBody> ManagedBodies;
+    // Allocated only when the user explicitly selects the experimental method.
+    FOrbitChaosGravityBridge* ChaosGravityBridge = nullptr;
+    bool bExperimentalUniformFallbackLogged = false;
+    bool bExperimentalUniformActivationFailed = false;
     float DiscoveryAccumulator = 0.0f;
     bool bNeedsInitialDiscovery = true;
     bool bAutoMotionStartedThisWorld = false;
@@ -324,6 +329,9 @@ private:
     void ApplyPhysicsForces(float DeltaTime);
     FRestSupportProbe ProbeSupportAlongGravity(UPrimitiveComponent* Component, const FVector& Down, float ProbeDistance, UPrimitiveComponent* CachedSideBlocker = nullptr) const;
     void RestoreBodyGravity();
+    void RestoreExperimentalBodyGroup(FManagedBody& Body);
+    void UpdateExperimentalGravityBridge(const class UOrbitSettings* Settings);
+    void StopExperimentalGravityBridge();
     void RestoreBodyDamping(FManagedBody& Body);
     void UnbindBodyEvents(FManagedBody& Body);
     bool HasManagedBody(const UPrimitiveComponent* Component) const;

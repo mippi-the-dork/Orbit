@@ -1,6 +1,6 @@
 # Orbit: Mover Integration
 
-**Current Orbit version:** 0.2.22, Iteration 033  
+**Current Orbit version:** 0.2.23, Iteration 034  
 **Engine target:** Unreal Engine 5.8.3  
 **Scope:** Orbit functionality specific to Epic's Experimental Mover, not general Mover documentation.
 
@@ -171,3 +171,7 @@ The sleep retry limit, position-based rest gate, native component wake/sleep not
 ## Iteration 031: independent-body rest behavior only
 
 Recoverable manual-sleep suppression, the sphere-specific rest envelope, short-term side-obstruction cache, and the five extra Motion History CSV fields apply **only to Orbit-managed independently simulated rigid bodies**. No Mover policy, component reflection, movement prediction, Character Movement, camera or animation APIs changed. Existing four `Orbit.Mover` native Automation Framework tests still apply. The motion recorder remains unsuitable as a Mover trajectory or replication trace.
+
+### Iteration 034 scope
+
+The optional Chaos gravity-group experiment applies **only** to Orbit-managed simulated static meshes with one unlimited Directional source. It does not change the character, Epic Mover, Chaos Mover or `OrbitMover` integration; their runtime behavior and APIs are unchanged. The new setting defaults to Standard.

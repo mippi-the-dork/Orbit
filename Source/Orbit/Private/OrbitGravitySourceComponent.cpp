@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitGravitySourceComponent.h"
 #include "OrbitWorldSubsystem.h"
 #include "Components/SplineComponent.h"

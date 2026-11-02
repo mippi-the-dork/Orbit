@@ -860,3 +860,7 @@ Use `Orbit.Motion.List`, `Orbit.Motion.Start <unique-body-name> [seconds] [Hz]`,
 ### Iteration 033 compatibility note
 
 All previously serialized Character Controls values keep their names and defaults. `FacingMode` is a newly added enum property whose default is `MovementDirection`, so the existing `bFaceMovementDirection` opt-out and 12/s smoothing are preserved unless a user explicitly selects `CameraDirection` or `Manual`. Camera-facing is the same existing Controls post-movement Actor rotation point, not a second rotation tick. Details/editor visibility may gray movement-only properties while Camera Direction is selected. See [`ITERATION_033.md`](ITERATION_033.md).
+
+### Physics body gravity integration (Iteration 034)
+
+`Orbit` Project Settings has `Rigid Body Gravity Application` (Standard, default; Experimental Chaos Uniform Gravity, opt-in). The experimental mode targets gravity-enabled simulated StaticMeshComponents in one unlimited constant directional physics field, using solver gravity group 7; unsupported fields and bodies use the original AddForce path. `FOrbitPhysicsBodyDiagnostics::bExperimentalChaosUniformGravity` reports the path per body; Get Physics Body Diagnostics and the optional Orbit Gravity Receiver both expose it. This is not a Blueprint callable API change. See `ITERATION_034.md`.

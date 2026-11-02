@@ -100,3 +100,7 @@ The distribution is a **single Orbit plugin** with three modules: `Orbit` (gravi
 The shared `FOrbitFieldEvaluator::Combine`/`CombineForBody` now disambiguates **same-priority Point Override** fields with distance-squared to center, so source registration order cannot cause one planet to own the other side of an overlap. Priority still takes precedence; non-Point ties use prior selection semantics. Discontinuity at the bisector is currently intentional pending a designed smooth transfer/hysteresis model.
 
 The `OrbitEditor` module extends `LevelEditor.ActorContextMenu` via `ToolMenus`. It enumerates enabled source definitions in the actor's editor world, applies receiver channel matching and the same pure field evaluator, then uses `FOrbitGravityFrame::MakeAlignedRotation` in an undoable actor transaction. Editor authoring does not require a gameplay World Subsystem, which exists only in game worlds.
+
+### Experimental solver gravity scope (v0.2.23)
+
+A per-world optional `FOrbitChaosGravityBridge` registers a Chaos solver callback only when `Rigid Body Gravity Application` explicitly selects Experimental and one unrestricted constant Directional field is active. It updates group 7 inside Chaos before simulation; eligible static mesh bodies are assigned the group once and do not receive AddForce. Other cases remain Standard. No Chaos engine edits and no separate plugin. The global group-7 ownership is an experiment with explicit limitations; see `ITERATION_034.md`.

@@ -1,3 +1,11 @@
+## Orbit 0.2.23 | Iteration 034 | Opt-in directional Chaos gravity-group experiment
+
+- One Orbit package and codebase. Added `Rigid Body Gravity Application`: Standard (default, unchanged) or Experimental Chaos Uniform Gravity (explicit opt-in).
+- For exactly one unlimited, constant, Directional physics source, eligible gravity-enabled static meshes use Chaos gravity group 7 and a per-world solver callback to set its vector instead of per-frame `AddForce`. All other cases use the existing Standard path. Rest/damping, characters, OrbitMover, receiver fields and source authoring are unchanged by default.
+- Restore each eligible body's original gravity group and flag on release or mode switch; refuse detected group-7 conflicts and preexisting nonzero groups. Experimental mode is not compatible with integrations independently using group 7.
+- Expose the active solver path through Receiver diagnostics and append-only CSV column `experimental_chaos_uniform_gravity` (123 columns, old 122 indices unchanged). Add three native Automation Framework policy tests.
+- **Not yet UE-compiled or PIE-proven.** Do not enable experimental mode in production. Detailed requirements and a first-play-test matrix are in `Docs/ITERATION_034.md`.
+
 ## 0.2.22 | Iteration 033 | Opt-in first-person camera-facing
 
 - Add **Facing Mode** on Orbit Character Controls: Movement Direction (default, compatible with all existing assets), Camera Direction (opt-in gravity-relative first-person yaw), Manual (external facing owner).

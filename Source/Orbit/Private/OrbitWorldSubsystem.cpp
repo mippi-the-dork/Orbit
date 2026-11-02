@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitWorldSubsystem.h"
 
 #include "OrbitGravitySource.h"
@@ -7,6 +5,7 @@
 #include "OrbitGravityReceiverComponent.h"
 #include "OrbitPhysicsRestMath.h"
 #include "OrbitPhysicsIntegrationMath.h"
+#include "OrbitChaosGravityBridge.h"
 #include "OrbitMotionHistoryMath.h"
 #include "GameFramework/Actor.h"
 #include "Engine/EngineTypes.h"
@@ -64,6 +63,7 @@ void UOrbitWorldSubsystem::Deinitialize()
     }
 #endif
     RestoreBodyGravity();
+    StopExperimentalGravityBridge();
     ActiveFields.Empty();
     Sources.Empty();
     SourceComponents.Empty();
@@ -380,11 +380,69 @@ void UOrbitWorldSubsystem::RestoreBodyDamping(FManagedBody& Body)
     Body.bNativeContactDampingApplied = false;
 }
 
+void UOrbitWorldSubsystem::RestoreExperimentalBodyGroup(FManagedBody& Body)
+{
+    if (!Body.bExperimentalChaosGroupAssigned) { return; }
+    if (UPrimitiveComponent* Component = Body.Component.Get())
+    {
+        // Never allow an intermediate tick with group-0 world gravity accidentally
+        // substituted for Orbit gravity when reverting to Standard.
+        if (Component->IsRegistered()) { Component->SetEnableGravity(false); }
+        FOrbitChaosGravityBridge::RestoreBody(Component, Body.OriginalChaosGravityGroup);
+    }
+    Body.bExperimentalChaosGroupAssigned = false;
+}
+
+void UOrbitWorldSubsystem::StopExperimentalGravityBridge()
+{
+    if (!ChaosGravityBridge) { return; }
+    // Bodies are reverted before the solver callback is released, including PIE teardown.
+    for (FManagedBody& Body : ManagedBodies) { RestoreExperimentalBodyGroup(Body); }
+    delete ChaosGravityBridge;
+    ChaosGravityBridge = nullptr;
+}
+
+void UOrbitWorldSubsystem::UpdateExperimentalGravityBridge(const UOrbitSettings* Settings)
+{
+    FVector UniformGravity;
+    const bool bOptedIn = Settings &&
+        Settings->RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform;
+    const bool bEligible = bOptedIn &&
+        FOrbitChaosGravityBridge::TryGetUniformField(ActiveFields, UniformGravity);
+    if (!bEligible)
+    {
+        if (bOptedIn && !bExperimentalUniformFallbackLogged)
+        {
+            UE_LOG(LogOrbitWorld, Display, TEXT("Experimental Chaos gravity unavailable for this field configuration; using Standard AddForce gravity."));
+            bExperimentalUniformFallbackLogged = true;
+        }
+        if (!bOptedIn)
+        {
+            bExperimentalUniformFallbackLogged = false;
+            bExperimentalUniformActivationFailed = false;
+        }
+        StopExperimentalGravityBridge();
+        return;
+    }
+    bExperimentalUniformFallbackLogged = false;
+    if (bExperimentalUniformActivationFailed) { return; } // Retry by toggling Standard then Experimental.
+    if (!ChaosGravityBridge) { ChaosGravityBridge = new FOrbitChaosGravityBridge(); }
+    if (!ChaosGravityBridge->Start(GetWorld()))
+    {
+        UE_LOG(LogOrbitWorld, Warning, TEXT("Experimental Chaos gravity registration failed; using Standard. Switch to Standard and back to retry."));
+        bExperimentalUniformActivationFailed = true;
+        StopExperimentalGravityBridge();
+        return;
+    }
+    ChaosGravityBridge->Update(UniformGravity);
+}
+
 void UOrbitWorldSubsystem::RestoreBodyGravity()
 {
     for (FManagedBody& Body : ManagedBodies)
     {
         UnbindBodyEvents(Body);
+        RestoreExperimentalBodyGroup(Body);
         UPrimitiveComponent* Component = Body.Component.Get();
         if (IsValid(Component) && Component->IsRegistered())
         {
@@ -511,6 +569,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         UPrimitiveComponent* Component = Body.Component.Get();
         if (!IsValid(Component) || Component->GetWorld() != GetWorld() || !Component->IsRegistered())
         {
+            RestoreExperimentalBodyGroup(Body);
             UnbindBodyEvents(Body);
             ManagedBodies.RemoveAtSwap(Index);
             continue;
@@ -518,6 +577,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         if (!Component->IsSimulatingPhysics() || Component->ComponentHasTag(IgnoreTag))
         {
             RestoreBodyDamping(Body);
+            RestoreExperimentalBodyGroup(Body);
             Component->SetEnableGravity(Body.bOriginalGravity);
             UnbindBodyEvents(Body);
             ManagedBodies.RemoveAtSwap(Index);
@@ -534,6 +594,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
             // An unmatched channel is never taken over by Orbit. Outside-field
             // objects also revert to native gravity when fallback is enabled.
             RestoreBodyDamping(Body);
+            RestoreExperimentalBodyGroup(Body);
             Component->SetEnableGravity(Body.bOriginalGravity);
             UnbindBodyEvents(Body);
             ManagedBodies.RemoveAtSwap(Index);
@@ -546,9 +607,29 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         const bool bNativeComparison = OrbitPhysicsIntegrationMath::CanCompareWithNativeWorldGravity(
             Settings->bCompareNativeWorldGravityWhenEquivalent, Body.bOriginalGravity,
             Sample.bHasInfluence, Acceleration, GetWorld()->GetGravityZ());
-        if (Component->IsGravityEnabled() != bNativeComparison)
+        // The experimental solver path owns group 7 only in an eligible uniform
+        // directional world. All other body/field configurations retain Standard.
+        bool bExperimentalChaos = false;
+        if (!bNativeComparison && ChaosGravityBridge && ChaosGravityBridge->IsActive() && Body.bOriginalGravity)
         {
-            Component->SetEnableGravity(bNativeComparison);
+            if (!Body.bExperimentalChaosGroupAssigned)
+            {
+                int32 PreviousGroup = 0;
+                if (ChaosGravityBridge->AssignBody(Component, PreviousGroup))
+                {
+                    Body.OriginalChaosGravityGroup = PreviousGroup;
+                    Body.bExperimentalChaosGroupAssigned = true;
+                }
+            }
+            bExperimentalChaos = Body.bExperimentalChaosGroupAssigned;
+        }
+        if (!bExperimentalChaos) { RestoreExperimentalBodyGroup(Body); }
+        // True means Chaos integrates gravity itself; either native group 0 or
+        // the opt-in uniform group 7, never both in the same simulation step.
+        const bool bChaosGravity = bNativeComparison || bExperimentalChaos;
+        if (Component->IsGravityEnabled() != bChaosGravity)
+        {
+            Component->SetEnableGravity(bChaosGravity);
         }
         const double PieNow = GetWorld()->GetTimeSeconds();
         Body.bLastWokeAfterManualSleep = false;
@@ -585,6 +666,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
                 Body.LastDiagnostics.bValid = true;
                 Body.LastDiagnostics.bBodyAwake = false;
                 Body.LastDiagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
+                Body.LastDiagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos;
                 Body.LastDiagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
                 Body.LastDiagnostics.bUsingNativeContactDamping = Body.bNativeContactDampingApplied;
                 Body.LastDiagnostics.DominantSourceId = Sample.DominantSourceId;
@@ -759,6 +841,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
              (bGraceSupport ? TEXT("Query grace") : TEXT("Unsupported"))));
         Diagnostics.bBodyAwake = true;
         Diagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
+        Diagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos;
         Diagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
         Diagnostics.DominantSourceId = Sample.DominantSourceId;
         Diagnostics.GravityAcceleration = Acceleration;
@@ -949,7 +1032,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
 
         CaptureMotionHistory(Component, Body);
 
-        if (!bNativeComparison && !Acceleration.IsNearlyZero())
+        if (!bChaosGravity && !Acceleration.IsNearlyZero())
         {
             // UE's regular AddForce maintains a frame's force over internal
             // physics substeps. It is deliberately NOT also added in a custom
@@ -971,11 +1054,13 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
     if (!Settings->bEnablePhysicsIntegration || !Settings->bAutomaticRigidBodyGravity || !bHasPhysicsField)
     {
         if (!ManagedBodies.IsEmpty()) { RestoreBodyGravity(); }
+        StopExperimentalGravityBridge();
         bNeedsInitialDiscovery = true;
         if (bMotionHistoryRecording) { FinishMotionHistory(TEXT("Orbit physics integration disabled or no eligible sources")); }
         return;
     }
 
+    UpdateExperimentalGravityBridge(Settings);
     DiscoveryAccumulator += FMath::Max(0.0f, DeltaTime);
     if (bNeedsInitialDiscovery || DiscoveryAccumulator >= Settings->PhysicsDiscoveryInterval)
     {

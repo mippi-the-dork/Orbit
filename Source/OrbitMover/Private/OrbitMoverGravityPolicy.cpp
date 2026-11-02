@@ -1,5 +1,3 @@
-﻿// Copyright Mippithedork 2026, Inc. All Rights Reserved.
-
 #include "OrbitMoverGravityPolicy.h"
 
 FOrbitMoverGravityDecision FOrbitMoverGravityPolicy::Resolve(

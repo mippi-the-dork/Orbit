@@ -85,3 +85,7 @@ An internal `OrbitMover` module (inside the **one Orbit plugin**) exposes a Move
 ## Iteration 022 runtime evidence
 
 The user-confirmed semi-strafing animation correction is a **project Animation Blueprint integration result**, not proof of engine-wide animation compatibility. Their UE 5.8.3 `ABP_Unarmed_Orbit` now uses gravity-relative Speed and Direction and works when running on a ring, after incorrectly feeding the directional Blend Space from world XY. The new signed vertical speed, pure helper, and optional native AnimInstance parent are source-complete but not yet build/PIE validated. Jump transition behavior remains to be tested in the user project. Core Orbit gravity and optional Mover internals were not changed.
+
+### Orbit v0.2.23 / Iteration 034
+
+Standard gravity delivery is still the default for all new and existing projects, without migrations or Blueprint changes. The optional experimental solver path is limited to one uniform Directional source with exclusive Chaos group 7 access. All unsupported physics scenes continue using Standard. UE 5.8.3 Win64 build and PIE tests are pending.
