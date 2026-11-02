@@ -26,6 +26,25 @@ bool FOrbitGravityFrame::MakeTangentBasis(const FVector& Up, const FVector& Refe
         !OutForward.ContainsNaN() && !OutRight.ContainsNaN();
 }
 
+bool FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(const FVector& Up,
+    const FVector& CameraForward, const FVector& PreviousTangentHeading, FVector& OutHeading)
+{
+    OutHeading = FVector::ZeroVector;
+    if (Up.ContainsNaN() || Up.IsNearlyZero() || CameraForward.ContainsNaN() ||
+        PreviousTangentHeading.ContainsNaN())
+    {
+        return false;
+    }
+    const FVector NormalUp = Up.GetSafeNormal();
+    const FVector CameraTangent = FVector::VectorPlaneProject(CameraForward, NormalUp);
+    // Very near vertical, azimuth becomes numerically unstable. Preserve the
+    // last valid transported yaw instead of picking a new arbitrary heading.
+    const FVector Selected = CameraTangent.SizeSquared() > FMath::Square(0.01)
+        ? CameraTangent : FVector::VectorPlaneProject(PreviousTangentHeading, NormalUp);
+    OutHeading = Selected.GetSafeNormal();
+    return !OutHeading.IsNearlyZero() && !OutHeading.ContainsNaN();
+}
+
 bool FOrbitGravityFrame::MakeGravityFacingRotation(const FVector& Up,
     const FVector& DesiredHeading, FQuat& OutRotation)
 {

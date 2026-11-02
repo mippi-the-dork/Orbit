@@ -29,7 +29,7 @@ void UOrbitCharacterControlsComponent::BeginPlay()
     // even after the native constructor default is corrected. Repair them at
     // gameplay startup rather than letting an inactive controls component
     // silently consume input without updating character facing.
-    if (bFaceMovementDirection && !IsActive())
+    if (IsFacingRequested() && !IsActive())
     {
         Activate(true);
         ++FacingBeginPlayActivationCount;
@@ -62,6 +62,12 @@ void UOrbitCharacterControlsComponent::EndPlay(const EEndPlayReason::Type EndPla
     Super::EndPlay(EndPlayReason);
 }
 
+bool UOrbitCharacterControlsComponent::IsFacingRequested() const
+{
+    return FacingMode == EOrbitCharacterFacingMode::CameraDirection ||
+        (FacingMode == EOrbitCharacterFacingMode::MovementDirection && bFaceMovementDirection);
+}
+
 bool UOrbitCharacterControlsComponent::IsManagingCharacterOrientation() const
 {
     const ACharacter* Character = Cast<ACharacter>(GetOwner());
@@ -69,8 +75,18 @@ bool UOrbitCharacterControlsComponent::IsManagingCharacterOrientation() const
     // orient. IsLocallyControlled() alone is not a reliable ownership gate for
     // all standalone, server-controlled or temporarily controller-less pawns.
     // Never rotate a simulated proxy (network prediction is still unsupported).
-    return bFaceMovementDirection && IsActive() && IsComponentTickEnabled() &&
-        Character && (Character->IsLocallyControlled() || Character->HasAuthority());
+    if (!IsFacingRequested() || !IsActive() || !IsComponentTickEnabled() || !Character)
+    {
+        return false;
+    }
+    if (FacingMode == EOrbitCharacterFacingMode::CameraDirection)
+    {
+        // A remote server's ControlRotation is not a reliable representation of
+        // an owning client's camera. Never synthesize camera yaw for a remote Pawn.
+        return Character->IsLocallyControlled() && Character->GetController() != nullptr;
+    }
+    // Preserve existing movement-facing server-authority behavior.
+    return Character->IsLocallyControlled() || Character->HasAuthority();
 }
 
 void UOrbitCharacterControlsComponent::RestoreNativeRotationOwnership()
@@ -371,18 +387,33 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
         OrientationFrameUp = Up;
     }
 
-    const bool bHasRecentInput = !RequestedFacingDirection.IsNearlyZero() &&
-        LastFacingInputSeconds >= 0.0 &&
-        World->GetTimeSeconds() - LastFacingInputSeconds <= 0.15;
-    // Native AddMovementInput paths can move the Character without ever calling
-    // ApplyGravityRelativeMove. Actual gravity-tangent velocity is still enough
-    // to determine facing; it must not be gated on recently cached Orbit input.
-    const UCharacterMovementComponent* FacingMovement = Character->GetCharacterMovement();
-    const FVector FacingVelocity = FacingMovement ? FacingMovement->Velocity : FVector::ZeroVector;
     FVector DesiredHeading;
-    const bool bHasFacingHeading = FOrbitGravityFrame::ChooseGravityRelativeFacing(
-        Up, FacingVelocity, RequestedFacingDirection, bHasRecentInput,
-        bFaceVelocityWhenMoving, VelocityFacingThreshold, DesiredHeading);
+    bool bHasFacingHeading = false;
+    const bool bCameraMode = FacingMode == EOrbitCharacterFacingMode::CameraDirection;
+    if (bCameraMode)
+    {
+        // The existing Orbit look frame is the authoritative gravity-tangent
+        // camera yaw if Orbit manages the camera. Otherwise read standard
+        // Controller rotation, which also supports normal first-person cameras.
+        // Neither path depends on movement input or character velocity.
+        const FVector CameraLook = bOrientCameraToGravity && bInitializedCameraFrame
+            ? CameraTangentForward
+            : Character->GetControlRotation().Quaternion().GetForwardVector();
+        bHasFacingHeading = FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(
+            Up, CameraLook, OrientationFrameForward, DesiredHeading);
+    }
+    else
+    {
+        const bool bHasRecentInput = !RequestedFacingDirection.IsNearlyZero() &&
+            LastFacingInputSeconds >= 0.0 &&
+            World->GetTimeSeconds() - LastFacingInputSeconds <= 0.15;
+        // Preserve legacy movement-facing priority, including its velocity fallback.
+        const UCharacterMovementComponent* FacingMovement = Character->GetCharacterMovement();
+        const FVector FacingVelocity = FacingMovement ? FacingMovement->Velocity : FVector::ZeroVector;
+        bHasFacingHeading = FOrbitGravityFrame::ChooseGravityRelativeFacing(
+            Up, FacingVelocity, RequestedFacingDirection, bHasRecentInput,
+            bFaceVelocityWhenMoving, VelocityFacingThreshold, DesiredHeading);
+    }
     if (bHasFacingHeading)
     {
         OrientationFrameForward = DesiredHeading;
@@ -408,8 +439,8 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
     // ONE actor-rotation owner when Orbit Controls is active. Character Gravity
     // still sets the native movement gravity direction before movement but skips
     // its independent actor rotation. During idle, follow its alignment rate.
-    float ResponseRate = FacingResponseRate;
-    if (!bHasFacingHeading)
+    float ResponseRate = bCameraMode ? CameraFacingResponseRate : FacingResponseRate;
+    if (!bCameraMode && !bHasFacingHeading)
     {
         if (const UOrbitCharacterGravityComponent* Gravity =
             Character->FindComponentByClass<UOrbitCharacterGravityComponent>())
@@ -433,9 +464,9 @@ void UOrbitCharacterControlsComponent::UpdateCharacterFacing(float DeltaTime)
     {
         ++FacingRotationAppliedCount;
         LastFacingDirection = Character->GetActorForwardVector();
-        LastFacingApplicationStatus = bHasFacingHeading
-            ? TEXT("Rotation applied: velocity/input heading")
-            : TEXT("Rotation applied: transported idle heading");
+        LastFacingApplicationStatus = bCameraMode
+            ? (bHasFacingHeading ? TEXT("Rotation applied: camera heading") : TEXT("Rotation applied: preserved camera heading"))
+            : (bHasFacingHeading ? TEXT("Rotation applied: velocity/input heading") : TEXT("Rotation applied: transported idle heading"));
         LastAppliedActorRotation = Actual;
         bHasPreviousFacingResult = true;
     }
@@ -478,9 +509,18 @@ void UOrbitCharacterControlsComponent::RefreshFacingDebugStatus()
     {
         LastFacingDebugStatus = TEXT("Controls component tick is disabled");
     }
-    else if (!bFaceMovementDirection)
+    else if (FacingMode == EOrbitCharacterFacingMode::Manual)
     {
-        LastFacingDebugStatus = TEXT("Face Movement Direction is disabled");
+        LastFacingDebugStatus = TEXT("Manual facing: Orbit Controls does not rotate the Character");
+    }
+    else if (!IsFacingRequested())
+    {
+        LastFacingDebugStatus = TEXT("Legacy Face Movement Direction is disabled");
+    }
+    else if (FacingMode == EOrbitCharacterFacingMode::CameraDirection &&
+        (!Character->IsLocallyControlled() || !Character->GetController()))
+    {
+        LastFacingDebugStatus = TEXT("Camera facing requires a locally controlled Character and Controller");
     }
     else if (!Character->IsLocallyControlled() && !Character->HasAuthority())
     {

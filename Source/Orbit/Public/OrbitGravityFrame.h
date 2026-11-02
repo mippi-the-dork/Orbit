@@ -12,6 +12,12 @@ public:
     static bool MakeTangentBasis(const FVector& Up, const FVector& ReferenceForward,
         FVector& OutForward, FVector& OutRight);
 
+    /** Extract camera yaw along gravity Up. If camera looks nearly along Up,
+     *  preserves a previously transported tangent heading; never substitutes
+     *  world-Z yaw or an arbitrary world cardinal heading. */
+    static bool ResolveGravityRelativeCameraHeading(const FVector& Up, const FVector& CameraForward,
+        const FVector& PreviousTangentHeading, FVector& OutHeading);
+
     /** Builds a full gravity-relative facing pose: actor +X follows tangent heading,
      * actor +Z follows gravitational Up. Never extracts Euler yaw. */
     static bool MakeGravityFacingRotation(const FVector& Up, const FVector& DesiredHeading,

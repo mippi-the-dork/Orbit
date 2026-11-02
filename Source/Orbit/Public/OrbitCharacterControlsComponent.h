@@ -4,6 +4,17 @@
 #include "Components/ActorComponent.h"
 #include "OrbitCharacterControlsComponent.generated.h"
 
+/** Selects who determines the Character's gravity-tangent forward heading.
+ *  MovementDirection preserves all existing Orbit facing settings and behavior.
+ */
+UENUM(BlueprintType)
+enum class EOrbitCharacterFacingMode : uint8
+{
+    MovementDirection UMETA(DisplayName="Movement Direction"),
+    CameraDirection UMETA(DisplayName="Camera Direction"),
+    Manual UMETA(DisplayName="Manual (External)"),
+};
+
 class USpringArmComponent;
 
 /** Optional input/camera bridge for ACharacter and Unreal's native Character Movement.
@@ -43,21 +54,36 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Camera")
     float MaxPitch = 80.0f;
 
+    /** Choose the Character's heading owner. Movement Direction is the legacy
+     *  default and honors Face Movement Direction. Camera Direction faces the
+     *  camera's gravity-tangent yaw even at rest (opt-in for first-person use).
+     *  Manual leaves actor-facing ownership to game code/other systems. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing")
+    EOrbitCharacterFacingMode FacingMode = EOrbitCharacterFacingMode::MovementDirection;
+
+    /** Camera Direction only: response rate in inverse seconds. 0 snaps the
+     *  capsule to the camera's gravity-relative yaw without changing pitch.
+     *  Independent from legacy movement Facing Response Rate. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
+        meta=(EditCondition="FacingMode == EOrbitCharacterFacingMode::CameraDirection", ClampMin="0.0", UIMin="0.0", UIMax="25.0"))
+    float CameraFacingResponseRate = 0.0f;
+
     /** Rotate the Character to face its tangent-plane movement input. Requires
      *  Orbit Character Gravity actor alignment for planetary movement. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
+        meta=(EditCondition="FacingMode == EOrbitCharacterFacingMode::MovementDirection"))
     bool bFaceMovementDirection = true;
 
     /** Face the actual gravity-tangent velocity instead of raw input when moving.
      *  This reduces visual strafing caused by camera-relative input and acceleration lag.
      *  This does not rewrite a template Animation Blueprint's world-XY locomotion math. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
-        meta=(EditCondition="bFaceMovementDirection"))
+        meta=(EditCondition="FacingMode == EOrbitCharacterFacingMode::MovementDirection && bFaceMovementDirection"))
     bool bFaceVelocityWhenMoving = true;
 
     /** Speed in cm/s above which actual tangent velocity controls facing. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
-        meta=(EditCondition="bFaceMovementDirection && bFaceVelocityWhenMoving", ClampMin="0.0", Units="cm/s"))
+        meta=(EditCondition="FacingMode == EOrbitCharacterFacingMode::MovementDirection && bFaceMovementDirection && bFaceVelocityWhenMoving", ClampMin="0.0", Units="cm/s"))
     float VelocityFacingThreshold = 30.0f;
 
     /** When this component manages character facing, temporarily disable native
@@ -68,12 +94,12 @@ public:
 
     /** Response rate for changing facing direction, in inverse seconds. Zero snaps. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
-        meta=(EditCondition="bFaceMovementDirection", ClampMin="0.0", UIMin="0.0", UIMax="25.0"))
+        meta=(EditCondition="FacingMode == EOrbitCharacterFacingMode::MovementDirection && bFaceMovementDirection", ClampMin="0.0", UIMin="0.0", UIMax="25.0"))
     float FacingResponseRate = 12.0f;
 
     /** Movement input length threshold below which the Character keeps its facing. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Controls|Facing",
-        meta=(EditCondition="bFaceMovementDirection", ClampMin="0.0", ClampMax="1.0"))
+        meta=(EditCondition="FacingMode == EOrbitCharacterFacingMode::MovementDirection && bFaceMovementDirection", ClampMin="0.0", ClampMax="1.0"))
     float FacingInputThreshold = 0.1f;
 
     /** Default IA_Move convention: X = right, Y = forward. Call INSTEAD of
@@ -174,6 +200,10 @@ public:
 
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|Controls|Debug")
     float LastGravityRelativeDirectionDegrees = 0.0f;
+
+    /** Whether the selected facing mode requests Orbit ownership (before actor/role checks).
+     *  The legacy bool continues to govern only Movement Direction. */
+    bool IsFacingRequested() const;
 
     /** Used by Orbit Character Gravity to avoid independently rotating the same Actor. */
     bool IsManagingCharacterOrientation() const;

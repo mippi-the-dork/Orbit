@@ -1,8 +1,12 @@
 # Orbit: Mover Integration
 
-**Current Orbit version:** 0.2.21, Iteration 032  
+**Current Orbit version:** 0.2.22, Iteration 033  
 **Engine target:** Unreal Engine 5.8.3  
 **Scope:** Orbit functionality specific to Epic's Experimental Mover, not general Mover documentation.
+
+## Camera-facing scope (Iteration 033)
+
+**Facing Mode = Camera Direction** is implemented on `UOrbitCharacterControlsComponent`, for a native `ACharacter` with `UCharacterMovementComponent`. It does not change the optional OrbitMover adapter, Epic Mover's own facing/camera/rotation ownership, or its prediction path. Do not attach Orbit's native Character Controls to a Mover Pawn expecting a transparent Mover facing integration; any such integration needs independent design and tests.
 
 ## Character physics-base interaction (Iteration 032)
 

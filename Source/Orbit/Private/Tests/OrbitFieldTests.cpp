@@ -389,6 +389,12 @@ bool FOrbitControlsDefaultActivationTest::RunTest(const FString& Parameters)
             AutoActivateProperty->GetPropertyValue_InContainer(Template));
     }
     TestTrue(TEXT("Movement-facing remains enabled by default"), Template->bFaceMovementDirection);
+    TestTrue(TEXT("Default mode retains movement-facing behavior"),
+        Template->FacingMode == EOrbitCharacterFacingMode::MovementDirection);
+    TestTrue(TEXT("Existing movement response remains 12"),
+        FMath::IsNearlyEqual(Template->FacingResponseRate, 12.0f));
+    TestTrue(TEXT("Camera facing is opt-in and snaps by default"),
+        FMath::IsNearlyZero(Template->CameraFacingResponseRate));
     return true;
 }
 
@@ -1836,4 +1842,81 @@ bool FOrbitNativeGravityABGateTest::RunTest(const FString& Parameters)
         CanCompareWithNativeWorldGravity(true, true, true, FVector::ZeroVector, 0));
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitCameraFacingModePolicyTest,
+    "Orbit.Character.Facing.CameraModeOptInAndLegacySwitch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitCameraFacingModePolicyTest::RunTest(const FString& Parameters)
+{
+    UOrbitCharacterControlsComponent* Controls = NewObject<UOrbitCharacterControlsComponent>();
+    TestNotNull(TEXT("Transient Controls component"), Controls);
+    if (!Controls) { return false; }
+    TestTrue(TEXT("Legacy movement mode owns facing by default"), Controls->IsFacingRequested());
+    Controls->bFaceMovementDirection = false;
+    TestFalse(TEXT("Legacy face toggle still works"), Controls->IsFacingRequested());
+    Controls->FacingMode = EOrbitCharacterFacingMode::CameraDirection;
+    TestTrue(TEXT("Explicit camera mode enables facing regardless of legacy movement toggle"),
+        Controls->IsFacingRequested());
+    Controls->FacingMode = EOrbitCharacterFacingMode::Manual;
+    TestFalse(TEXT("Manual mode releases facing ownership"), Controls->IsFacingRequested());
+    Controls->FacingMode = EOrbitCharacterFacingMode::MovementDirection;
+    TestFalse(TEXT("Legacy movement preference survives mode changes"), Controls->IsFacingRequested());
+    Controls->bFaceMovementDirection = true;
+    TestTrue(TEXT("Legacy facing re-enabled without resetting old options"), Controls->IsFacingRequested());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitCameraFacingAllAxesTest,
+    "Orbit.Character.Facing.CameraHeadingAllGravityAxes",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitCameraFacingAllAxesTest::RunTest(const FString& Parameters)
+{
+    const FVector Ups[] = {FVector::UpVector, -FVector::UpVector,
+        FVector::ForwardVector, -FVector::ForwardVector,
+        FVector::RightVector, -FVector::RightVector,
+        FVector(0.4, 0.3, 0.86602540378).GetSafeNormal()};
+    for (const FVector& Up : Ups)
+    {
+        FVector Initial, Right;
+        TestTrue(TEXT("Initial gravity tangent basis"),
+            FOrbitGravityFrame::MakeTangentBasis(Up, FVector::ForwardVector, Initial, Right));
+        const FVector CameraLook = (Right * 0.7 + Up * 0.7141428).GetSafeNormal();
+        FVector Heading;
+        TestTrue(TEXT("Camera look projects onto gravitational tangent plane"),
+            FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(Up, CameraLook, Initial, Heading));
+        TestTrue(TEXT("Camera direction controls tangent yaw (not world XY)"),
+            Heading.Equals(Right, 0.001));
+        FQuat Target;
+        TestTrue(TEXT("Camera heading builds valid gravity-aligned Actor pose"),
+            FOrbitGravityFrame::MakeGravityFacingRotation(Up, Heading, Target));
+        TestTrue(TEXT("Actor Forward follows the camera yaw"),
+            Target.GetForwardVector().Equals(Right, 0.001));
+        TestTrue(TEXT("Actor Up follows gravity Up"), Target.GetUpVector().Equals(Up, 0.001));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitCameraFacingVerticalFallbackTest,
+    "Orbit.Character.Facing.CameraVerticalLookRetainsHeading",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitCameraFacingVerticalFallbackTest::RunTest(const FString& Parameters)
+{
+    const FVector Up = FVector(0.4, -0.5, 0.76811457).GetSafeNormal();
+    FVector Prior, Right;
+    TestTrue(TEXT("Valid transported heading"),
+        FOrbitGravityFrame::MakeTangentBasis(Up, FVector::RightVector, Prior, Right));
+    FVector Heading;
+    TestTrue(TEXT("Looking straight Up retains the prior camera heading"),
+        FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(Up, Up, Prior, Heading));
+    TestTrue(TEXT("No arbitrary yaw when camera looks Up"), Heading.Equals(Prior, 0.001));
+    TestTrue(TEXT("Looking straight Down retains the prior camera heading"),
+        FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(Up, -Up, Prior, Heading));
+    TestTrue(TEXT("No arbitrary yaw when camera looks Down"), Heading.Equals(Prior, 0.001));
+    TestFalse(TEXT("Invalid Up is rejected"),
+        FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(FVector::ZeroVector, Prior, Prior, Heading));
+    TestFalse(TEXT("No invented heading without camera or prior orientation"),
+        FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(Up, Up, FVector::ZeroVector, Heading));
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

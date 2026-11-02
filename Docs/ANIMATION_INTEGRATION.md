@@ -141,3 +141,7 @@ The actor yaw remaining fixed while input and velocity were correct in v0.2.8 is
 ## Scope of v0.2.13 physics diagnostics
 
 Center-of-mass gravity sampling, rigid-body near-contact support grace and physics rest debug apply to simulated physics components only. `Get Orbit Gravity Animation State`, the verified `ABP_Unarmed_Orbit` locomotion workflow, and gravity-relative jump data are unchanged.
+
+## Camera-facing first-person / strafe setup (Iteration 033)
+
+When `Orbit Character Controls` is set to **Facing Mode = Camera Direction**, Actor Forward follows camera yaw in the gravity tangent plane, including while idle. Movement remains independently camera-relative, so strafing/backpedaling should use **Forward Speed**, **Right Speed**, and **Movement Direction Degrees** from `Get Orbit Gravity Animation State`; the state API is unchanged. An AnimBP that expects automatic turn-to-movement (third-person locomotion) must be intentionally adapted for strafe and backward locomotion. The default Movement Direction mode retains existing animation-facing behavior. Camera pitch is not applied to the character capsule. GASP/GASPALS integration is not included and remains a separate project.

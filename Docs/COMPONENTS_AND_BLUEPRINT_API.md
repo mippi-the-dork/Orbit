@@ -671,12 +671,14 @@ This is one of the **five base Orbit components**, alongside Character Gravity, 
 | Yaw Degrees Per Unit | 1 | Local-Up yaw input sensitivity |
 | Pitch Degrees Per Unit | 1 | Gravity-local pitch input sensitivity |
 | Min Pitch / Max Pitch | -80 / +80 | Clamp pitch relative to **local gravity Up**, not world Z |
-| Face Movement Direction | true | Turns Actor/capsule toward an appropriate tangent-plane movement heading (not camera yaw) |
-| Face Velocity When Moving | true | Above threshold, face actual tangent-plane velocity rather than latest raw input. Useful for animation consistency. |
+| Facing Mode | Movement Direction | Existing behavior (honors Face Movement Direction). Opt in to Camera Direction or Manual (External) |
+| Camera Facing Response Rate | 0 | Camera mode only: 0 snaps local gravity-yaw to camera facing, positive values smooth it |
+| Face Movement Direction | true | In Movement Direction mode, turns Actor/capsule toward an appropriate tangent-plane movement heading (not camera yaw); legacy preference retained |
+| Face Velocity When Moving | true | Movement Direction only: above threshold, face actual tangent-plane velocity rather than latest raw input. Useful for animation consistency. |
 | Velocity Facing Threshold | 30 cm/s | Below this speed use input-facing fallback. |
-| Facing Response Rate | 12 | Smooth quaternion response; 0 snaps |
+| Facing Response Rate | 12 | Movement Direction only: smooth quaternion response; 0 snaps |
 | Facing Input Threshold | 0.1 | Ignore tiny input; keep heading without movement |
-| Disable Competing Native Rotation | true | Temporarily disable native movement/controller yaw rotation while Controls owns facing; restore original values when released |
+| Disable Competing Native Rotation | true | Temporarily disable native movement/controller yaw rotation while Controls owns facing in Movement or Camera mode; restore original values when released or selecting Manual |
 | Draw Locomotion Debug | false | Draw requested input (blue), actual velocity (green), desired Forward (cyan), actual Actor Forward (yellow) and gravity Up (white); no debug draw cost while disabled |
 | Debug Vector Length | 120 cm | Debug arrow length |
 | Last Velocity to Facing Angle Degrees | runtime | Mismatch between actual gravity-tangent velocity and Actor forward |
@@ -687,6 +689,23 @@ This is one of the **five base Orbit components**, alongside Character Gravity, 
 | Last Facing Direction | runtime | Read-only world-space actual Actor Forward following a successful rotation |
 | Last Gravity Up | runtime | Read-only sampled movement Up |
 | Last Move Forward / Right | runtime | Read-only tangent input basis for PIE debugging |
+
+
+#### First-person facing (Iteration 033, opt-in)
+
+Set **Facing Mode = Camera Direction** on the Character's **Orbit Character Controls** component. Its camera's *heading* (projection of forward onto the local gravity-tangent plane) becomes the Character's actor/capsule yaw while standing still, moving forward, strafing or moving backward. Camera pitch stays camera-only; capsule Up stays aligned to the current gravity Up. This uses no world-Z yaw extraction.
+
+- **Default: Movement Direction.** All previously authored third-person behavior and the existing `bFaceMovementDirection` property remain intact. **Camera Direction** deliberately ignores movement velocity and the legacy movement-facing toggle because selecting this mode is the explicit opt-in.
+- **Camera Facing Response Rate** defaults to `0` (snap) to avoid first-person camera/body yaw lag. Use a positive rate if a smooth body turn is desired. **Facing Response Rate = 12** continues to apply exclusively to the legacy movement mode.
+- Leave **Disable Competing Native Rotation** enabled so native Orient Rotation to Movement, Use Controller Desired Rotation and Character Use Controller Rotation Yaw cannot simultaneously drive the capsule. These saved native values are restored when Controls stops owning facing.
+- Keep **Orbit Character Gravity** on the Character and retain its **Align Actor to Gravity** if desired. Controls owns the final Actor pose *only when its facing mode is active*; Gravity continues to supply movement gravity and relinquishes competing actor orientation in that case.
+- Forward `IA_Look` to **Apply Gravity Relative Look** and `IA_Move` to **Apply Gravity Relative Move** as documented below. The heading comes from Orbit's transported camera frame when **Orient Camera to Gravity** is enabled, or standard Controller view rotation otherwise. No automatic input interception or new Blueprint node is introduced.
+- A first-person Character often has a Camera component but **no Spring Arm**. This is supported through the existing Controller rotation fallback, which remains constrained by Unreal's Euler view-rotation limitations at extreme planetary orientations. This pass does not claim a complete quaternion first-person camera rewrite.
+- **Manual (External)** relinquishes Orbit Controls' actor-facing ownership and restores native flags. If you want another system to own **all** Actor orientation, disable **Align Actor to Gravity** on Orbit Character Gravity as well; otherwise that component may still align the Character's Up.
+- Camera facing requires a **locally controlled Character with a Controller**. Orbit does not infer a remote client's camera yaw on the server; multiplayer prediction/replication and camera authority integration are outside this pass.
+- Near exactly vertical look directions, the previously transported tangent heading is retained. This avoids a sudden world-axis flip. Camera mode remains optional and does not alter actor motion, rigid-body gravity, physics sleep, collisions, or Mover.
+
+**First-person smoke test:** In PIE, look left/right while standing still, look straight up/down, walk backward and strafe, then walk over a curved planet. Actor Forward should follow camera heading while Actor Up follows gravity, with no actor pitch. Switch **Facing Mode = Movement Direction** and verify the prior movement-facing behavior is unchanged; then choose **Manual** and verify Orbit Controls no longer rotates the Character.
 
 #### Iteration 012 Orbit Blueprint nodes
 
@@ -837,3 +856,7 @@ This diagnostic does not alter any gravity source or apply physics impulses. It 
 Orbit World Subsystem contains a **C++/console-only** bounded diagnostic recorder for a selected managed simulated primitive **or all currently managed primitives**. **This does not introduce a Blueprint node or Actor Component.** The existing `Get Physics Body Diagnostics` Blueprint node and `Orbit Gravity Receiver` component's `Last Physics Body Diagnostics` property remain unchanged. Recording is independent of Receiver components and uses existing field and support measurements.
 
 Use `Orbit.Motion.List`, `Orbit.Motion.Start <unique-body-name> [seconds] [Hz]`, `Orbit.Motion.StartAll [seconds] [Hz]`, `Orbit.Motion.Status`, `Orbit.Motion.Stop` and `Orbit.Motion.Export [label]` during PIE. All-body captures share one CSV and have a 256-body/250,000-row limit; new bodies are not enrolled after capture start. Files are written in the project's `Saved/Orbit/MotionHistory` folder. The console commands are unavailable in Shipping builds. The recorder now refreshes sleeping-body speed from live velocity and reports both rejected and accepted support-query evidence without extra sweeps. It is not a Chaos contact-manifold/substep hook. See [PHYSICS_MOTION_HISTORY.md](PHYSICS_MOTION_HISTORY.md) for complete details.
+
+### Iteration 033 compatibility note
+
+All previously serialized Character Controls values keep their names and defaults. `FacingMode` is a newly added enum property whose default is `MovementDirection`, so the existing `bFaceMovementDirection` opt-out and 12/s smoothing are preserved unless a user explicitly selects `CameraDirection` or `Manual`. Camera-facing is the same existing Controls post-movement Actor rotation point, not a second rotation tick. Details/editor visibility may gray movement-only properties while Camera Direction is selected. See [`ITERATION_033.md`](ITERATION_033.md).

@@ -1,3 +1,10 @@
+## 0.2.22 | Iteration 033 | Opt-in first-person camera-facing
+
+- Add **Facing Mode** on Orbit Character Controls: Movement Direction (default, compatible with all existing assets), Camera Direction (opt-in gravity-relative first-person yaw), Manual (external facing owner).
+- Preserve legacy `bFaceMovementDirection` and movement-facing response defaults. Camera Direction instead follows the gravity-tangent camera heading even at zero velocity; capsule remains upright relative to gravity and ignores camera pitch. Preserve heading when looking nearly vertically.
+- Add independent Camera Facing Response Rate (default 0, snap). Reuse existing post-movement character rotation path and restore native yaw flags when ownership ends. Camera mode requires locally controlled Character and valid Controller.
+- Add three native UE Automation Framework tests and strengthen legacy-default assertions. No physics/gravity/Chaos, Character standing-load or Mover behavior changes. Existing first-person controller-rotation fallback limitations at extreme gravity axes remain documented; live PIE validation required.
+
 ## 0.2.21 | Iteration 032 | Character pressure isolation and controlled gravity comparison
 
 - Address reported Character Movement behavior when standing/jumping onto Orbit-simulated cubes. Added a selective Character Gravity component option to temporarily reduce the **additional native Character Movement standing force** only on a currently Orbit-managed simulated movement base, with author-value restoration on exit. Default extra standing force on Orbit bases is 0; ordinary impact/push/repulsion impulses are not disabled. This is an isolated mitigation requiring PIE validation, not proof of root cause.

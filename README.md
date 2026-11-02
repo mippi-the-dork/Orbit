@@ -2,12 +2,18 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.21 (Iteration 032, experimental)  
+**Current version:** 0.2.22 (Iteration 033, camera-facing opt-in; physics integration remains experimental)  
 **Target:** Unreal Engine 5.8.3, Win64 (not yet build-verified)  
 **Engine modifications:** None  
-**Status:** Iteration 031 compiled with 31/31 targeted UE 5.8.3 native automation tests passed; 87-body PIE recording reviewed. Iteration 032 requires UE compilation, packaging, and character-on-cube PIE validation.
+**Status:** Iteration 032 Orbit modules compiled and linked in UE 5.8.3 (full project build was blocked by unrelated code). Iteration 033 needs UE compilation, native automation, first-person PIE validation and BuildPlugin packaging. The reported character-on-cube regression remains under investigation.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+
+## Iteration 033: opt-in camera-relative facing for first-person Characters
+
+`Orbit Character Controls` offers **Facing Mode** with **Movement Direction** (default, identical to the existing setup), **Camera Direction** (opt-in) and **Manual (External)**. Camera mode drives the Character's local gravity-tangent yaw toward the camera heading, **including at idle**, without making the capsule follow camera pitch. It uses **Camera Facing Response Rate = 0** (immediate yaw) by default; designers can choose a positive rate for smooth body turning. It works with Orbit's transported gravity camera frame or standard controller rotation when gravity camera orientation is disabled. At near-vertical look directions, heading is preserved rather than jumping to a world cardinal axis.
+
+For first-person use: select `Orbit Character Controls` on your Character Blueprint, change **Facing Mode → Camera Direction**, keep **Disable Competing Native Rotation** on, and continue forwarding **IA_Move** and **IA_Look** through the existing Orbit input nodes. In a first-person Character without a Spring Arm, controller-driven camera rotation uses the existing fallback, including its documented world-Euler limitations at extreme planet orientations. Existing third-person assets and previously saved `Face Movement Direction` settings are unchanged; no physics, Mover, gravity-source, Animation Blueprint or input-binding behavior changes by default. See [`Docs/ITERATION_033.md`](Docs/ITERATION_033.md).
 
 ## Iteration 032: character standing-load isolation and gravity A/B diagnostics
 
