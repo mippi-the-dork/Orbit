@@ -10,7 +10,7 @@ UENUM(BlueprintType)
 enum class EOrbitRigidBodyGravityMethod : uint8
 {
     Standard UMETA(DisplayName="Standard (Existing AddForce)"),
-    ExperimentalChaosUniform UMETA(DisplayName="Experimental Chaos Uniform Gravity (Directional Only)")
+    ExperimentalChaosUniform UMETA(DisplayName="Experimental Chaos Gravity (Directional + Point)")
 };
 
 /** Project Settings > Plugins > Orbit. Settings apply to new and existing play worlds. */
@@ -27,9 +27,11 @@ public:
 
     /**
      * Standard preserves the exact existing Orbit force path. Experimental uses an
-     * otherwise unused Chaos gravity group for ONE unrestricted, constant-strength
-     * directional physics source. All other scenes fall back to Standard.
+     * otherwise unused Chaos gravity group for ONE unrestricted constant
+     * Directional source OR one Point source (per-particle substep evaluation).
+     * Multi-source, Axis, Spline, and Volume fields fall back to Standard.
      * Experimental is not validated for production and requires an exclusive group.
+     * The C++ enum identifier remains unchanged to preserve serialized settings.
      */
     UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration", meta=(DisplayName="Rigid Body Gravity Application"))
     EOrbitRigidBodyGravityMethod RigidBodyGravityMethod = EOrbitRigidBodyGravityMethod::Standard;

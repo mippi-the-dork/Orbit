@@ -202,6 +202,10 @@ struct ORBIT_API FOrbitPhysicsBodyDiagnostics
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
     bool bExperimentalChaosUniformGravity = false;
 
+    /** True only when the opt-in Chaos single Point-field per-body solver path owns this body. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bExperimentalChaosPointGravity = false;
+
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
     bool bOriginalNativeGravityEnabled = false;
 

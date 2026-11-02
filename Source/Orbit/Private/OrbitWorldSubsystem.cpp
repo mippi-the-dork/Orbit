@@ -405,10 +405,12 @@ void UOrbitWorldSubsystem::StopExperimentalGravityBridge()
 void UOrbitWorldSubsystem::UpdateExperimentalGravityBridge(const UOrbitSettings* Settings)
 {
     FVector UniformGravity;
+    FOrbitFieldDefinition SolverField;
+    bool bPerParticlePoint = false;
     const bool bOptedIn = Settings &&
         Settings->RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform;
     const bool bEligible = bOptedIn &&
-        FOrbitChaosGravityBridge::TryGetUniformField(ActiveFields, UniformGravity);
+        FOrbitChaosGravityBridge::TryGetSolverField(ActiveFields, SolverField, UniformGravity, bPerParticlePoint);
     if (!bEligible)
     {
         if (bOptedIn && !bExperimentalUniformFallbackLogged)
@@ -434,7 +436,7 @@ void UOrbitWorldSubsystem::UpdateExperimentalGravityBridge(const UOrbitSettings*
         StopExperimentalGravityBridge();
         return;
     }
-    ChaosGravityBridge->Update(UniformGravity);
+    ChaosGravityBridge->Update(SolverField, UniformGravity, bPerParticlePoint);
 }
 
 void UOrbitWorldSubsystem::RestoreBodyGravity()
@@ -607,8 +609,8 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         const bool bNativeComparison = OrbitPhysicsIntegrationMath::CanCompareWithNativeWorldGravity(
             Settings->bCompareNativeWorldGravityWhenEquivalent, Body.bOriginalGravity,
             Sample.bHasInfluence, Acceleration, GetWorld()->GetGravityZ());
-        // The experimental solver path owns group 7 only in an eligible uniform
-        // directional world. All other body/field configurations retain Standard.
+        // The experimental solver path owns group 7 only in a single eligible
+        // Directional or Point field. All other configurations retain Standard.
         bool bExperimentalChaos = false;
         if (!bNativeComparison && ChaosGravityBridge && ChaosGravityBridge->IsActive() && Body.bOriginalGravity)
         {
@@ -625,7 +627,7 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         }
         if (!bExperimentalChaos) { RestoreExperimentalBodyGroup(Body); }
         // True means Chaos integrates gravity itself; either native group 0 or
-        // the opt-in uniform group 7, never both in the same simulation step.
+        // the opt-in solver group 7, never both in the same simulation step.
         const bool bChaosGravity = bNativeComparison || bExperimentalChaos;
         if (Component->IsGravityEnabled() != bChaosGravity)
         {
@@ -666,7 +668,8 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
                 Body.LastDiagnostics.bValid = true;
                 Body.LastDiagnostics.bBodyAwake = false;
                 Body.LastDiagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
-                Body.LastDiagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos;
+                Body.LastDiagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos && !ChaosGravityBridge->IsPointMode();
+                Body.LastDiagnostics.bExperimentalChaosPointGravity = bExperimentalChaos && ChaosGravityBridge->IsPointMode();
                 Body.LastDiagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
                 Body.LastDiagnostics.bUsingNativeContactDamping = Body.bNativeContactDampingApplied;
                 Body.LastDiagnostics.DominantSourceId = Sample.DominantSourceId;
@@ -841,7 +844,8 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
              (bGraceSupport ? TEXT("Query grace") : TEXT("Unsupported"))));
         Diagnostics.bBodyAwake = true;
         Diagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
-        Diagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos;
+        Diagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos && !ChaosGravityBridge->IsPointMode();
+        Diagnostics.bExperimentalChaosPointGravity = bExperimentalChaos && ChaosGravityBridge->IsPointMode();
         Diagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
         Diagnostics.DominantSourceId = Sample.DominantSourceId;
         Diagnostics.GravityAcceleration = Acceleration;

@@ -175,3 +175,7 @@ Recoverable manual-sleep suppression, the sphere-specific rest envelope, short-t
 ### Iteration 034 scope
 
 The optional Chaos gravity-group experiment applies **only** to Orbit-managed simulated static meshes with one unlimited Directional source. It does not change the character, Epic Mover, Chaos Mover or `OrbitMover` integration; their runtime behavior and APIs are unchanged. The new setting defaults to Standard.
+
+### Iteration 035: experimental Point physics integration does not involve Mover
+
+The new per-particle Point gravity integration is opt-in and applies only to ordinary Orbit-managed static-mesh physics bodies. It **does not** change the separate `OrbitMover` module, synchronous Mover/Chaos Mover support, character physics or prediction. A Gravity Source Actor with a Point field still supplies the ordinary shared field sample to Mover regardless of how nearby independent rigid bodies receive their physics gravity. See [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md).

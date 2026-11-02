@@ -19,24 +19,71 @@ DEFINE_LOG_CATEGORY_STATIC(LogOrbitChaosGravity, Log, All);
 struct FOrbitUniformGravityInput : public Chaos::FSimCallbackInput
 {
     Chaos::FVec3 Acceleration = Chaos::FVec3(0, 0, 0);
-    void Reset() { Acceleration = Chaos::FVec3(0, 0, 0); }
+    FOrbitFieldDefinition PointField;
+    bool bPerParticlePoint = false;
+    void Reset()
+    {
+        Acceleration = Chaos::FVec3(0, 0, 0);
+        PointField = FOrbitFieldDefinition();
+        bPerParticlePoint = false;
+    }
 };
 
-struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<FOrbitUniformGravityInput>
+// The uniform implementation remains unchanged. For Point gravity, group 7 is
+// set to zero and the pre-integrate callback injects each body's acceleration
+// directly on the physics thread before Chaos's normal velocity integration.
+// Neither variant calls the game-thread AddForce API.
+struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<
+    FOrbitUniformGravityInput, Chaos::FSimCallbackNoOutput,
+    Chaos::ESimCallbackOptions::Presimulate | Chaos::ESimCallbackOptions::PreIntegrate>
 {
+    FOrbitFieldDefinition CurrentPointField;
+    bool bCurrentPointField = false;
+
     virtual void OnPreSimulate_Internal() override
     {
         if (const FOrbitUniformGravityInput* Input = GetConsumerInput_Internal())
         {
-            // Solver thread only. The native scene callback independently owns group 0.
+            bCurrentPointField = Input->bPerParticlePoint;
+            if (bCurrentPointField) { CurrentPointField = Input->PointField; }
             auto* RigidsSolver = static_cast<Chaos::FPBDRigidsSolver*>(GetSolver());
-            RigidsSolver->GetEvolution()->GetGravityForces().SetAcceleration(Input->Acceleration, FOrbitChaosGravityBridge::GravityGroup);
+            RigidsSolver->GetEvolution()->GetGravityForces().SetAcceleration(
+                bCurrentPointField ? Chaos::FVec3(0, 0, 0) : Input->Acceleration,
+                FOrbitChaosGravityBridge::GravityGroup);
         }
+    }
+
+    virtual void OnPreIntegrate_Internal() override
+    {
+        if (!bCurrentPointField) { return; }
+        auto* RigidsSolver = static_cast<Chaos::FPBDRigidsSolver*>(GetSolver());
+        const FOrbitFieldDefinition& Field = CurrentPointField;
+        // The group is an ownership marker; it is NOT used to approximate
+        // multiple positions with a shared gravity vector. Only dynamic,
+        // awake particles participate; Chaos retains its own sleep decisions.
+        RigidsSolver->GetEvolution()->GetParticles().GetNonDisabledDynamicView().ParallelFor(
+            [&Field](auto& Particle, int32)
+            {
+                if (!Particle.GravityEnabled() ||
+                    Particle.GravityGroupIndex() != FOrbitChaosGravityBridge::GravityGroup ||
+                    Particle.ObjectState() != Chaos::EObjectStateType::Dynamic)
+                {
+                    return;
+                }
+                const auto& Position = Particle.GetX();
+                FVector Acceleration;
+                if (FOrbitFieldEvaluator::Evaluate(Field,
+                    FVector(Position.X, Position.Y, Position.Z), Acceleration) &&
+                    !Acceleration.IsNearlyZero())
+                {
+                    Particle.Acceleration() += Chaos::FVec3(Acceleration);
+                }
+            });
     }
 
     virtual FName GetFNameForStatId() const override
     {
-        static const FName Name(TEXT("OrbitUniformGravity"));
+        static const FName Name(TEXT("OrbitExperimentalChaosGravity"));
         return Name;
     }
 };
@@ -65,6 +112,46 @@ bool FOrbitChaosGravityBridge::TryGetUniformField(const TArray<FOrbitFieldDefini
         OutAcceleration = Sample;
     }
     return EligibleCount == 1;
+}
+
+bool FOrbitChaosGravityBridge::TryGetSolverField(const TArray<FOrbitFieldDefinition>& Fields,
+    FOrbitFieldDefinition& OutField, FVector& OutUniformAcceleration, bool& bOutPerParticlePoint)
+{
+    bOutPerParticlePoint = false;
+    OutUniformAcceleration = FVector::ZeroVector;
+    // Preserve the proven uniform eligibility contract byte-for-byte.
+    if (TryGetUniformField(Fields, OutUniformAcceleration))
+    {
+        for (const FOrbitFieldDefinition& Field : Fields)
+        {
+            if (Field.bPhysics && Field.ChannelMask != 0u) { OutField = Field; break; }
+        }
+        return true;
+    }
+
+    // First per-body experiment: exactly one ordinary Point gravity source.
+    // No vortex, spline, axis, volume, or multi-source approximation.
+    const FOrbitFieldDefinition* Candidate = nullptr;
+    for (const FOrbitFieldDefinition& Field : Fields)
+    {
+        if (!Field.bPhysics || Field.ChannelMask == 0u) { continue; }
+        if (Candidate) { return false; }
+        Candidate = &Field;
+    }
+    if (!Candidate || Candidate->Shape != EOrbitGravityShape::Point ||
+        (Candidate->Direction != EOrbitGravityDirection::Inward &&
+         Candidate->Direction != EOrbitGravityDirection::Outward) ||
+        Candidate->bLimitToBox || Candidate->Center.ContainsNaN() ||
+        !FMath::IsFinite(Candidate->Strength) ||
+        !FMath::IsFinite(Candidate->MaxDistance) ||
+        !FMath::IsFinite(Candidate->ReferenceDistance) ||
+        Candidate->MaxDistance < 0.0 || Candidate->ReferenceDistance <= 0.0)
+    {
+        return false;
+    }
+    OutField = *Candidate;
+    bOutPerParticlePoint = true;
+    return true;
 }
 
 bool FOrbitChaosGravityBridge::Start(UWorld* World)
@@ -96,15 +183,20 @@ bool FOrbitChaosGravityBridge::Start(UWorld* World)
     Solver = World->GetPhysicsScene()->GetSolver();
     Callback = Solver->CreateAndRegisterSimCallbackObject_External<FOrbitUniformGravitySimCallback>();
     if (!Callback) { Solver = nullptr; return false; }
-    UE_LOG(LogOrbitChaosGravity, Display, TEXT("Experimental uniform Chaos gravity started (group %d). Requires exclusive ownership of this group."), GravityGroup);
+    UE_LOG(LogOrbitChaosGravity, Display, TEXT("Experimental Chaos gravity started (group %d). Requires exclusive ownership of this group."), GravityGroup);
     return true;
 }
 
-void FOrbitChaosGravityBridge::Update(const FVector& Acceleration)
+void FOrbitChaosGravityBridge::Update(const FOrbitFieldDefinition& Field,
+    const FVector& UniformAcceleration, bool bPerParticlePoint)
 {
     if (Callback)
     {
-        Callback->GetProducerInputData_External()->Acceleration = Chaos::FVec3(Acceleration);
+        bPointMode = bPerParticlePoint;
+        FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
+        Input->Acceleration = Chaos::FVec3(UniformAcceleration);
+        Input->bPerParticlePoint = bPerParticlePoint;
+        if (bPerParticlePoint) { Input->PointField = Field; }
     }
 }
 
@@ -116,6 +208,7 @@ void FOrbitChaosGravityBridge::Stop()
     }
     Callback = nullptr;
     Solver = nullptr;
+    bPointMode = false;
 }
 
 bool FOrbitChaosGravityBridge::AssignBody(UPrimitiveComponent* Component, int32& OutPreviousGroup)

@@ -1,3 +1,12 @@
+## Orbit 0.2.24 | Iteration 035 | Opt-in per-particle Point solver gravity
+
+- Expand the **existing** Experimental Chaos method to support exactly one ordinary inward/outward Point gravity source, evaluating unique acceleration for each eligible rigid body on each Chaos physics substep. The proven single uniform Directional path remains.
+- Preserve Standard as the default and its existing AddForce implementation unchanged. Keep the serialized experimental enum value stable for existing settings. Axis/Spline/Volume, vortex, box-masked Point, multi-source and unsupported bodies remain Standard.
+- Avoid introducing any solver callback in Standard mode. Keep group-7 exclusive ownership and restoration, with distinct receiver diagnostics for uniform versus Point gravity.
+- Append CSV column 124 `experimental_chaos_point_gravity` without changing previous columns. Add three native Automation Framework policy/math tests (six gravity-integration tests total).
+- **New maintained reference:** `Docs/EXPERIMENTAL_GRAVITY.md` documents settings, supported/unsupported combinations, fallback, diagnostics, tests, risks, and ongoing validation. See also `Docs/ITERATION_035.md`.
+- **Not yet compiled or PIE-validated in UE 5.8.3.** Natural sleep on curved worlds remains the principal hypothesis to test. Existing project behavior unchanged unless experimental mode is explicitly selected.
+
 ## Orbit 0.2.23 | Iteration 034 | Opt-in directional Chaos gravity-group experiment
 
 - One Orbit package and codebase. Added `Rigid Body Gravity Application`: Standard (default, unchanged) or Experimental Chaos Uniform Gravity (explicit opt-in).

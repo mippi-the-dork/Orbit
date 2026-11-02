@@ -1,14 +1,14 @@
 # Orbit: Gravity Source Actor Guide
 
-**Version:** Orbit v0.2.21, Iteration 032  
+**Version:** Orbit v0.2.24, Iteration 035  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Level designers, technical artists, Blueprint users and programmers  
 **Primary class:** `AOrbitGravitySource`  
-**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.21.
+**Source of truth:** `OrbitGravitySource.h/.cpp`, `OrbitGravityTypes.h/.cpp`, and `OrbitWorldSubsystem.cpp` in Orbit v0.2.24.
 
 This is the guide to the **placeable Orbit Gravity Source Actor** and its properties. For the five base Orbit components, the Orbit Mover component and the corresponding Blueprint APIs, see [`COMPONENTS_AND_BLUEPRINT_API.md`](COMPONENTS_AND_BLUEPRINT_API.md).
 
-This documents what Orbit v0.2.21 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
+This documents what Orbit v0.2.24 implements. Gravity-aware NavMesh, EQS, AI path following, network prediction and complete camera integration are future work, not part of this Actor.
 
 ---
 
@@ -621,6 +621,6 @@ The optional bounded extra support sweep runs only after the initial short sweep
 
 Character-facing selection belongs to the **Orbit Character Controls** component, **not** the Gravity Source Actor. Setting `Facing Mode = Camera Direction` is opt-in and makes an eligible locally controlled Character follow camera heading about gravity Up without changing the source's authored direction, strength, channels, competition, field blending, falloff or previews. Source and Physics Body behavior are unchanged. See `COMPONENTS_AND_BLUEPRINT_API.md` and `ITERATION_033.md`.
 
-### Physics gravity application (Iteration 034 experiment)
+### Physics gravity application (Iterations 034–035 experiment)
 
-One unlimited, constant-falloff, physics-enabled **Directional** source can use the opt-in `Experimental Chaos Uniform Gravity` mode for eligible static-mesh bodies. Point, Axis, Spline, bounded Volume, falloff and multi-source arrangements continue using Standard AddForce, even with the experimental setting selected. The default remains Standard, preserving the existing gravity behavior and source settings. A per-body diagnostic indicates which path is active. See `ITERATION_034.md` for group-7 limitations.
+The same optional **Experimental Chaos Gravity (Directional + Point)** setting can use the proven solver group-7 path for exactly one unrestricted constant-falloff, physics-enabled **Directional** source, or the new **unvalidated per-body Point solver path** for one normal inward/outward Point source (including limited-range and inverse-square falloff). Axis, Spline, Volume, vortex, box-masked Point, and multiple physical sources remain on Standard AddForce. The default remains Standard, so existing project behavior is unchanged. Receiver diagnostics identify whether the Uniform or Point path actually owns a rigid body. See the maintained [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md) for current eligibility and constraints.

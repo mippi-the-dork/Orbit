@@ -1,11 +1,11 @@
 # Orbit: Components and Blueprint API Guide
 
-**Version:** Orbit v0.2.21, Iteration 032  
+**Version:** Orbit v0.2.24, Iteration 035  
 **Unreal Engine target:** 5.8.3  
 **Audience:** Blueprint users, gameplay designers, and developers integrating Orbit into an Unreal project  
-**Source of truth:** Orbit v0.2.21 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
+**Source of truth:** Orbit v0.2.24 plugin headers and implementation, particularly `OrbitCharacterGravityComponent`, `OrbitGravityReceiverComponent`, `OrbitBlueprintLibrary`, `OrbitGravitySource`, and `OrbitWorldSubsystem`.
 
-This document describes **implemented capabilities in the Orbit v0.2.21 source package**, not planned navigation, EQS, camera, or Chaos solver integrations.
+This document describes implemented source capabilities in Orbit v0.2.24; experimental solver gravity has a separate maintained guide and requires user validation. Unreal-native navigation/EQS extensions remain future work.
 
 For the placeable Gravity Source Actor and the new embedded Gravity Source Component, its property settings, shape and vortex modes, visualization, and level setup examples, see [`GRAVITY_SOURCE_ACTOR.md`](GRAVITY_SOURCE_ACTOR.md).
 
@@ -14,8 +14,12 @@ For the placeable Gravity Source Actor and the new embedded Gravity Source Compo
 
 `UOrbitCharacterGravityComponent` includes `bLimitStandingLoadOnOrbitBodies` (default `true`), `OrbitStandingDownwardForceScale` (default `0.0`), and `bLimitingOrbitBaseStandingLoad` (runtime read-only). When a native `UCharacterMovementComponent` walks on an Orbit-managed simulating physics component inside an Orbit character field, the native `StandingDownwardForceScale` is temporarily changed. The previous value is restored when the condition no longer holds, on deactivation, or on EndPlay (unless another system has replaced Orbit's temporary value). This **does not disable impact pushes or physics collisions**, and it does not apply to Mover characters. Use `UOrbitWorldSubsystem::IsOrbitManagedPhysicsBody` from C++ to determine whether a primitive is currently managed.
 
-For a controlled gravity delivery comparison, `UOrbitSettings::bCompareNativeWorldGravityWhenEquivalent` is an optional diagnostic, disabled by default. It applies only to world-down gravity matching WorldSettings magnitude for bodies originally using native gravity. Normal arbitrary gravity continues through Orbit `AddForce`. See [`ITERATION_032.md`](ITERATION_032.md).
+For a controlled gravity delivery comparison, `UOrbitSettings::bCompareNativeWorldGravityWhenEquivalent` is an optional diagnostic, disabled by default. It applies only to world-down gravity matching WorldSettings magnitude for bodies originally using native gravity. Normal arbitrary gravity continues through Orbit `AddForce` unless the separate opt-in solver mode is selected for one eligible Directional or Point source. See [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md) and [`ITERATION_032.md`](ITERATION_032.md).
 
+
+## Experimental solver diagnostics (Iteration 035)
+
+The existing `Last Physics Body Diagnostics` structure now includes `Experimental Chaos Point Gravity` (new, read-only) alongside `Experimental Chaos Uniform Gravity` (from Iteration 034). They distinguish actual solver ownership for the new Point physics-step route versus the previously proven Directional solver-group route. Both are false for Standard fallback. These properties do not change Character/Blueprint gravity sampling or Mover. The `UOrbitSettings::RigidBodyGravityMethod` experimental enum C++ identifier remains unchanged for serialized configuration compatibility. For the authoritative eligibility/fallback/test table, see [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md).
 
 ## Iteration 016: two additional components and Blueprint nodes
 

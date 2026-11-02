@@ -159,3 +159,7 @@ No change to the 122-column CSV. Native-world gravity A/B uses `native_gravity_e
 ### Iteration 034 path evidence
 
 The CSV appends column 123, `experimental_chaos_uniform_gravity`, after the original 122 columns (which retain their indices). 1 identifies a body currently assigned to the opt-in Chaos uniform group-7 solver path; 0 indicates it is not. This allows the same ten-cube recordings to distinguish the experimental solver path from fallback Standard without inferring from native gravity flags. Disable both resting and supported damping for natural Chaos sleep comparisons. See `ITERATION_034.md`.
+
+### Iteration 035: Point solver diagnostics (maintained experimental mode)
+
+The CSV now appends a **124th** field, `experimental_chaos_point_gravity`, after the existing 123rd `experimental_chaos_uniform_gravity` field. The earlier columns are unchanged. Exactly one of these two flags should be 1 for a solver-owned static-mesh body in an eligible single-source scene: Uniform=1 for one unrestricted Directional source, Point=1 for one ordinary inward/outward Point source; both 0 means Standard or other handling. The Point result is sampled from game-thread ownership; actual physics-step acceleration is computed separately for each marked body in the Chaos pre-integrate callback. See [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md).
