@@ -6,6 +6,22 @@
 // Never assume world Z is gravity Up for character support decisions.
 namespace OrbitPhysicsIntegrationMath
 {
+    // Startup claim must be a separate, explicitly enabled experiment. Standard
+    // and existing Experimental projects do not change their first-frame behavior.
+    inline bool ShouldPreclaimExperimentalGravity(bool bPhysicsEnabled, bool bAutomaticBodies,
+        bool bExperimentalMethod, bool bEarlyOwnershipOptIn, bool bEligibleSolverField)
+    {
+        return bPhysicsEnabled && bAutomaticBodies && bExperimentalMethod &&
+            bEarlyOwnershipOptIn && bEligibleSolverField;
+    }
+
+    inline bool CanPreclaimExperimentalBody(bool bRegistered, bool bSimulating,
+        bool bOriginallyGravityEnabled, bool bIgnored, bool bInMatchingField)
+    {
+        return bRegistered && bSimulating && bOriginallyGravityEnabled &&
+            !bIgnored && bInMatchingField;
+    }
+
     inline bool ShouldLimitStandingForce(bool bEnabled, bool bInsideOrbitField,
         bool bWalking, bool bBaseSimulating, bool bBaseManagedByOrbit)
     {

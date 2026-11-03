@@ -1,6 +1,6 @@
 # Orbit | Experimental Chaos Gravity Integration
 
-**Maintained reference | v0.2.24, Iteration 035 | Unreal Engine 5.8.x | Editor/Win64 test target**
+**Maintained reference | v0.2.25, Iteration 036 | Unreal Engine 5.8.x | Editor/Win64 test target**
 
 > **Experimental, explicit opt-in. Not production-validated.** One Orbit plugin and one codebase. Updating the plugin does **not** enable this integration: **Standard (Existing AddForce)** is the default for both new projects and existing projects without a saved override.
 
@@ -12,7 +12,9 @@ The original Standard implementation applies sampled field acceleration by `UPri
 
 Iteration 034 introduced an opt-in solver gravity-group implementation for a single uniform Directional source. **User-verified in UE 5.8.3:** three native automation tests passed; 30 of 30 cubes across three recordings slept naturally with both optional Orbit resting interventions off. Rotating the Directional source woke bodies; restoring downward gravity let them settle and sleep again (visually confirmed). These observations validate **the single-uniform mode only**.
 
-Iteration 035 adds a *new, unvalidated* **single Point-source per-body path**. This is not yet evidence that radial bodies naturally sleep on curved surfaces. That result requires a PIE test and measured capture.
+Iteration 035's single Point-source per-body path was subsequently user-tested in UE 5.8.3. In a six-cube radial planet test, all six naturally slept under the experimental solver while zero of six slept under Standard AddForce. Moving the Point source woke sleeping bodies; they settled and slept again. Spheres also settled under ordinary Point gravity. Multiple-source fallback to Standard was demonstrated, and single-source finite-range Linear falloff agreed with the intended strength formula in recorded captures. These tests validate limited scenarios, **not** the complete plugin in production.
+
+**Iteration 036 introduces a separate, default-OFF startup experiment:** `Experimental: Claim Gravity Before BeginPlay`. This preclaims pre-existing eligible rigid bodies in `UWorldSubsystem::OnWorldBeginPlay`, instead of waiting for the first Orbit subsystem tick. The change only runs when both the main Experimental method and the startup option are explicitly enabled. The experimental path **without this new option** remains unchanged. PIE confirmation is still required.
 
 ## Enable / disable
 
@@ -20,8 +22,9 @@ Iteration 035 adds a *new, unvalidated* **single Point-source per-body path**. T
 2. Set **Rigid Body Gravity Application**:
    - **Standard (Existing AddForce)**: default, established behavior. No Chaos gravity-group callback is registered.
    - **Experimental Chaos Gravity (Directional + Point)**: may use the solver for the eligible configurations below. The serialized enum value remains `ExperimentalChaosUniform` to preserve old project settings.
-3. For controlled gravity integration comparisons, turn **Stabilize Resting Rigid Bodies** and **Damp Supported Rigid Body Motion** **Off**. Leave **Compare Native World Gravity on Matching Fields** **Off**.
-4. To revert, select **Standard**. Orbit releases its solver callback, restores group ownership, and returns managed bodies to the original force method; PIE restart is recommended after first experimental use in any important project.
+3. **Optional new startup experiment (Iteration 036):** Set **Experimental: Claim Gravity Before BeginPlay** to On if testing the suspected first physics-step world-gravity impulse. It is **Off by default**, including in projects that already saved the experimental gravity method. This only covers eligible, existing, simulated Static Mesh bodies with an active matching field during world initialization. Bodies spawned later still use the normal tick discovery. This is not a guarantee for every physics world startup order.
+4. For controlled gravity integration comparisons, turn **Stabilize Resting Rigid Bodies** and **Damp Supported Rigid Body Motion** **Off**. Leave **Compare Native World Gravity on Matching Fields** **Off**.
+5. To revert, select **Standard**. Orbit releases its solver callback, restores group ownership, and returns managed bodies to the original force method; PIE restart is recommended after first experimental use in any important project.
 
 The setting is **project-wide**. There is no second Orbit plugin, manual asset migration, or new gravity-source class.
 
@@ -47,6 +50,24 @@ The setting is **project-wide**. There is no second Orbit plugin, manual asset m
 
 **Known precision distinction:** The Point evaluator on the solver thread uses the particle's physics position (`Particle.GetX()`), while the Standard game-thread sampler queries `UPrimitiveComponent::GetCenterOfMass()`. Bodies with substantially offset center-of-mass origins need extra regression testing before equivalence is claimed.
 
+## Initialization and early ownership (Iteration 036)
+
+**Why it exists:** In controlled sphere/planet captures with World Gravity Z = -980, all spheres had approximately one initial world-down step before their intended Point gravity was applied. Setting World Gravity Z to zero removed that initial impulse and changed settling. Changing World Gravity Z globally is a diagnostic, **not** a production fix. This new option attempts to establish Orbit gravity ownership before actors receive `BeginPlay`, using UE's `UWorldSubsystem::OnWorldBeginPlay` lifecycle callback.
+
+The preclaim is also disabled when the separate `Compare Native World Gravity on Matching Fields` A/B diagnostic is enabled, to avoid assigning group 7 to a body that would immediately return to native world gravity during the normal tick.
+
+The preclaim performs a one-time scan of pre-existing, registered gravity source Actors/Components (their normal registration takes place in `BeginPlay`), confirms a *single eligible* solver field, starts the existing experimental Chaos callback, then assigns group 7 to eligible simulated Static Mesh components **without** calling `AddForce()`. Their native `Enable Gravity` state remains enabled, but gravity is routed through the owned Chaos group. This option does not scan for or take over initially gravity-disabled, `Orbit.Ignore`, out-of-range, wrong-channel, skeletal or other unsupported components. Ineligible/multi-source worlds use the existing discovery/fallback implementation. Group-7 conflicts retain the existing fail-safe. There is no engine patch, second plugin, or new solver callback mode.
+
+The path logs `Experimental early gravity ownership: N existing static mesh bodies preclaimed before Actor BeginPlay (Point/Directional).` when a compatible callback starts. This is **not proof that no physics step happened before the callback**; confirm via Motion History samples. Exact timing and compatibility remain unverified until UE 5.8.3 PIE.
+
+**Known boundaries:** actor/components added by runtime spawning or streaming after initial world begin play use legacy tick discovery and can still experience a discovery delay. Early snapshot precedes BeginPlay script changes to gravity-source settings; later tick refreshes them. Solver callback input processing relative to the very first physics substep must be verified in PIE. Disabling this extra option fully restores prior startup behavior even when the main experimental method is selected (restart PIE after setting changes).
+
+## Weak gravity and native Chaos sleeping
+
+A user-controlled inverse-square Point experiment with ~7.41 cm/s² acceleration showed six spheres entering sleep approximately 125 cm above the planet. Removing the startup world-gravity impulse **did not fix** this: under World Gravity Z = 0, all six fell asleep while unsupported. A separate, native Chaos test with no Orbit source and World Gravity Z near -7.41 also appeared to stop while suspended, although its native sleep-state flag was not recorded.
+
+UE 5.8's `Chaos/Island/IslandManager.cpp` explicitly evaluates *isolated particles* using `VSmooth`, `WSmooth`, and a sleep counter without requiring collision support; default isolated-particle sleep multipliers can be controlled by the engine's global sleep CVars. Those global CVars or physics-material sleep thresholds are **investigation tools only**; changing them affects unrelated physics and is **not performed by Orbit**. For now, preserve native sleep policy: no forced wake loop, support sweep, threshold override, or material changes have been added. Strong normal-gravity success does not guarantee correct behavior under very weak acceleration.
+
 ## Diagnostics and CSV
 
 For an eligible Orbit Gravity Receiver component, inspect its physics body diagnostics:
@@ -59,7 +80,7 @@ Motion History CSV keeps the existing 123 fields and appends field **124**, `exp
 
 To record: `Orbit.Motion.StartAll` then `Orbit.Motion.Export` after a controlled 20-second PIE run. For the initial radial trial verify Point=1 for all test cubes, Uniform=0, stabilization and damping both disabled. If Point remains 0, inspect the field restrictions and source ownership before interpreting sleeping results.
 
-## Iteration 035 manual validation checklist
+## Validated test history and Iteration 036 test checklist
 
 1. **Compile and run native automation:** `Automation RunTests Orbit.Physics.GravityIntegration`. Six tests expected: the original three compatibility tests and three new Point eligibility/vector/fallback tests. These are not a substitute for solver integration tests.
 2. **Uniform regression:** With a single unlimited Directional source, 10 cubes on a flat surface, verify all wake → naturally sleep → wake on rotation → naturally sleep again. Confirm Uniform=1, Point=0. The proven Iteration 034 uniform behavior must remain intact.
@@ -69,6 +90,17 @@ To record: `Orbit.Motion.StartAll` then `Orbit.Motion.Export` after a controlled
 6. **Fallback:** Add a second source; expect Point=0 and old Standard behavior. Try Axis/Spline/Volume, vortex and box-masked Point. Disable experimental and restore source. Ensure no force duplication or residual group 7 after switching.
 7. **Real-world regression:** Existing Orbit projects, skeletal physics, multiplayer, stacked bodies, character interactions and frame-time cost remain **unverified** until intentionally tested.
 8. **Packaging:** Complete Win64 UE 5.8.x BuildPlugin and PIE validation. No engine source modifications or Probe dependency.
+
+## Iteration 036 A/B procedure (do not change World Gravity)
+
+1. In the **dedicated** six-sphere planet test level, use one Point source, inward Constant 980, unlimited range, normal World Gravity Z = -980, both rest interventions Off, Native World Gravity Comparison Off.
+2. Keep main **Experimental Chaos Gravity** mode On. Set **Experimental: Claim Gravity Before BeginPlay** **Off**, restart PIE, capture from startup using `Orbit.Motion.AutoStartAll 1`, 20 seconds, and export the CSV.
+3. Set only the new startup option **On**, restart PIE, capture again with the same settings. Look for the preclaim count in Output Log.
+4. Compare the **first recorded velocities** of equatorial spheres. They should not receive a common downward world-Z velocity before their local radial field. Compare tangential movement and natural sleeping at 20 seconds. Do not use a sleeping count alone to infer that gravity is correct.
+5. Test six cubes and then single Directional, changing source during PIE, reset to Standard, and try a two-source scene. With two sources, early ownership should not claim bodies (Standard fallback). Confirm no duplicate gravity or lost native gravity.
+6. Turn the startup option Off again and restart PIE for a baseline. Test runtime-spawned and streaming actors separately: they are explicitly **out of scope** for this startup fix.
+
+All runtime validation is pending. The new suite has **eight** policy/math tests: `Automation RunTests Orbit.Physics.GravityIntegration`. These policy tests do not assert actual solver first-frame timing or native sleep state.
 
 ## Failure criteria and return path
 
@@ -89,6 +121,8 @@ To record: `Orbit.Motion.StartAll` then `Orbit.Motion.Export` after a controlled
 
 ## Status
 
-- **Uniform Directional, Iteration 034:** user-confirmed natural sleeping and wake/resleep in simple PIE configurations. Other combinations are not automatically validated.
-- **Single Point, Iteration 035:** source-authored, engine-source-reviewed, not yet compiled/tested in user's UE 5.8.3 environment. Does **not** yet establish natural sleeping in radial worlds.
-- **Standard:** default; no intentional behavior change in this iteration.
+- **Uniform Directional (034):** 30/30 natural cube sleeps across 3 runs, wake and resleep after gravity rotation observed.
+- **Single Point (035):** six of six cubes sleeping on a spherical planet in one recorded run; spheres and wake/resleep observed under ordinary fields. Two-source Standard fallback and finite-range linear falloff verified in targeted recordings. Other configurations remain experimental.
+- **Weak inverse-square (035):** unsupported sleeping reproduced, and a similar motionless native Chaos case observed; not solved.
+- **Early preclaim (036):** source-implemented with an additional default-off setting and native Automation Framework policy tests, **not UE 5.8.3 build- or PIE-validated**. Confirm initial per-body gravity vector and startup trajectory with option Off vs On.
+- **Standard:** default; intentionally unchanged. Existing experimental configurations with early ownership Off also retain their previous startup behavior.

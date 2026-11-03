@@ -1,5 +1,6 @@
 #include "OrbitChaosGravityBridge.h"
 #include "OrbitSettings.h"
+#include "OrbitPhysicsIntegrationMath.h"
 #include "Chaos/PerParticleGravity.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -197,6 +198,47 @@ bool FOrbitChaosPointSafetyTest::RunTest(const FString& Parameters)
     Fields[0].Shape = EOrbitGravityShape::Axis;
     TestFalse(TEXT("Axis remains on Standard"),
         FOrbitChaosGravityBridge::TryGetSolverField(Fields, Selected, Uniform, bPoint));
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitChaosEarlyOwnershipPolicyTest,
+    "Orbit.Physics.GravityIntegration.EarlyOwnershipOptIn",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitChaosEarlyOwnershipPolicyTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsIntegrationMath;
+    TestFalse(TEXT("Standard never preclaims even if extra option is enabled"),
+        ShouldPreclaimExperimentalGravity(true, true, false, true, true));
+    TestFalse(TEXT("Existing Experimental projects stay unchanged unless explicitly opted in"),
+        ShouldPreclaimExperimentalGravity(true, true, true, false, true));
+    TestFalse(TEXT("Physics integration off disables early ownership"),
+        ShouldPreclaimExperimentalGravity(false, true, true, true, true));
+    TestFalse(TEXT("Automatic-body discovery off disables early ownership"),
+        ShouldPreclaimExperimentalGravity(true, false, true, true, true));
+    TestFalse(TEXT("Unsupported multiple/complex fields never preclaim"),
+        ShouldPreclaimExperimentalGravity(true, true, true, true, false));
+    TestTrue(TEXT("Only explicitly enabled eligible fields preclaim"),
+        ShouldPreclaimExperimentalGravity(true, true, true, true, true));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitChaosEarlyOwnershipBodyTest,
+    "Orbit.Physics.GravityIntegration.EarlyOwnershipBodyPolicy",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitChaosEarlyOwnershipBodyTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsIntegrationMath;
+    TestTrue(TEXT("Registered native-gravity simulated body within matching source may be claimed"),
+        CanPreclaimExperimentalBody(true, true, true, false, true));
+    TestFalse(TEXT("Never claim native gravity disabled body"),
+        CanPreclaimExperimentalBody(true, true, false, false, true));
+    TestFalse(TEXT("Never claim an ignored body"),
+        CanPreclaimExperimentalBody(true, true, true, true, true));
+    TestFalse(TEXT("Never claim a channel mismatch or out-of-range body"),
+        CanPreclaimExperimentalBody(true, true, true, false, false));
+    TestFalse(TEXT("Never claim unregistered body"),
+        CanPreclaimExperimentalBody(false, true, true, false, true));
+    TestFalse(TEXT("Never claim non-simulating body"),
+        CanPreclaimExperimentalBody(true, false, true, false, true));
     return true;
 }
 #endif

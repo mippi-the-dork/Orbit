@@ -20,6 +20,7 @@ public:
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
+    virtual void OnWorldBeginPlay(UWorld& InWorld) override;
     virtual void Tick(float DeltaTime) override;
     virtual TStatId GetStatId() const override;
 
@@ -325,6 +326,7 @@ private:
     void FinishMotionHistory(const FString& Reason);
     static FString DescribeCollisionGeometry(const UPrimitiveComponent* Component);
     void UpdateSourceSnapshot();
+    void PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorld);
     void DiscoverBodies();
     void ApplyPhysicsForces(float DeltaTime);
     FRestSupportProbe ProbeSupportAlongGravity(UPrimitiveComponent* Component, const FVector& Down, float ProbeDistance, UPrimitiveComponent* CachedSideBlocker = nullptr) const;

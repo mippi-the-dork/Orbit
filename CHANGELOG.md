@@ -1,3 +1,11 @@
+## Orbit 0.2.25 | Iteration 036 | Experimental pre-BeginPlay gravity ownership
+
+- Added an **additional opt-in**, default-OFF `Experimental: Claim Gravity Before BeginPlay` setting. Standard and existing Experimental gravity projects are unchanged unless this second setting is enabled.
+- For eligible single Directional or Point solver fields, discover and assign pre-existing simulated Static Mesh bodies in `OnWorldBeginPlay`, before actor `BeginPlay` and the first regular subsystem tick. Reuses the existing group-7 callback and does not run early AddForce or modify World Gravity Z.
+- Unsupported fields, body types, nonmatching channels, out-of-range bodies and initially gravity-disabled/ignored bodies retain the prior path. Runtime-spawned bodies retain existing tick discovery.
+- Added two native Unreal Automation Framework policy tests (8 GravityIntegration tests total) and maintained `Docs/EXPERIMENTAL_GRAVITY.md` with user-confirmed iteration 035 results, first-step verification steps and the Chaos weak-gravity sleep limitation.
+- This startup experiment is **not yet UE 5.8.3 compiled or PIE-proven**; no claim of complete first-step ownership in all game modes.
+
 ## Orbit 0.2.24 | Iteration 035 | Opt-in per-particle Point solver gravity
 
 - Expand the **existing** Experimental Chaos method to support exactly one ordinary inward/outward Point gravity source, evaluating unique acceleration for each eligible rigid body on each Chaos physics substep. The proven single uniform Directional path remains.

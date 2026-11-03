@@ -163,3 +163,7 @@ The CSV appends column 123, `experimental_chaos_uniform_gravity`, after the orig
 ### Iteration 035: Point solver diagnostics (maintained experimental mode)
 
 The CSV now appends a **124th** field, `experimental_chaos_point_gravity`, after the existing 123rd `experimental_chaos_uniform_gravity` field. The earlier columns are unchanged. Exactly one of these two flags should be 1 for a solver-owned static-mesh body in an eligible single-source scene: Uniform=1 for one unrestricted Directional source, Point=1 for one ordinary inward/outward Point source; both 0 means Standard or other handling. The Point result is sampled from game-thread ownership; actual physics-step acceleration is computed separately for each marked body in the Chaos pre-integrate callback. See [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md).
+
+### Iteration 036 startup A/B evidence
+
+The CSV format is **unchanged** (124 fields). To test startup ownership, compare the first recorded sample and early velocity directions with **Experimental: Claim Gravity Before BeginPlay** Off/On at normal World Gravity Z. For the preclaim-On run, check the Output Log for `Experimental early gravity ownership: N ...`, and verify `experimental_chaos_point_gravity=1` on the relevant captured bodies. A preclaim log by itself does **not** establish that Orbit owned the very first solver step. See `EXPERIMENTAL_GRAVITY.md`.

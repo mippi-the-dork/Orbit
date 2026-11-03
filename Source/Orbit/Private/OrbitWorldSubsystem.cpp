@@ -53,6 +53,107 @@ void UOrbitWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     bAutoMotionStartedThisWorld = false;
 }
 
+void UOrbitWorldSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+    Super::OnWorldBeginPlay(InWorld);
+    PreclaimExperimentalGravityAtBeginPlay(InWorld);
+}
+
+void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorld)
+{
+    if (&InWorld != GetWorld() || !InWorld.IsGameWorld()) { return; }
+    const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
+    // Cheap default-off gate: the world-wide scans and Chaos callback below do
+    // not run for Standard or pre-existing Experimental installations.
+    if (!OrbitPhysicsIntegrationMath::ShouldPreclaimExperimentalGravity(
+        Settings->bEnablePhysicsIntegration, Settings->bAutomaticRigidBodyGravity,
+        Settings->RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform,
+        Settings->bExperimentalPreBeginPlayGravityOwnership, true) ||
+        Settings->bCompareNativeWorldGravityWhenEquivalent) { return; }
+
+    // Gravity Source Actors/Components normally register in BeginPlay. They have
+    // not yet done so at this lifecycle hook, so take a one-time snapshot of
+    // already registered world objects. Their existing BeginPlay registration
+    // remains authoritative after this. Never scan an editor or other PIE world.
+    for (TObjectIterator<AOrbitGravitySource> It; It; ++It)
+    {
+        AOrbitGravitySource* Source = *It;
+        if (IsValid(Source) && !Source->IsTemplate() && Source->GetWorld() == &InWorld)
+        {
+            Sources.AddUnique(TWeakObjectPtr<AOrbitGravitySource>(Source));
+        }
+    }
+    for (TObjectIterator<UOrbitGravitySourceComponent> It; It; ++It)
+    {
+        UOrbitGravitySourceComponent* Source = *It;
+        if (IsValid(Source) && !Source->IsTemplate() && Source->GetWorld() == &InWorld && Source->IsRegistered())
+        {
+            SourceComponents.AddUnique(TWeakObjectPtr<UOrbitGravitySourceComponent>(Source));
+        }
+    }
+    UpdateSourceSnapshot();
+
+    FOrbitFieldDefinition Field;
+    FVector UniformAcceleration;
+    bool bPoint = false;
+    const bool bEligible = FOrbitChaosGravityBridge::TryGetSolverField(
+        ActiveFields, Field, UniformAcceleration, bPoint);
+    if (!OrbitPhysicsIntegrationMath::ShouldPreclaimExperimentalGravity(
+        Settings->bEnablePhysicsIntegration, Settings->bAutomaticRigidBodyGravity,
+        true, Settings->bExperimentalPreBeginPlayGravityOwnership, bEligible))
+    {
+        // Unsupported fields must be picked up by the existing tick path.
+        return;
+    }
+    UpdateExperimentalGravityBridge(Settings);
+    if (!ChaosGravityBridge || !ChaosGravityBridge->IsActive()) { return; }
+
+    int32 ClaimedCount = 0;
+    static const FName IgnoreTag(TEXT("Orbit.Ignore"));
+    // Do NOT run DiscoverBodies() here: it also prepares bodies whose only
+    // available integration is Standard. They need their historical tick path.
+    for (TObjectIterator<UStaticMeshComponent> It; It; ++It)
+    {
+        UStaticMeshComponent* Component = *It;
+        if (!IsValid(Component) || Component->IsTemplate() || Component->GetWorld() != &InWorld ||
+            HasManagedBody(Component)) { continue; }
+
+        const bool bRegistered = Component->IsRegistered();
+        const bool bSimulating = bRegistered && Component->IsSimulatingPhysics();
+        const bool bOriginallyGravityEnabled = bSimulating && Component->IsGravityEnabled();
+        const bool bIgnored = Component->ComponentHasTag(IgnoreTag);
+        if (!bRegistered || !bSimulating || !bOriginallyGravityEnabled || bIgnored) { continue; }
+        const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
+            ActiveFields, Component->GetCenterOfMass(NAME_None), Component->GetPhysicsLinearVelocity(),
+            GetReceiverChannelMask(Component->GetOwner()), Settings->OverrideResolution);
+        if (!OrbitPhysicsIntegrationMath::CanPreclaimExperimentalBody(
+            bRegistered, bSimulating, bOriginallyGravityEnabled, bIgnored, Sample.bHasInfluence))
+        {
+            continue;
+        }
+        int32 PreviousGroup = 0;
+        if (!ChaosGravityBridge->AssignBody(Component, PreviousGroup)) { continue; }
+        FManagedBody& Body = ManagedBodies.AddDefaulted_GetRef();
+        Body.Component = Component;
+        Body.bOriginalGravity = true;
+        Body.OriginalLinearDamping = Component->GetLinearDamping();
+        Body.OriginalAngularDamping = Component->GetAngularDamping();
+        Body.OriginalChaosGravityGroup = PreviousGroup;
+        Body.bExperimentalChaosGroupAssigned = true;
+        Component->OnComponentWake.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentWake);
+        Component->OnComponentSleep.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentSleep);
+        // Gravity remains enabled and is now routed to our owned Chaos group.
+        // In particular, we do not temporarily disable gravity or AddForce here.
+        ++ClaimedCount;
+    }
+    UE_LOG(LogOrbitWorld, Display,
+        TEXT("Experimental early gravity ownership: %d existing static mesh bodies preclaimed before Actor BeginPlay (%s). Runtime-spawned bodies retain tick discovery."),
+        ClaimedCount, bPoint ? TEXT("Point") : TEXT("Directional"));
+    // The normal first tick still discovers new/ineligible bodies and refreshes
+    // dynamic source snapshots. No special late cleanup is required.
+    bNeedsInitialDiscovery = true;
+}
+
 void UOrbitWorldSubsystem::Deinitialize()
 {
 #if !UE_BUILD_SHIPPING

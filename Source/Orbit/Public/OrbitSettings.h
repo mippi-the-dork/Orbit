@@ -36,6 +36,20 @@ public:
     UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration", meta=(DisplayName="Rigid Body Gravity Application"))
     EOrbitRigidBodyGravityMethod RigidBodyGravityMethod = EOrbitRigidBodyGravityMethod::Standard;
 
+    /**
+     * Opt-in startup experiment. Assign eligible existing static-mesh rigid bodies
+     * to the Chaos experimental gravity group at WorldSubsystem::OnWorldBeginPlay,
+     * before the first Actor BeginPlay and regular subsystem tick. This aims to
+     * avoid one world-Z gravity step at PIE startup. Off by default even when
+     * Experimental Chaos Gravity was previously selected. Runtime-spawned bodies
+     * still use normal discovery, and unsupported fields/bodies are unchanged.
+     * Experimental; not a guarantee of first-step ownership in every world mode.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration",
+        meta=(DisplayName="Experimental: Claim Gravity Before BeginPlay",
+              EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
+    bool bExperimentalPreBeginPlayGravityOwnership = false;
+
     /** Do not silently turn objects intentionally configured for zero gravity into normal gravity objects. */
     UPROPERTY(EditAnywhere, Config, Category="Physics")
     bool bIncludeInitiallyGravityDisabledBodies = false;
