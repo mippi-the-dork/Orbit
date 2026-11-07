@@ -1,4 +1,6 @@
-# Orbit Architecture, Version 0.1.1
+> **Iteration 040 parity:** Expanded gravity sources reuse the same `FOrbitFieldEvaluator::CombineForBody` and existing Chaos physics callback, rather than a duplicate field system. The expanded mode has an independent default-Off setting and lowest selection priority. See [Compatibility Parity](COMPATIBILITY_PARITY.md).
+
+# Orbit Architecture | v0.2.26 (Iteration 037)
 
 ## Objective
 
@@ -22,10 +24,15 @@ UOrbitWorldSubsystem (runtime world owner and snapshot)
       |                         +--> Blueprint queries
       |                         +--> Character adapter, optional
       |
-      +--> Experimental rigid-body force bridge (game thread)
+      +--> Standard rigid-body force integration (game thread, default)
+      |
+      +--> Opt-in Chaos gravity bridge (physics thread, group 7)
+                  |--> Uniform Directional
+                  |--> Single Point
+                  +--> Multiple Point (separate opt-in)
 ```
 
-The authoring actor is *not* called from the field evaluator. Its editable spline is sampled to a `TArray<FVector>` polyline and `TArray<FVector>` spline Up vectors in a definition snapshot. This is intended to allow a later physics-thread consumer to sample non-UObject data. The **current snapshot itself is not published to another thread** and is not yet a complete thread-safe Chaos integration.
+The authoring actor is *not* called from the field evaluator. Its editable spline is sampled to `TArray<FVector>` polyline and spline-Up vectors in an immutable, UObject-free definition. Standard mode samples the definitions on the game thread. Eligible opt-in Directional and Point solver modes transfer **copies** of field definitions through Chaos's simulation callback input mechanism. No Actor or Component is dereferenced on the physics thread. Mixed/unimplemented solver shapes retain Standard.
 
 ## Evaluation rules
 
@@ -48,11 +55,12 @@ The authoring actor is *not* called from the field evaluator. Its editable splin
 1. Source registers itself with its play-world subsystem via BeginPlay.
 2. On each world-subsystem tick, Orbit rebuilds field definitions from enabled registered sources.
 3. At a configurable interval, Orbit discovers eligible `UPrimitiveComponent` instances in this world, remembering their original native gravity setting.
-4. It disables native gravity on managed components to avoid double gravity.
-5. Each frame, it samples the Physics field at the component location and calls `AddForce(Acceleration, NAME_None, true)`.
-6. On release, EndPlay or subsystem deinitialization, it restores the remembered component gravity state.
+4. In **Standard** mode (the default), Orbit disables the managed component's native gravity, samples the Physics field per body, and calls `AddForce(Acceleration, NAME_None, true)` each game tick.
+5. In explicitly enabled **Experimental Chaos** mode with eligible fields, Orbit assigns eligible static-mesh rigid bodies to gravity group 7 instead. One uniform Directional source supplies a shared group acceleration; one ordinary Point source uses per-particle PreIntegrate; multiple eligible Point sources use the same per-particle path only with the **separate multi-source opt-in**. Multi-Point uses `FOrbitFieldEvaluator::CombineForBody()` for priority and additive/override rules. Noneligible fields and receivers use Standard.
+6. The separately opt-in early-ownership setting can preclaim eligible pre-existing bodies in `OnWorldBeginPlay` to avoid the measured first-step world-gravity impulse. Runtime-spawned/streamed bodies still use tick discovery.
+7. On release, method switch, EndPlay or subsystem deinitialization, Orbit restores the remembered component gravity state and original Chaos gravity group and unregisters the callback when no longer needed.
 
-This is intentionally a bridge, not a production Chaos solver implementation. The same field evaluator will support the solver callback when confirmed against UE 5.8.3 engine headers.
+The solver gravity implementation is **experimental**; the user has validated select Directional, single-Point and early-ownership PIE scenarios. Multi-Point runtime behavior has not yet been validated or Shipping-packaged. See [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md).
 
 ## Editor style boundary (introduced 0.1.1)
 
@@ -101,6 +109,6 @@ The shared `FOrbitFieldEvaluator::Combine`/`CombineForBody` now disambiguates **
 
 The `OrbitEditor` module extends `LevelEditor.ActorContextMenu` via `ToolMenus`. It enumerates enabled source definitions in the actor's editor world, applies receiver channel matching and the same pure field evaluator, then uses `FOrbitGravityFrame::MakeAlignedRotation` in an undoable actor transaction. Editor authoring does not require a gameplay World Subsystem, which exists only in game worlds.
 
-### Experimental solver gravity scope (v0.2.24)
+### Experimental solver gravity scope (v0.2.26)
 
-A per-world optional `FOrbitChaosGravityBridge` registers a Chaos solver callback only when `Rigid Body Gravity Application` explicitly selects Experimental and exactly one eligible Directional or Point field is active. Uniform Directional uses group 7's shared native gravity acceleration. A Point field sets group 7 to zero and injects a *unique* radial acceleration on each marked particle in the pre-integrate Chaos callback. Eligible static meshes are assigned group 7 once and do not receive AddForce. All other configurations remain Standard. No engine edits and no separate plugin. The group-7 ownership is still experimental; see `EXPERIMENTAL_GRAVITY.md` for the maintained constraints and `ITERATION_035.md` for current validation.
+The per-world `FOrbitChaosGravityBridge` uses Chaos group 7 only after explicit selection of the Experimental method and field eligibility. Uniform Directional uses the group-shared native acceleration; single Point and optional multiple Point sources set the shared acceleration to zero and inject per-particle gravity during Chaos PreIntegrate. Multi-Point supports 2–32 channel-0-only ordinary Point physics sources and only channel-0-only static-mesh receivers, and requires the independent default-off `Experimental: Multiple Point Sources` setting. Remaining source combinations or receivers stay Standard. The pre-BeginPlay ownership option is also separately default-off. No engine edits or separate plugin variants. See [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md) for maintained eligibility and validation status.

@@ -1,3 +1,5 @@
+> **Iteration 040:** Added [`COMPATIBILITY_PARITY.md`](COMPATIBILITY_PARITY.md), the maintained cross-mode feature inventory, and [`ITERATION_040.md`](ITERATION_040.md), the first shape-parity implementation pass.
+
 # Orbit File Structure (0.2.15)
 
 **One installable Unreal plugin**, containing three internal modules:

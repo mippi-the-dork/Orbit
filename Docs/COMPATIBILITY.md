@@ -1,8 +1,14 @@
+> **Orbit 0.2.29 / Iteration 040:** Started [Standard vs Experimental feature-parity inventory](COMPATIBILITY_PARITY.md). A separate default-Off expanded-shape path covers more position-based source geometry through the shared evaluator; Vortex, alternate channels and articulated bodies retain Standard fallback. 29 Gravity Integration tests are authored but not yet run in UE. User-reported packaged-game success applies to the earlier 0.2.28 baseline.
+
+> **Orbit 0.2.28, Iteration 039:** No changes to runtime gravity implementation or serialized physics options; only four math/policy automation tests, offline diagnostics and packaging/profiling instructions were added. Existing Standard and opt-in experimental setups retain their previous defaults. User-verified UE 5.8.3 Iteration 038 behavior does not establish packaged-game compatibility. See [`ITERATION_039.md`](ITERATION_039.md).
+
 # Orbit Compatibility and Validation Matrix
 
-**Plugin:** Orbit 0.2.11, Iteration 022  
-**Engine target:** Unreal Engine 5.8.3  
-**Verification:** Source and documentation checks only; UE compilation, live simulation, and packaged game tests not yet performed.
+**Plugin:** Orbit 0.2.27, Iteration 038  
+**Engine target:** Unreal Engine 5.8.3 (Win64)  
+**Verification:** Incremental user-verified UE 5.8.3 Editor automation and PIE for uniform, single Point and multi-Point gravity; the newly added mixed-mode source remains uncompiled/unverified; packaged **game** Shipping remains unverified. Historical status rows below originated in Iteration 022 and should not be treated as a complete up-to-date feature inventory.
+
+**Current gravity integration:** Standard game-thread `AddForce()` stays default. The opt-in experimental Chaos integration supports one Directional, one Point, two to 32 Points under a separate switch, and mixed Point + unlimited Constant Directional under a new independent default-Off switch. All experimental solver variants require supported static-mesh rigid bodies and have group-7/receiver restrictions. For current eligibility and known weak-field sleep issues use [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md). For game packaging use [`SHIPPING_VALIDATION.md`](SHIPPING_VALIDATION.md).
 
 ## Support vocabulary
 
@@ -32,7 +38,7 @@
 | Character Movement | Opt-in SetGravityDirection, gravity magnitude, native restoration and actor alignment | Experimental | PIE magnitude, transitions, poles, camera/controller interaction |
 | Camera / input | User project controls | Not implemented | Movement milestone |
 | Projectiles | No adapter | Not implemented | Movement milestone |
-| Chaos solver callbacks | Architecture placeholder | Not implemented | UE header/code audit |
+| Chaos solver callbacks | Optional group-7 per-world physics callback | Implemented, experimental for eligible source sets | New mixed mode PIE, wake/resleep, performance, UE 5.8 Shipping |
 | Custom NavMesh / navigation graph | No code | Not implemented | Navigation feasibility gate |
 | AI MoveTo / path following | No integration | Not implemented | Navigation feasibility gate |
 | EQS | No integration | Not implemented | AI milestone |

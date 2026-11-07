@@ -1,3 +1,62 @@
+## 0.2.30 — Iteration 041 Hotfix 1 (automation test compile fix)
+
+- Fixed `TestNotNull()` argument type for `GravitySpline` in `OrbitChaosWorldIntegrationTests.cpp` by passing `.Get()` from `TObjectPtr<USplineComponent>`.
+- No gravity runtime changes; Standard remains the default and Experimental stays opt-in.
+- Pending UE 5.8.3 compilation and execution of the nine live-world tests.
+
+## 0.2.30 — Iteration 041 (Native live-world Chaos automation)
+
+- Added **nine** editor-only Unreal Automation Framework tests in `Orbit.Physics.IntegrationWorld`, using UE's `FTestWorldWrapper` to spawn/tick isolated temporary game worlds instead of editing or requiring a test map.
+- Coverage: live Axis motion, Spline Up and Down motion, inside/outside behavior for all four Volume shapes, mixed priority motion, actual Vortex Standard fallback, moving source response, native sleeping/waking on a collision floor, nondefault-channel Standard fallback, and source-destruction gravity restoration.
+- Each test temporarily opts into Experimental/Expanded with Early Ownership and both rest interventions off, restores all changed `UOrbitSettings` values on exit, and never writes project config or level assets. The user's Project Settings may remain at Standard.
+- No production gravity simulation, settings defaults, public API, gravity source schema or 127-column CSV changes from Iteration 040 Hotfix 1. Experimental remains opt-in; Standard remains the default.
+- Updated maintained `Docs/INTEGRATION_TESTING.md`, `Docs/EXPERIMENTAL_GRAVITY.md`, `Docs/COMPATIBILITY_PARITY.md`, and `Docs/TEST_PLAN.md`.
+- **Validation:** The existing **29/29** Gravity Integration unit/policy tests were reported passing on UE 5.8.3. The nine new live-world tests are newly authored and **have not been compiled or run in UE**; results must not be inferred from static checks.
+
+### 0.2.29 — Iteration 040 Hotfix 1 (automation-only)
+
+- Correct `ExpandedMixedFieldParity` to match Standard's established priority semantics: an active Override suppresses Additive fields of equal or lower priority; a higher-priority Additive contributes alongside the Override.
+- Verify both cases in the native Automation Framework test and compare the original fields with the copied solver snapshot. No runtime physics, settings, Blueprint API, metadata, or diagnostics changed.
+- Add [`Docs/ITERATION_040_TEST_RUNBOOK.md`](Docs/ITERATION_040_TEST_RUNBOOK.md) with exact opt-in settings, commands and a reduced manual test matrix. The 29 tests cover field math/policy, not actual Chaos sleeping or collision.
+
+## 0.2.29 — Iteration 040
+
+- Started a maintained full [Standard / Experimental compatibility inventory](Docs/COMPATIBILITY_PARITY.md) covering source shapes, receivers, Blueprint helpers, components, body classes, Mover, ownership, diagnostics, packaging and testing gaps.
+- New default-Off **Experimental: Expanded Field Compatibility** setting. Routes eligible Axis, Spline, Volume, finite Directional and rotated/bounded position-based gravity fields (including mixed combinations, up to 32 channel-0 sources) through the existing solver callback and shared field math. Prior experimental modes take precedence; Standard remains the default.
+- Vortex, unsupported receiver channels and compound/skeletal physics bodies continue safely falling back to Standard. No manual sleep/damping/friction changes.
+- Appended `bExperimentalChaosExpandedFieldGravity` diagnostics and column 127 to Motion History, retaining earlier columns. Analyzer recognizes new mode.
+- Seven new native Automation Framework policy/math tests (29 total authored); Windows UE 5.8.3 compile, PIE and package validation pending.
+
+## Orbit 0.2.28 | Iteration 039 | Compatibility, profiling procedure and shipping gates
+
+- **No runtime gravity behavior changes.** Standard remains the default and all existing experimental mode options retain their previous defaults, selection behavior and CSV columns (126 total). No new sleeping intervention, damping, friction, force injection or callback was added.
+- Add four **native Unreal Automation Framework** Gravity Integration policy/field tests (22 total): deterministic moving-source restoration, Mixed → Multi-Point → Single → Standard transitions, finite Point range/linear falloff, and channel receiver isolation. These tests do not replace PIE physics validation.
+- Add a standard-library-only offline Python analysis tool for Motion History `.csv`/`.zip` recordings, exposing sample completeness, individual body speed by PIE-time window, final awake state and active solver flags. Include three tool smoke tests. **It is not a Chaos profiler or a contact-energy measurement.**
+- Extend the existing Windows game packaging helper to accept `-Configuration Development` or `Shipping`, maintaining Shipping as the default, plus separate-archive and input checks. This does not run or certify a Shipping build.
+- Maintain `Docs/EXPERIMENTAL_GRAVITY.md` with Iteration 038's user-verified stationary and controlled moving-source observations; add `Docs/PERFORMANCE_VALIDATION.md`, `Docs/ITERATION_039.md`, and refresh Shipping validation.
+- **Validation pending:** UE5.8.3 compile, 22 automation tests, live PIE regression, actual Unreal Insights profiling and clean packaged Win64 Development/Shipping runtime.
+
+# Orbit 0.2.27 | Iteration 038 | Opt-in Mixed Point + Directional, regression and profiling
+
+- Added **Experimental: Mixed Point + Directional Sources**, **Off by default**, independent of the earlier **Multiple Point Sources** option. Neither Standard projects nor existing Experimental multi-Point projects change eligibility merely by updating.
+- Eligibility is deliberately limited to **2–32 sources** containing at least one ordinary inward/outward Point and at least one **unlimited constant-strength Directional** source. All physics sources and participating receivers must use only Channel 0. No vortex, box-masked fields, Axis, Spline, Volume, finite Directional or Directional falloff support in this pass. Unsupported configurations continue using the original Standard path.
+- Reused the existing per-world Chaos callback, per-particle evaluation, and `FOrbitFieldEvaluator::CombineForBody` for Additive, Override and priority parity. No new group, sleeping adjustment or engine modification. Existing single-source and multi-Point runtime logic is preserved.
+- Added a fourth mutually exclusive runtime diagnostic and appended **CSV field 126**, `experimental_chaos_mixed_point_directional_gravity`. The original 125 columns are preserved unchanged. Both initial and awake/sleeping diagnostics identify the mixed mode.
+- Added **five native Automation Framework tests** (18 total in `Orbit.Physics.GravityIntegration`) for opt-in/mode switching, eligibility and fallback, field math, moved source math and evaluator-cost reporting. Field evaluator benchmark logs work at 2, 8, and 32 sources with 64/256 bodies; it **does not** claim to measure the complete Chaos simulation. Added a native physics-thread stat scope `OrbitExperimentalGravityPreIntegrate` for actual profiling.
+- Added [`Docs/SHIPPING_VALIDATION.md`](Docs/SHIPPING_VALIDATION.md) and an optional PowerShell `Scripts/RunShippingSmokeTest.ps1` helper to run a real Windows game Shipping package on the user's UE installation. **No Shipping build was run in this environment.** A packaged plugin Editor build is not a game Shipping build.
+- Updated the maintained [`Docs/EXPERIMENTAL_GRAVITY.md`](Docs/EXPERIMENTAL_GRAVITY.md), new iteration notes, test plan and source compatibility documentation.
+- **Validation pending:** Windows UE 5.8.3 compile, 18 automation tests, mixed-field PIE simulation, profiling comparisons and clean C++ and Blueprint-only Win64 Shipping build. Prior single-Point/multi-Point manual successes do not prove the new mixed-field path.
+
+## Orbit 0.2.26 | Iteration 037 | Separately opt-in multiple Point solver gravity
+
+- Add **Experimental: Multiple Point Sources**, **Off by default**, in Project Settings > Orbit > Physics > Gravity Integration. Standard remains default and existing single-source Experimental projects retain their prior behavior until independently opted in.
+- Support 2–32 ordinary Channel-0-only Point physics sources per world through the **existing** Chaos group-7 callback. On each physics step, evaluate the full per-body field combination using Orbit's existing Additive, Override, priority, influence resolution, range and falloff rules, without submitting simultaneous game-thread `AddForce` for solver-owned bodies.
+- Constrain eligibility: mixed shapes, vortex/box limits, nondefault source channels, >32 eligible physics sources and incompatible group ownership retain Standard. Nondefault/multichannel receiver bodies remain Standard even in otherwise eligible multi-Point worlds.
+- Preserve existing single Directional/Point paths, dynamic source snapshots, early-ownership opt-in, field-change wake handling, body group restoration and Standard fallback. No manual sleep or force-based workaround added.
+- Add Receiver diagnostics and append-only **125th Motion History CSV column** `experimental_chaos_multi_point_gravity` without reordering previous columns. Add **five** native UE Automation Framework tests (13 GravityIntegration tests in total).
+- Update the maintained [`Docs/EXPERIMENTAL_GRAVITY.md`](Docs/EXPERIMENTAL_GRAVITY.md), `Docs/ITERATION_037.md`, motion history and test plan. Iteration 036's early-ownership 8/8 test results and initial 2/6 versus 6/6 sleeping result were user-verified and are reflected in the maintained guide.
+- **Not yet UE 5.8.3 built, PIE-tested or Shipping-packaged.** Multi-point sleeping, moving-source behavior and performance require direct validation.
+
 ## Orbit 0.2.25 | Iteration 036 | Experimental pre-BeginPlay gravity ownership
 
 - Added an **additional opt-in**, default-OFF `Experimental: Claim Gravity Before BeginPlay` setting. Standard and existing Experimental gravity projects are unchanged unless this second setting is enabled.

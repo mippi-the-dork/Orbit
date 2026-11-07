@@ -13,6 +13,7 @@
 #include "PhysicsEngine/BodyInstance.h"
 #include "Chaos/ChaosEngineInterface.h"
 #include "UObject/UObjectIterator.h"
+#include "Stats/Stats.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOrbitChaosGravity, Log, All);
 
@@ -21,48 +22,72 @@ struct FOrbitUniformGravityInput : public Chaos::FSimCallbackInput
     Chaos::FVec3 Acceleration = Chaos::FVec3(0, 0, 0);
     FOrbitFieldDefinition PointField;
     bool bPerParticlePoint = false;
+    bool bPerParticleMultiPoint = false;
+    TArray<FOrbitFieldDefinition> MultiPointFields;
+    EOrbitOverrideResolution OverrideResolution = EOrbitOverrideResolution::StrongestInfluence;
     void Reset()
     {
         Acceleration = Chaos::FVec3(0, 0, 0);
         PointField = FOrbitFieldDefinition();
         bPerParticlePoint = false;
+        bPerParticleMultiPoint = false;
+        MultiPointFields.Reset();
+        OverrideResolution = EOrbitOverrideResolution::StrongestInfluence;
     }
 };
 
-// The uniform implementation remains unchanged. For Point gravity, group 7 is
-// set to zero and the pre-integrate callback injects each body's acceleration
-// directly on the physics thread before Chaos's normal velocity integration.
-// Neither variant calls the game-thread AddForce API.
+// The uniform implementation remains unchanged. For single-Point and
+// multi-source gravity, group 7 is set to zero and the pre-integrate callback injects each
+// body's acceleration directly on the physics thread before Chaos integration.
+// Solver-owned bodies never also use game-thread AddForce.
 struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<
     FOrbitUniformGravityInput, Chaos::FSimCallbackNoOutput,
     Chaos::ESimCallbackOptions::Presimulate | Chaos::ESimCallbackOptions::PreIntegrate>
 {
     FOrbitFieldDefinition CurrentPointField;
     bool bCurrentPointField = false;
+    bool bCurrentMultiPointField = false;
+    TArray<FOrbitFieldDefinition> CurrentMultiPointFields;
+    EOrbitOverrideResolution CurrentOverrideResolution = EOrbitOverrideResolution::StrongestInfluence;
 
     virtual void OnPreSimulate_Internal() override
     {
         if (const FOrbitUniformGravityInput* Input = GetConsumerInput_Internal())
         {
             bCurrentPointField = Input->bPerParticlePoint;
+            bCurrentMultiPointField = Input->bPerParticleMultiPoint;
             if (bCurrentPointField) { CurrentPointField = Input->PointField; }
+            if (bCurrentMultiPointField)
+            {
+                // Deep copy on the physics thread, never read or retain a UObject.
+                CurrentMultiPointFields = Input->MultiPointFields;
+                CurrentOverrideResolution = Input->OverrideResolution;
+            }
+            else { CurrentMultiPointFields.Reset(); }
             auto* RigidsSolver = static_cast<Chaos::FPBDRigidsSolver*>(GetSolver());
             RigidsSolver->GetEvolution()->GetGravityForces().SetAcceleration(
-                bCurrentPointField ? Chaos::FVec3(0, 0, 0) : Input->Acceleration,
+                (bCurrentPointField || bCurrentMultiPointField) ?
+                    Chaos::FVec3(0, 0, 0) : Input->Acceleration,
                 FOrbitChaosGravityBridge::GravityGroup);
         }
     }
 
     virtual void OnPreIntegrate_Internal() override
     {
-        if (!bCurrentPointField) { return; }
+        if (!bCurrentPointField && !bCurrentMultiPointField) { return; }
+        // Visible in Unreal's native CPU profiling; only executed for an active
+        // experimental physics-thread callback (never the Standard path).
+        QUICK_SCOPE_CYCLE_COUNTER(STAT_OrbitExperimentalGravityPreIntegrate);
         auto* RigidsSolver = static_cast<Chaos::FPBDRigidsSolver*>(GetSolver());
         const FOrbitFieldDefinition& Field = CurrentPointField;
+        const TArray<FOrbitFieldDefinition>& Fields = CurrentMultiPointFields;
+        const bool bMultiSource = bCurrentMultiPointField;
+        const EOrbitOverrideResolution Resolution = CurrentOverrideResolution;
         // The group is an ownership marker; it is NOT used to approximate
         // multiple positions with a shared gravity vector. Only dynamic,
         // awake particles participate; Chaos retains its own sleep decisions.
         RigidsSolver->GetEvolution()->GetParticles().GetNonDisabledDynamicView().ParallelFor(
-            [&Field](auto& Particle, int32)
+            [&Field, &Fields, bMultiSource, Resolution](auto& Particle, int32)
             {
                 if (!Particle.GravityEnabled() ||
                     Particle.GravityGroupIndex() != FOrbitChaosGravityBridge::GravityGroup ||
@@ -71,10 +96,22 @@ struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<
                     return;
                 }
                 const auto& Position = Particle.GetX();
-                FVector Acceleration;
-                if (FOrbitFieldEvaluator::Evaluate(Field,
-                    FVector(Position.X, Position.Y, Position.Z), Acceleration) &&
-                    !Acceleration.IsNearlyZero())
+                const FVector WorldPosition(Position.X, Position.Y, Position.Z);
+                FVector Acceleration = FVector::ZeroVector;
+                if (bMultiSource)
+                {
+                    // Same filtering, top-priority Override and Additive rules
+                    // as Standard's per-body evaluator. Unsupported channels are
+                    // never assigned to this solver group (see body policy).
+                    const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
+                        Fields, WorldPosition, FVector::ZeroVector, 1u, Resolution);
+                    Acceleration = Sample.Acceleration;
+                }
+                else
+                {
+                    FOrbitFieldEvaluator::Evaluate(Field, WorldPosition, Acceleration);
+                }
+                if (!Acceleration.ContainsNaN() && !Acceleration.IsNearlyZero())
                 {
                     Particle.Acceleration() += Chaos::FVec3(Acceleration);
                 }
@@ -154,6 +191,181 @@ bool FOrbitChaosGravityBridge::TryGetSolverField(const TArray<FOrbitFieldDefinit
     return true;
 }
 
+bool FOrbitChaosGravityBridge::TryGetMultiplePointFields(
+    const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields)
+{
+    OutFields.Reset();
+    // A bounded, channel-homogeneous experiment. The single-source paths
+    // retain their historical policy and do not call this method.
+    for (const FOrbitFieldDefinition& Field : Fields)
+    {
+        if (!Field.bPhysics || Field.ChannelMask == 0u) { continue; }
+        if (OutFields.Num() >= MaxExperimentalPointSources ||
+            Field.Shape != EOrbitGravityShape::Point || Field.ChannelMask != 1u ||
+            (Field.Direction != EOrbitGravityDirection::Inward &&
+             Field.Direction != EOrbitGravityDirection::Outward) ||
+            Field.bLimitToBox || Field.Center.ContainsNaN() ||
+            !FMath::IsFinite(Field.Strength) || !FMath::IsFinite(Field.MaxDistance) ||
+            !FMath::IsFinite(Field.ReferenceDistance) ||
+            Field.MaxDistance < 0.0 || Field.ReferenceDistance <= 0.0)
+        {
+            OutFields.Reset();
+            return false;
+        }
+        OutFields.Add(Field);
+    }
+    if (OutFields.Num() < 2)
+    {
+        OutFields.Reset();
+        return false;
+    }
+    return true;
+}
+
+bool FOrbitChaosGravityBridge::TryGetMixedPointDirectionalFields(
+    const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields)
+{
+    OutFields.Reset();
+    bool bHasPoint = false;
+    bool bHasDirectional = false;
+    for (const FOrbitFieldDefinition& Field : Fields)
+    {
+        if (!Field.bPhysics || Field.ChannelMask == 0u) { continue; }
+        if (OutFields.Num() >= MaxExperimentalPointSources || Field.ChannelMask != 1u ||
+            Field.bLimitToBox || !FMath::IsFinite(Field.Strength) ||
+            !FMath::IsFinite(Field.MaxDistance) || Field.MaxDistance < 0.0 ||
+            Field.Center.ContainsNaN() ||
+            (Field.Direction != EOrbitGravityDirection::Inward &&
+             Field.Direction != EOrbitGravityDirection::Outward))
+        {
+            OutFields.Reset();
+            return false;
+        }
+        if (Field.Shape == EOrbitGravityShape::Point)
+        {
+            if (!FMath::IsFinite(Field.ReferenceDistance) || Field.ReferenceDistance <= 0.0)
+            {
+                OutFields.Reset();
+                return false;
+            }
+            bHasPoint = true;
+        }
+        else if (Field.Shape == EOrbitGravityShape::Directional)
+        {
+            // Limit the first mixed experiment to the already-validated uniform
+            // Directional subset. No position-dependent Directional boundaries.
+            if (Field.MaxDistance != 0.0 || Field.Falloff != EOrbitGravityFalloff::Constant ||
+                Field.DirectionVector.ContainsNaN() || Field.DirectionVector.IsNearlyZero())
+            {
+                OutFields.Reset();
+                return false;
+            }
+            bHasDirectional = true;
+        }
+        else
+        {
+            OutFields.Reset();
+            return false;
+        }
+        OutFields.Add(Field);
+    }
+    if (!bHasPoint || !bHasDirectional || OutFields.Num() < 2)
+    {
+        OutFields.Reset();
+        return false;
+    }
+    return true;
+}
+
+bool FOrbitChaosGravityBridge::TryGetExpandedFields(
+    const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields)
+{
+    OutFields.Reset();
+    // This first parity batch deliberately retains Channel-0-only ownership.
+    // The group callback has no per-particle receiver mask; assigning channel 1
+    // receivers here would silently apply someone else's gravity field.
+    for (const FOrbitFieldDefinition& Field : Fields)
+    {
+        if (!Field.bPhysics || Field.ChannelMask == 0u) { continue; }
+        if (OutFields.Num() >= MaxExperimentalPointSources || Field.ChannelMask != 1u ||
+            Field.Center.ContainsNaN() || Field.Axis.ContainsNaN() ||
+            Field.DirectionVector.ContainsNaN() || Field.Rotation.ContainsNaN() ||
+            Field.BoxExtents.ContainsNaN() ||
+            !FMath::IsFinite(Field.Strength) || !FMath::IsFinite(Field.MaxDistance) ||
+            !FMath::IsFinite(Field.ReferenceDistance) ||
+            !FMath::IsFinite(Field.VolumeRadius) || !FMath::IsFinite(Field.VolumeHalfHeight) ||
+            Field.Strength < 0.0 || Field.MaxDistance < 0.0 || Field.ReferenceDistance <= 0.0 ||
+            (Field.BoxExtents.X < 0.0 || Field.BoxExtents.Y < 0.0 || Field.BoxExtents.Z < 0.0) || Field.VolumeRadius <= 0.0 ||
+            Field.VolumeHalfHeight <= 0.0 ||
+            (Field.Direction != EOrbitGravityDirection::Inward &&
+             Field.Direction != EOrbitGravityDirection::Outward &&
+             Field.Direction != EOrbitGravityDirection::SplineUp &&
+             Field.Direction != EOrbitGravityDirection::SplineDown))
+        {
+            OutFields.Reset();
+            return false;
+        }
+        if (Field.Shape == EOrbitGravityShape::Point)
+        {
+            if (Field.Direction != EOrbitGravityDirection::Inward &&
+                Field.Direction != EOrbitGravityDirection::Outward) { OutFields.Reset(); return false; }
+        }
+        else if (Field.Shape == EOrbitGravityShape::Axis)
+        {
+            if (Field.Axis.IsNearlyZero() ||
+                (Field.Direction != EOrbitGravityDirection::Inward &&
+                 Field.Direction != EOrbitGravityDirection::Outward)) { OutFields.Reset(); return false; }
+        }
+        else if (Field.Shape == EOrbitGravityShape::Directional || Field.Shape == EOrbitGravityShape::Volume)
+        {
+            if (Field.DirectionVector.IsNearlyZero() ||
+                (Field.Direction != EOrbitGravityDirection::Inward &&
+                 Field.Direction != EOrbitGravityDirection::Outward)) { OutFields.Reset(); return false; }
+            if (Field.Shape == EOrbitGravityShape::Volume &&
+                Field.VolumeShape != EOrbitVolumeShape::Box &&
+                Field.VolumeShape != EOrbitVolumeShape::Sphere &&
+                Field.VolumeShape != EOrbitVolumeShape::Cylinder &&
+                Field.VolumeShape != EOrbitVolumeShape::Capsule)
+            {
+                OutFields.Reset(); return false;
+            }
+        }
+        else if (Field.Shape == EOrbitGravityShape::Spline)
+        {
+            if (Field.Curve.Num() < 2 || Field.Curve.Num() > 4096 ||
+                ((Field.Direction == EOrbitGravityDirection::SplineUp ||
+                  Field.Direction == EOrbitGravityDirection::SplineDown) &&
+                  Field.CurveUp.Num() != Field.Curve.Num()))
+            {
+                OutFields.Reset(); return false;
+            }
+            bool bUsableSegment = false;
+            for (int32 Index = 0; Index < Field.Curve.Num(); ++Index)
+            {
+                if (Field.Curve[Index].ContainsNaN() ||
+                    (Field.CurveUp.IsValidIndex(Index) && Field.CurveUp[Index].ContainsNaN()))
+                {
+                    OutFields.Reset(); return false;
+                }
+                if (Index > 0 && !Field.Curve[Index].Equals(Field.Curve[Index - 1], 0.001))
+                {
+                    bUsableSegment = true;
+                }
+            }
+            if (!bUsableSegment) { OutFields.Reset(); return false; }
+        }
+        else
+        {
+            OutFields.Reset(); return false;
+        }
+        // Vortex steering is velocity-dependent and requires additional sleeping
+        // and per-particle velocity parity tests; it remains on Standard.
+        OutFields.Add(Field);
+    }
+    if (OutFields.IsEmpty()) { return false; }
+    return true;
+}
+
 bool FOrbitChaosGravityBridge::Start(UWorld* World)
 {
     if (Callback) { return true; }
@@ -193,11 +405,71 @@ void FOrbitChaosGravityBridge::Update(const FOrbitFieldDefinition& Field,
     if (Callback)
     {
         bPointMode = bPerParticlePoint;
+        bMultiPointMode = false;
+        bMixedPointDirectionalMode = false;
+        bExpandedFieldsMode = false;
         FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
         Input->Acceleration = Chaos::FVec3(UniformAcceleration);
         Input->bPerParticlePoint = bPerParticlePoint;
+        Input->bPerParticleMultiPoint = false;
+        Input->MultiPointFields.Reset();
         if (bPerParticlePoint) { Input->PointField = Field; }
     }
+}
+
+void FOrbitChaosGravityBridge::UpdateMultiplePoint(
+    const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution)
+{
+    if (Callback)
+    {
+        bPointMode = false;
+        bMultiPointMode = true;
+        bMixedPointDirectionalMode = false;
+        bExpandedFieldsMode = false;
+        FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
+        Input->Acceleration = Chaos::FVec3(0, 0, 0);
+        Input->bPerParticlePoint = false;
+        Input->bPerParticleMultiPoint = true;
+        Input->MultiPointFields = Fields;
+        Input->OverrideResolution = Resolution;
+    }
+}
+
+void FOrbitChaosGravityBridge::UpdateMixedPointDirectional(
+    const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution)
+{
+    if (Callback)
+    {
+        bPointMode = false;
+        bMultiPointMode = false;
+        bMixedPointDirectionalMode = true;
+        bExpandedFieldsMode = false;
+        // The solver callback already uses CombineForBody for multi-source
+        // integration. Mixed support changes eligibility, not gravity math.
+        FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
+        Input->Acceleration = Chaos::FVec3(0, 0, 0);
+        Input->bPerParticlePoint = false;
+        Input->bPerParticleMultiPoint = true;
+        Input->MultiPointFields = Fields;
+        Input->OverrideResolution = Resolution;
+    }
+}
+
+void FOrbitChaosGravityBridge::UpdateExpandedFields(
+    const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution)
+{
+    if (!Callback) { return; }
+    bPointMode = false;
+    bMultiPointMode = false;
+    bMixedPointDirectionalMode = false;
+    bExpandedFieldsMode = true;
+    // Use the existing physics-thread multi-field evaluator. No new force path.
+    FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
+    Input->Acceleration = Chaos::FVec3(0, 0, 0);
+    Input->bPerParticlePoint = false;
+    Input->bPerParticleMultiPoint = true;
+    Input->MultiPointFields = Fields;
+    Input->OverrideResolution = Resolution;
 }
 
 void FOrbitChaosGravityBridge::Stop()
@@ -209,6 +481,9 @@ void FOrbitChaosGravityBridge::Stop()
     Callback = nullptr;
     Solver = nullptr;
     bPointMode = false;
+    bMultiPointMode = false;
+    bMixedPointDirectionalMode = false;
+    bExpandedFieldsMode = false;
 }
 
 bool FOrbitChaosGravityBridge::AssignBody(UPrimitiveComponent* Component, int32& OutPreviousGroup)

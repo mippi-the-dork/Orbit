@@ -206,6 +206,14 @@ struct ORBIT_API FOrbitPhysicsBodyDiagnostics
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
     bool bExperimentalChaosPointGravity = false;
 
+    /** True only when the separately opted-in multi-Point solver owns this body. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bExperimentalChaosMultiPointGravity = false;
+
+    /** Separate opt-in: Point + Directional solver combination (not multi-Point). */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bExperimentalChaosMixedPointDirectionalGravity = false;
+
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
     bool bOriginalNativeGravityEnabled = false;
 
@@ -244,6 +252,10 @@ struct ORBIT_API FOrbitPhysicsBodyDiagnostics
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
     bool bHasSourceToSupportBoundsCenter = false;
+
+    /** Append-only: separate default-off expanded shape compatibility path. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Orbit|Physics|Diagnostics")
+    bool bExperimentalChaosExpandedFieldGravity = false;
 };
 
 /** Effective, rotation-local Volume dimensions. Max Distance caps EACH relevant

@@ -1,3 +1,5 @@
+> **Iteration 040:** CSV now has 127 append-only columns; column 127 `experimental_chaos_expanded_field_gravity` indicates the new opt-in expanded field path. Previous columns and their meanings are unchanged. `Scripts/AnalyzeGravityMotion.py` recognizes this method.
+
 # Orbit | Physics Motion History
 
 **Since:** v0.2.15 (Iteration 026). **All-body capture:** v0.2.16 (Iteration 027). **Support evidence and live speeds:** v0.2.17 (Iteration 028). **Rest and moving-support evidence:** v0.2.18 (Iteration 029). **Wake and obstruction evidence:** v0.2.19 (Iteration 030).  
@@ -167,3 +169,7 @@ The CSV now appends a **124th** field, `experimental_chaos_point_gravity`, after
 ### Iteration 036 startup A/B evidence
 
 The CSV format is **unchanged** (124 fields). To test startup ownership, compare the first recorded sample and early velocity directions with **Experimental: Claim Gravity Before BeginPlay** Off/On at normal World Gravity Z. For the preclaim-On run, check the Output Log for `Experimental early gravity ownership: N ...`, and verify `experimental_chaos_point_gravity=1` on the relevant captured bodies. A preclaim log by itself does **not** establish that Orbit owned the very first solver step. See `EXPERIMENTAL_GRAVITY.md`.
+
+### Iteration 037: multiple Point experimental solver flag
+
+The CSV appends a **125th** field, `experimental_chaos_multi_point_gravity`. The previous 124 fields and their order are unchanged. `1` indicates a body owned by the separately opted-in experimental **multiple Point** solver mode; `0` means this solver mode is not active for that body. The existing `experimental_chaos_uniform_gravity` and `experimental_chaos_point_gravity` flags are zero when multi-Point is active. In a two-source scene with the new toggle Off, all three flags are zero (Standard). Source ID/center refer to the dominant source, not the full set of active sources. The recorded gravity acceleration is the result of game-thread sampling and may differ slightly from solver substep acceleration. See [`EXPERIMENTAL_GRAVITY.md`](EXPERIMENTAL_GRAVITY.md) and [`ITERATION_037.md`](ITERATION_037.md).

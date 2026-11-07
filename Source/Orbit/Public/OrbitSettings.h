@@ -29,7 +29,9 @@ public:
      * Standard preserves the exact existing Orbit force path. Experimental uses an
      * otherwise unused Chaos gravity group for ONE unrestricted constant
      * Directional source OR one Point source (per-particle substep evaluation).
-     * Multi-source, Axis, Spline, and Volume fields fall back to Standard.
+     * Multiple ordinary Point sources require a second explicit opt-in.
+     * Axis, Spline, Volume, and mixed sources fall back by default; mixed Point +
+     * Directional requires its own independent, default-off opt-in.
      * Experimental is not validated for production and requires an exclusive group.
      * The C++ enum identifier remains unchanged to preserve serialized settings.
      */
@@ -49,6 +51,49 @@ public:
         meta=(DisplayName="Experimental: Claim Gravity Before BeginPlay",
               EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
     bool bExperimentalPreBeginPlayGravityOwnership = false;
+
+    /**
+     * Separate, default-off Iteration 037 experiment: use the existing Chaos
+     * solver group for two or more ordinary Point gravity sources. Gravity is
+     * evaluated per rigid body from a copied, immutable physics-thread field
+     * snapshot, using Orbit's existing Additive / Override / Priority rules.
+     * All active physics sources must be ordinary Point sources on channel 0;
+     * only channel-0-only receivers may use this experimental multi-source path.
+     * Other sources and receivers keep the Standard integration. The main
+     * Experimental setting alone never enables multi-source integration.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration",
+        meta=(DisplayName="Experimental: Multiple Point Sources",
+              EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
+    bool bExperimentalMultiplePointSources = false;
+
+    /**
+     * Iteration 038: additional default-off experiment for at least one ordinary
+     * Point and one unlimited, constant Directional source. Requires the main
+     * Experimental method. Kept separate from Multiple Point so projects that
+     * opted in to Iteration 037 retain the same field eligibility after update.
+     * Both sources and receivers must use Channel 0 only; no vortex, box mask,
+     * custom gravity groups, or velocity-sensitive fields are supported.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration",
+        meta=(DisplayName="Experimental: Mixed Point + Directional Sources",
+              EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
+    bool bExperimentalMixedPointDirectionalSources = false;
+
+    /**
+     * Iteration 040 compatibility experiment: allow previously unsupported, position-based
+     * field shapes through the same per-particle Chaos integration. Uses Orbit's existing
+     * FOrbitFieldEvaluator::CombineForBody, including rotated box bounds, Axis, Spline,
+     * Directional and Volume source geometry, priority, falloff and blending.
+     * Off by default even in projects that opted into earlier experimental modes.
+     * Velocity-steered Vortex fields, non-default receiver channels, and non-static-mesh
+     * simulated bodies stay on Standard pending separate validation. Expensive Spline
+     * fields scale with sampled curve length per physics body per physics substep.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration",
+        meta=(DisplayName="Experimental: Expanded Field Compatibility",
+              EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
+    bool bExperimentalExpandedFieldCompatibility = false;
 
     /** Do not silently turn objects intentionally configured for zero gravity into normal gravity objects. */
     UPROPERTY(EditAnywhere, Config, Category="Physics")

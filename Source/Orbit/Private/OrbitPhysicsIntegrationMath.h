@@ -22,6 +22,40 @@ namespace OrbitPhysicsIntegrationMath
             !bIgnored && bInMatchingField;
     }
 
+    // The separate multi-source experiment must never activate merely because
+    // a user previously opted in to single-source Chaos gravity.
+    inline bool ShouldActivateMultiplePointGravity(bool bExperimentalMethod,
+        bool bMultiplePointOptIn, bool bEligibleFields)
+    {
+        return bExperimentalMethod && bMultiplePointOptIn && bEligibleFields;
+    }
+
+    // Selection priority is shared by startup preclaim and per-tick ownership.
+    // A new mixed configuration must never silently activate just because
+    // existing users enabled the older multiple-Point option.
+    enum class EExperimentalSolverSelection : uint8
+    {
+        None,
+        Single,
+        MultiplePoint,
+        MixedPointDirectional,
+        ExpandedFields
+    };
+
+    inline EExperimentalSolverSelection SelectExperimentalSolver(bool bExperimentalMethod,
+        bool bSingleEligible, bool bMultiPointOptIn, bool bMultiPointEligible,
+        bool bMixedOptIn, bool bMixedEligible,
+        bool bExpandedOptIn = false, bool bExpandedEligible = false)
+    {
+        if (!bExperimentalMethod) { return EExperimentalSolverSelection::None; }
+        if (bSingleEligible) { return EExperimentalSolverSelection::Single; }
+        if (bMultiPointOptIn && bMultiPointEligible) { return EExperimentalSolverSelection::MultiplePoint; }
+        if (bMixedOptIn && bMixedEligible) { return EExperimentalSolverSelection::MixedPointDirectional; }
+        // Last in priority: never changes the existing three experimental modes.
+        if (bExpandedOptIn && bExpandedEligible) { return EExperimentalSolverSelection::ExpandedFields; }
+        return EExperimentalSolverSelection::None;
+    }
+
     inline bool ShouldLimitStandingForce(bool bEnabled, bool bInsideOrbitField,
         bool bWalking, bool bBaseSimulating, bool bBaseManagedByOrbit)
     {

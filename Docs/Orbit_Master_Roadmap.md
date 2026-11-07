@@ -1,3 +1,5 @@
+> **Orbit parity priority (Iteration 040 onward):** Achieve complete Standard/Experimental feature and API parity in a single plugin before considering a default switch. Track verified and missing features in [`COMPATIBILITY_PARITY.md`](COMPATIBILITY_PARITY.md). Standard remains the default throughout validation.
+
 # Orbit - Master Development Roadmap
 
 **Document version:** 0.1 (initial planning baseline)  

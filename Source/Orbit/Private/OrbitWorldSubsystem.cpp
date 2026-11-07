@@ -96,8 +96,24 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
     FOrbitFieldDefinition Field;
     FVector UniformAcceleration;
     bool bPoint = false;
-    const bool bEligible = FOrbitChaosGravityBridge::TryGetSolverField(
+    const bool bEligibleSingle = FOrbitChaosGravityBridge::TryGetSolverField(
         ActiveFields, Field, UniformAcceleration, bPoint);
+    TArray<FOrbitFieldDefinition> MultiFields;
+    const bool bEligibleMulti = !bEligibleSingle && Settings->bExperimentalMultiplePointSources &&
+        FOrbitChaosGravityBridge::TryGetMultiplePointFields(ActiveFields, MultiFields);
+    TArray<FOrbitFieldDefinition> MixedFields;
+    const bool bEligibleMixed = !bEligibleSingle && !bEligibleMulti &&
+        Settings->bExperimentalMixedPointDirectionalSources &&
+        FOrbitChaosGravityBridge::TryGetMixedPointDirectionalFields(ActiveFields, MixedFields);
+    TArray<FOrbitFieldDefinition> ExpandedFields;
+    const bool bEligibleExpanded = !bEligibleSingle && !bEligibleMulti && !bEligibleMixed &&
+        Settings->bExperimentalExpandedFieldCompatibility &&
+        FOrbitChaosGravityBridge::TryGetExpandedFields(ActiveFields, ExpandedFields);
+    const bool bEligible = OrbitPhysicsIntegrationMath::SelectExperimentalSolver(
+        true, bEligibleSingle, Settings->bExperimentalMultiplePointSources, bEligibleMulti,
+        Settings->bExperimentalMixedPointDirectionalSources, bEligibleMixed,
+        Settings->bExperimentalExpandedFieldCompatibility, bEligibleExpanded) !=
+        OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::None;
     if (!OrbitPhysicsIntegrationMath::ShouldPreclaimExperimentalGravity(
         Settings->bEnablePhysicsIntegration, Settings->bAutomaticRigidBodyGravity,
         true, Settings->bExperimentalPreBeginPlayGravityOwnership, bEligible))
@@ -122,7 +138,9 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
         const bool bSimulating = bRegistered && Component->IsSimulatingPhysics();
         const bool bOriginallyGravityEnabled = bSimulating && Component->IsGravityEnabled();
         const bool bIgnored = Component->ComponentHasTag(IgnoreTag);
-        if (!bRegistered || !bSimulating || !bOriginallyGravityEnabled || bIgnored) { continue; }
+        if (!bRegistered || !bSimulating || !bOriginallyGravityEnabled || bIgnored ||
+            !FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
+                ChaosGravityBridge->IsMultiSourceMode(), GetReceiverChannelMask(Component->GetOwner()))) { continue; }
         const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
             ActiveFields, Component->GetCenterOfMass(NAME_None), Component->GetPhysicsLinearVelocity(),
             GetReceiverChannelMask(Component->GetOwner()), Settings->OverrideResolution);
@@ -148,7 +166,9 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
     }
     UE_LOG(LogOrbitWorld, Display,
         TEXT("Experimental early gravity ownership: %d existing static mesh bodies preclaimed before Actor BeginPlay (%s). Runtime-spawned bodies retain tick discovery."),
-        ClaimedCount, bPoint ? TEXT("Point") : TEXT("Directional"));
+        ClaimedCount, bEligibleExpanded ? TEXT("Expanded Fields") :
+            (bEligibleMixed ? TEXT("Mixed Point + Directional") :
+            (bEligibleMulti ? TEXT("Multiple Point") : (bPoint ? TEXT("Point") : TEXT("Directional")))));
     // The normal first tick still discovers new/ineligible bodies and refreshes
     // dynamic source snapshots. No special late cleanup is required.
     bNeedsInitialDiscovery = true;
@@ -510,9 +530,25 @@ void UOrbitWorldSubsystem::UpdateExperimentalGravityBridge(const UOrbitSettings*
     bool bPerParticlePoint = false;
     const bool bOptedIn = Settings &&
         Settings->RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform;
-    const bool bEligible = bOptedIn &&
+    const bool bEligibleSingle = bOptedIn &&
         FOrbitChaosGravityBridge::TryGetSolverField(ActiveFields, SolverField, UniformGravity, bPerParticlePoint);
-    if (!bEligible)
+    TArray<FOrbitFieldDefinition> MultiPointFields;
+    const bool bEligibleMulti = bOptedIn && !bEligibleSingle && Settings->bExperimentalMultiplePointSources &&
+        FOrbitChaosGravityBridge::TryGetMultiplePointFields(ActiveFields, MultiPointFields);
+    TArray<FOrbitFieldDefinition> MixedFields;
+    const bool bEligibleMixed = bOptedIn && !bEligibleSingle && !bEligibleMulti &&
+        Settings->bExperimentalMixedPointDirectionalSources &&
+        FOrbitChaosGravityBridge::TryGetMixedPointDirectionalFields(ActiveFields, MixedFields);
+    TArray<FOrbitFieldDefinition> ExpandedFields;
+    const bool bEligibleExpanded = bOptedIn && !bEligibleSingle && !bEligibleMulti && !bEligibleMixed &&
+        Settings->bExperimentalExpandedFieldCompatibility &&
+        FOrbitChaosGravityBridge::TryGetExpandedFields(ActiveFields, ExpandedFields);
+    const OrbitPhysicsIntegrationMath::EExperimentalSolverSelection Selection =
+        OrbitPhysicsIntegrationMath::SelectExperimentalSolver(
+            bOptedIn, bEligibleSingle, Settings && Settings->bExperimentalMultiplePointSources, bEligibleMulti,
+            Settings && Settings->bExperimentalMixedPointDirectionalSources, bEligibleMixed,
+            Settings && Settings->bExperimentalExpandedFieldCompatibility, bEligibleExpanded);
+    if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::None)
     {
         if (bOptedIn && !bExperimentalUniformFallbackLogged)
         {
@@ -537,7 +573,22 @@ void UOrbitWorldSubsystem::UpdateExperimentalGravityBridge(const UOrbitSettings*
         StopExperimentalGravityBridge();
         return;
     }
-    ChaosGravityBridge->Update(SolverField, UniformGravity, bPerParticlePoint);
+    if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::MultiplePoint)
+    {
+        ChaosGravityBridge->UpdateMultiplePoint(MultiPointFields, Settings->OverrideResolution);
+    }
+    else if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::MixedPointDirectional)
+    {
+        ChaosGravityBridge->UpdateMixedPointDirectional(MixedFields, Settings->OverrideResolution);
+    }
+    else if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::ExpandedFields)
+    {
+        ChaosGravityBridge->UpdateExpandedFields(ExpandedFields, Settings->OverrideResolution);
+    }
+    else
+    {
+        ChaosGravityBridge->Update(SolverField, UniformGravity, bPerParticlePoint);
+    }
 }
 
 void UOrbitWorldSubsystem::RestoreBodyGravity()
@@ -710,10 +761,13 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         const bool bNativeComparison = OrbitPhysicsIntegrationMath::CanCompareWithNativeWorldGravity(
             Settings->bCompareNativeWorldGravityWhenEquivalent, Body.bOriginalGravity,
             Sample.bHasInfluence, Acceleration, GetWorld()->GetGravityZ());
-        // The experimental solver path owns group 7 only in a single eligible
-        // Directional or Point field. All other configurations retain Standard.
+        // Group 7 supports eligible single Directional/Point fields and,
+        // with independent opt-ins, multi-Point or mixed Point/Directional.
+        // Unsupported source configurations and receiver masks stay Standard.
         bool bExperimentalChaos = false;
-        if (!bNativeComparison && ChaosGravityBridge && ChaosGravityBridge->IsActive() && Body.bOriginalGravity)
+        if (!bNativeComparison && ChaosGravityBridge && ChaosGravityBridge->IsActive() && Body.bOriginalGravity &&
+            FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
+                ChaosGravityBridge->IsMultiSourceMode(), GetReceiverChannelMask(Component->GetOwner())))
         {
             if (!Body.bExperimentalChaosGroupAssigned)
             {
@@ -769,8 +823,11 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
                 Body.LastDiagnostics.bValid = true;
                 Body.LastDiagnostics.bBodyAwake = false;
                 Body.LastDiagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
-                Body.LastDiagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos && !ChaosGravityBridge->IsPointMode();
+                Body.LastDiagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos && !ChaosGravityBridge->IsPointMode() && !ChaosGravityBridge->IsMultiSourceMode();
                 Body.LastDiagnostics.bExperimentalChaosPointGravity = bExperimentalChaos && ChaosGravityBridge->IsPointMode();
+                Body.LastDiagnostics.bExperimentalChaosMultiPointGravity = bExperimentalChaos && ChaosGravityBridge->IsMultiPointMode();
+                Body.LastDiagnostics.bExperimentalChaosMixedPointDirectionalGravity = bExperimentalChaos && ChaosGravityBridge->IsMixedPointDirectionalMode();
+                Body.LastDiagnostics.bExperimentalChaosExpandedFieldGravity = bExperimentalChaos && ChaosGravityBridge->IsExpandedFieldsMode();
                 Body.LastDiagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
                 Body.LastDiagnostics.bUsingNativeContactDamping = Body.bNativeContactDampingApplied;
                 Body.LastDiagnostics.DominantSourceId = Sample.DominantSourceId;
@@ -945,8 +1002,11 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
              (bGraceSupport ? TEXT("Query grace") : TEXT("Unsupported"))));
         Diagnostics.bBodyAwake = true;
         Diagnostics.bNativeGravityEnabled = Component->IsGravityEnabled();
-        Diagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos && !ChaosGravityBridge->IsPointMode();
+        Diagnostics.bExperimentalChaosUniformGravity = bExperimentalChaos && !ChaosGravityBridge->IsPointMode() && !ChaosGravityBridge->IsMultiSourceMode();
         Diagnostics.bExperimentalChaosPointGravity = bExperimentalChaos && ChaosGravityBridge->IsPointMode();
+        Diagnostics.bExperimentalChaosMultiPointGravity = bExperimentalChaos && ChaosGravityBridge->IsMultiPointMode();
+        Diagnostics.bExperimentalChaosMixedPointDirectionalGravity = bExperimentalChaos && ChaosGravityBridge->IsMixedPointDirectionalMode();
+        Diagnostics.bExperimentalChaosExpandedFieldGravity = bExperimentalChaos && ChaosGravityBridge->IsExpandedFieldsMode();
         Diagnostics.bOriginalNativeGravityEnabled = Body.bOriginalGravity;
         Diagnostics.DominantSourceId = Sample.DominantSourceId;
         Diagnostics.GravityAcceleration = Acceleration;
