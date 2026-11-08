@@ -191,3 +191,29 @@ The **single-Point startup** A/B and eight original automation tests were user-v
 ## Iteration 041 — real Chaos automation (new, not yet UE-validated)
 
 The Iteration 040 user-verified **29/29** policy/math suite remains unchanged. Iteration 041 adds nine separate **editor-only live-world** tests under `Orbit.Physics.IntegrationWorld`. They spawn temporary physics bodies and fields, tick Chaos, and verify actual acceleration, solver selection, source edits/removal, and natural sleeping/waking. These tests temporarily enable experimental expanded gravity and early ownership, then restore the user's project settings without saving them. **They must pass in UE 5.8.3 before we replace the remaining manual expanded-field validation.** No public runtime behavior or opt-in defaults changed. See [Integration Testing](INTEGRATION_TESTING.md) and [Iteration 041](ITERATION_041.md).
+
+## Iteration 041 automated live-world validation (Hotfix 2)
+
+A UE 5.8.3 test run passed 8/9 physics-world integration tests and 29/29 gravity field/policy tests. The remaining Directional sleep/wake test was a fixture error: rotating an upright source by yaw does not change its `-Up` gravity vector. Hotfix 2 tilts the source by pitch and asserts the updated gravity vector before testing waking and acceleration. The corrected test must still be run in UE; the observed failure is **not evidence of an Orbit runtime wake regression**. Standard remains default and all experimental capabilities remain opt-in.
+
+## Iteration 042 — Receiver channels and Vortex in the Chaos solver (pending UE tests)
+
+In **Project Settings > Plugins > Orbit > Physics > Gravity Integration**, select `Rigid Body Gravity Application = Experimental Chaos Gravity` to access these independent, **default-Off** settings:
+
+| Option | Default | Enables | When Off |
+|---|---|---|---|
+| `Experimental: Receiver Channel Compatibility` | Off | Independent Channels 0/1/2 and combined receiver masks on supported position fields, using a physics-thread particle-ID/mask snapshot | Existing experimental selections and channel fallback remain unchanged |
+| `Experimental: Vortex Compatibility` | Off | Point, Axis, Spline Vortex Inward/Outward, Continuous Force, and inward Spiral Capture using actual Chaos particle velocity | Vortex remains Standard AddForce fallback |
+
+Keep `Claim Gravity Before BeginPlay` optional and independent. `Expanded Field Compatibility`, `Multiple Point Sources`, and `Mixed Point + Directional` remain separate historical opt-ins; enabling the new **Receiver Channel Compatibility** selects the channel-aware evaluator first **only when explicitly enabled and field-eligible**, including a single uniform Directional field. This is necessary to prevent two channel receivers sharing Chaos group 7 from receiving each other's fields.
+
+**Implementation boundaries:** up to 32 finite or unlimited valid source fields, static-mesh single-body rigid components; never steal custom Chaos gravity groups. A body whose particle identity has not arrived in the physics-thread snapshot receives zero Orbit acceleration until registered, not another receiver's channel. Runtime-spawned actors still enter via normal discovery and are **not guaranteed** correct custom gravity from their very first substep. Skeletal/compound bodies stay on Standard. Vortex Spiral Capture is intentionally velocity-steered and may sustain motion; do not expect it to sleep like static Directional gravity.
+
+**To validate:** leave the *saved* project settings on Standard and run the native test suite, whose isolated world fixtures configure the new options and restore them. The original 29+9 tests passed in UE 5.8.3; Iteration 042's added tests remain unverified until the user runs them.
+
+```text
+Automation RunTests Orbit.Physics.GravityIntegration
+Automation RunTests Orbit.Physics.IntegrationWorld
+```
+
+Expect **34 policy + 14 live-world tests**. For more detail, see [Iteration 042](ITERATION_042.md). Old 127-column Motion History exports remain readable, with channel/vortex grouped under `experimental_chaos_expanded_field_gravity`.

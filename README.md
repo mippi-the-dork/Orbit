@@ -1,4 +1,4 @@
-> **Orbit 0.2.30 (Iteration 041):** The first native **live-world Chaos integration test suite** is now included under `Orbit.Physics.IntegrationWorld`. Nine editor-only tests create isolated temporary game worlds, spawn real physics bodies and Orbit sources, tick the world, verify runtime solver ownership, movement, fallbacks, wake and cleanup, and restore project settings after each case. Production gravity and settings are unchanged from Iteration 040 Hotfix 1. The new suite still requires UE 5.8.3 compilation and execution before it can be considered validated. See [Iteration 041](Docs/ITERATION_041.md) and [Integration Testing](Docs/INTEGRATION_TESTING.md).
+> **Orbit 0.2.31 (Iteration 042):** Optional Chaos solver parity for receiver channel masks (including combinations) and both Vortex physics modes, with identity-keyed particle receiver snapshots and actual substep velocity for Spiral Capture. Two independent default-off project settings, five native policy tests and five new live-world tests. Previous 38 automated tests passed in user UE 5.8.3; the 10 new tests require UE validation. Standard remains the default. See [Iteration 042](Docs/ITERATION_042.md) and [Compatibility Parity](Docs/COMPATIBILITY_PARITY.md).
 
 > **Orbit 0.2.29 (Iteration 040):** Compatibility parity work has begun. A new, **default-Off** Expanded Field Compatibility option extends the existing opt-in Chaos solver path to Axis, Spline, Volume, bounded Directional and mixed position-based fields, using the same authoring and Blueprint gravity APIs as Standard. Standard remains the default. Vortex, alternate channels and skeletal/compound rigid bodies retain Standard fallback. See [Compatibility Parity](Docs/COMPATIBILITY_PARITY.md), [Experimental Gravity](Docs/EXPERIMENTAL_GRAVITY.md), and [Iteration 040](Docs/ITERATION_040.md). New features need Windows UE 5.8.3 validation; the prior 22/22 automated-test and packaged-game success applied to Iteration 039.
 
@@ -8,11 +8,11 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.30 (Iteration 041, live-world integration automation)  
+**Current version:** 0.2.31 (Iteration 042, channel and Vortex Chaos parity)  
 **Target:** Unreal Engine 5.8.0–5.8.3, Win64; 5.8.3 is the user-test target  
 **Engine modifications:** None  
 **Runtime behavior:** Standard default unchanged. Single Directional/Point, Multi-Point, Mixed Point + Directional and Early Ownership remain separately opt-in and retain their eligibility restrictions. User-validated experiments include natural sleeping and source movement in 5.8.3.  
-**Unverified release gates:** The new Iteration 041 editor-only world simulation tests have not been compiled or executed in UE 5.8.3. Full Unreal Insights performance profiling remains pending. Packaging was user-verified on an earlier release; revalidation is required after a compatibility change. Weak native Chaos gravity can still permit unsupported sleeping.
+**Unverified release gates:** Iteration 042 channel/Vortex C++ additions and 10 new automation tests have not yet been compiled or executed in UE 5.8.3. The prior 29/29 math and 9/9 live Chaos suite passed in UE. Unreal Insights and current-version game packaging remain pending. Weak native Chaos gravity can still permit unsupported sleeping.
 
 Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
 

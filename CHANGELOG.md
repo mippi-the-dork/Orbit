@@ -1,3 +1,20 @@
+## 0.2.31 — Iteration 042 (receiver channel and Vortex Chaos parity)
+
+- **No change to Standard, existing opt-in defaults, public Blueprint node signatures or gravity authoring.** Two independent **default-off** experiments: `Experimental: Receiver Channel Compatibility` and `Experimental: Vortex Compatibility`. Earlier modes retain selection behavior when these are disabled.
+- Receiver channel parity: the existing Chaos group-7 pre-integrate callback receives a copied map of **Chaos particle UniqueIdx -> original Orbit receiver mask** (channels 0/1/2 and combinations). Each body evaluates the same `CombineForBody` physics field selection as Standard. Unknown bodies get **zero custom acceleration**, never another body's channel. Mask changes and group release update the registry; no UObject access on the physics thread. Channel mode takes precedence only when explicitly opted in.
+- Vortex parity: Point/Axis/Spline Vortex Inward/Outward use the existing evaluator. Continuous Force uses field acceleration; inward Spiral Capture receives actual Chaos substep particle velocity for target-flow steering. Both modes are selected only when explicitly opted in. Mixed vortex/nonvortex fields require valid expanded eligibility; mixed channels + vortex require **both** options.
+- Supports existing field Additive/Override/Priority/Strongest/Blended rules, source rotation/bounds, gravity receiver component, and normal source lifecycle via the same data path. No new callback object, extra gravity group or manual sleep/damping adjustment.
+- Five new native math/policy tests and **five** new live-world tests for independent receivers, union masks, live receiver switching, Vortex Continuous, Vortex Spiral Capture and runtime-spawned receiver discovery. Existing 29+9 suites preserved. Expected **34 GravityIntegration / 14 IntegrationWorld** tests. All 10 new tests are pending UE 5.8.3 compilation and execution; no claim of physics validation until reported.
+- Retained the existing 127-column Motion History format. Channel/Vortex usage reports through the existing `experimental_chaos_expanded_field_gravity` diagnostics, not separate per-mode columns. A future diagnostics extension can add per-mode labels if desired without silently changing existing exported CSV schemas.
+- Remaining parity gaps: first-physics-step ownership of dynamically spawned bodies, skeletal/articulated or other compound particles, >32 physics sources, end-to-end APIs/character/Mover/regression, real performance and packaged-game revalidation. See [`Docs/COMPATIBILITY_PARITY.md`](Docs/COMPATIBILITY_PARITY.md) and [`Docs/ITERATION_042.md`](Docs/ITERATION_042.md).
+
+## 0.2.30 — Iteration 041 Hotfix 2 (directional sleep/wake test setup)
+
+- Corrected the editor-only `DirectionalNaturalSleepAndWake` test to tilt the Directional source by 90° **pitch** instead of rotating 90° **yaw**. Orbit gravity follows the negative source-Up axis; a yaw-only rotation does not change an upright source's gravity direction.
+- Added explicit source-field and subsystem-snapshot assertions before evaluating natural wake and movement along the changed gravity. This distinguishes an invalid test configuration from a true physics wake failure.
+- User validated Iteration 041 Hotfix 1: **8/9** live-world tests and **29/29** field/policy tests. The sole failed live-world test was configured with an unchanged gravity vector. Retest of this hotfix remains pending UE 5.8.3 execution.
+- **Test-only change.** Runtime modules, Standard/Experimental behavior, default-off opt-ins, Blueprint APIs, and diagnostics are unchanged.
+
 ## 0.2.30 — Iteration 041 Hotfix 1 (automation test compile fix)
 
 - Fixed `TestNotNull()` argument type for `GravitySpline` in `OrbitChaosWorldIntegrationTests.cpp` by passing `.Get()` from `TObjectPtr<USplineComponent>`.

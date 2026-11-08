@@ -33,28 +33,44 @@ public:
         const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields);
     /** Expanded, opt-in position-based field selection. Existing selectors run first. */
     static bool TryGetExpandedFields(
-        const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields);
-    // Multi-source callback currently supports only default channel-0 receivers.
-    static bool CanAssignMultiPointReceiver(bool bMultiPointMode, uint8 ReceiverMask)
+        const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields,
+        bool bAllowChannels = false, bool bAllowVortex = false);
+    static bool TryGetVortexFields(const TArray<FOrbitFieldDefinition>& Fields,
+        TArray<FOrbitFieldDefinition>& OutFields, bool bAllowChannels = false);
+    // Legacy multi-source paths are Channel-0 only. Opted-in channel mode
+    // carries a per-particle mask; every other mode preserves its old policy.
+    static bool CanAssignMultiPointReceiver(bool bMultiPointMode, uint8 ReceiverMask,
+        bool bChannelAware = false)
     {
-        return !bMultiPointMode || ReceiverMask == 1u;
+        return bChannelAware ? (ReceiverMask & 0x07u) != 0u :
+            (!bMultiPointMode || ReceiverMask == 1u);
     }
     bool Start(UWorld* World);
     void Update(const FOrbitFieldDefinition& Field, const FVector& UniformAcceleration, bool bPerParticlePoint);
     void UpdateMultiplePoint(const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution);
     void UpdateMixedPointDirectional(const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution);
     void UpdateExpandedFields(const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution);
+    void UpdateChannelFields(const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution);
+    void UpdateVortexFields(const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution);
+    // Unique Chaos particle identity is stable across GT/PT copies. Never
+    // identify a receiver by position, actor order or shared gravity group.
+    void SetBodyReceiverMask(int32 ParticleId, uint8 ReceiverMask);
+    void RemoveBodyReceiverMask(int32 ParticleId);
+    void CommitReceiverMasks();
     void Stop();
     bool IsActive() const { return Callback != nullptr; }
     bool IsPointMode() const { return bPointMode; }
     bool IsMultiPointMode() const { return bMultiPointMode; }
     bool IsMixedPointDirectionalMode() const { return bMixedPointDirectionalMode; }
     bool IsExpandedFieldsMode() const { return bExpandedFieldsMode; }
-    bool IsMultiSourceMode() const { return bMultiPointMode || bMixedPointDirectionalMode || bExpandedFieldsMode; }
+    bool IsChannelAwareMode() const { return bChannelAwareMode; }
+    bool IsVortexMode() const { return bVortexMode; }
+    bool IsMultiSourceMode() const { return bMultiPointMode || bMixedPointDirectionalMode || bExpandedFieldsMode || bChannelAwareMode || bVortexMode; }
     ~FOrbitChaosGravityBridge() { Stop(); }
 
     // Return true only if the group was assigned successfully to a valid body.
-    bool AssignBody(UPrimitiveComponent* Component, int32& OutPreviousGroup);
+    bool AssignBody(UPrimitiveComponent* Component, int32& OutPreviousGroup,
+        int32& OutParticleId, uint8 ReceiverMask);
     static void RestoreBody(UPrimitiveComponent* Component, int32 PreviousGroup);
 
 private:
@@ -64,4 +80,7 @@ private:
     bool bMultiPointMode = false;
     bool bMixedPointDirectionalMode = false;
     bool bExpandedFieldsMode = false;
+    bool bChannelAwareMode = false;
+    bool bVortexMode = false;
+    TMap<int32, uint8> ReceiverMasksByParticleId;
 };

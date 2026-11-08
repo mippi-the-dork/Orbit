@@ -125,6 +125,7 @@ private:
         bool bOriginalGravity = false;
         bool bExperimentalChaosGroupAssigned = false;
         int32 OriginalChaosGravityGroup = 0;
+        int32 ExperimentalChaosParticleId = INDEX_NONE;
         float OriginalLinearDamping = 0.0f;
         float OriginalAngularDamping = 0.0f;
         bool bNativeContactDampingApplied = false;

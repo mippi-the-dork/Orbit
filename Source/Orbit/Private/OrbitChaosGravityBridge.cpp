@@ -11,6 +11,7 @@
 #include "Physics/Experimental/PhysScene_Chaos.h"
 #include "Physics/PhysicsInterfaceTypes.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "PhysicsProxy/SingleParticlePhysicsProxy.h"
 #include "Chaos/ChaosEngineInterface.h"
 #include "UObject/UObjectIterator.h"
 #include "Stats/Stats.h"
@@ -24,6 +25,11 @@ struct FOrbitUniformGravityInput : public Chaos::FSimCallbackInput
     bool bPerParticlePoint = false;
     bool bPerParticleMultiPoint = false;
     TArray<FOrbitFieldDefinition> MultiPointFields;
+    // Copied by the callback input. Only IDs owned by THIS solver group appear.
+    // Never use the gravity group alone to decide a receiver's channels.
+    TMap<int32, uint8> ReceiverMasksByParticleId;
+    bool bUseReceiverChannelMasks = false;
+    bool bUseBodyVelocity = false;
     EOrbitOverrideResolution OverrideResolution = EOrbitOverrideResolution::StrongestInfluence;
     void Reset()
     {
@@ -32,6 +38,9 @@ struct FOrbitUniformGravityInput : public Chaos::FSimCallbackInput
         bPerParticlePoint = false;
         bPerParticleMultiPoint = false;
         MultiPointFields.Reset();
+        ReceiverMasksByParticleId.Reset();
+        bUseReceiverChannelMasks = false;
+        bUseBodyVelocity = false;
         OverrideResolution = EOrbitOverrideResolution::StrongestInfluence;
     }
 };
@@ -48,6 +57,9 @@ struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<
     bool bCurrentPointField = false;
     bool bCurrentMultiPointField = false;
     TArray<FOrbitFieldDefinition> CurrentMultiPointFields;
+    TMap<int32, uint8> CurrentReceiverMasks;
+    bool bCurrentChannelAware = false;
+    bool bCurrentBodyVelocity = false;
     EOrbitOverrideResolution CurrentOverrideResolution = EOrbitOverrideResolution::StrongestInfluence;
 
     virtual void OnPreSimulate_Internal() override
@@ -62,8 +74,18 @@ struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<
                 // Deep copy on the physics thread, never read or retain a UObject.
                 CurrentMultiPointFields = Input->MultiPointFields;
                 CurrentOverrideResolution = Input->OverrideResolution;
+                bCurrentChannelAware = Input->bUseReceiverChannelMasks;
+                bCurrentBodyVelocity = Input->bUseBodyVelocity;
+                if (bCurrentChannelAware) { CurrentReceiverMasks = Input->ReceiverMasksByParticleId; }
+                else { CurrentReceiverMasks.Reset(); }
             }
-            else { CurrentMultiPointFields.Reset(); }
+            else
+            {
+                CurrentMultiPointFields.Reset();
+                CurrentReceiverMasks.Reset();
+                bCurrentChannelAware = false;
+                bCurrentBodyVelocity = false;
+            }
             auto* RigidsSolver = static_cast<Chaos::FPBDRigidsSolver*>(GetSolver());
             RigidsSolver->GetEvolution()->GetGravityForces().SetAcceleration(
                 (bCurrentPointField || bCurrentMultiPointField) ?
@@ -82,12 +104,15 @@ struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<
         const FOrbitFieldDefinition& Field = CurrentPointField;
         const TArray<FOrbitFieldDefinition>& Fields = CurrentMultiPointFields;
         const bool bMultiSource = bCurrentMultiPointField;
+        const bool bChannelAware = bCurrentChannelAware;
+        const bool bVelocityAware = bCurrentBodyVelocity;
+        const TMap<int32, uint8>& ReceiverMasks = CurrentReceiverMasks;
         const EOrbitOverrideResolution Resolution = CurrentOverrideResolution;
         // The group is an ownership marker; it is NOT used to approximate
         // multiple positions with a shared gravity vector. Only dynamic,
         // awake particles participate; Chaos retains its own sleep decisions.
         RigidsSolver->GetEvolution()->GetParticles().GetNonDisabledDynamicView().ParallelFor(
-            [&Field, &Fields, bMultiSource, Resolution](auto& Particle, int32)
+            [&Field, &Fields, &ReceiverMasks, bMultiSource, bChannelAware, bVelocityAware, Resolution](auto& Particle, int32)
             {
                 if (!Particle.GravityEnabled() ||
                     Particle.GravityGroupIndex() != FOrbitChaosGravityBridge::GravityGroup ||
@@ -100,12 +125,24 @@ struct FOrbitUniformGravitySimCallback final : public Chaos::TSimCallbackObject<
                 FVector Acceleration = FVector::ZeroVector;
                 if (bMultiSource)
                 {
-                    // Same filtering, top-priority Override and Additive rules
-                    // as Standard's per-body evaluator. Unsupported channels are
-                    // never assigned to this solver group (see body policy).
-                    const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
-                        Fields, WorldPosition, FVector::ZeroVector, 1u, Resolution);
-                    Acceleration = Sample.Acceleration;
+                    // Keyed by Chaos's persistent particle identity, not by
+                    // position, Actor, source or allocation order. An unknown
+                    // ID MUST NOT inherit channel 0: default to zero gravity
+                    // until the game-thread registration snapshot arrives.
+                    const uint8* KnownMask = bChannelAware ?
+                        ReceiverMasks.Find(Particle.UniqueIdx().Idx) : nullptr;
+                    const uint8 ReceiverMask = bChannelAware ? (KnownMask ? *KnownMask : 0u) : 1u;
+                    if (ReceiverMask != 0u)
+                    {
+                        const auto& Velocity = Particle.GetV();
+                        const FVector WorldVelocity(Velocity.X, Velocity.Y, Velocity.Z);
+                        // Body Velocity is needed for Spiral Capture; the same
+                        // evaluator also handles ordinary continuous Vortex.
+                        const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
+                            Fields, WorldPosition, bVelocityAware ? WorldVelocity : FVector::ZeroVector,
+                            ReceiverMask, Resolution);
+                        Acceleration = Sample.Acceleration;
+                    }
                 }
                 else
                 {
@@ -278,16 +315,28 @@ bool FOrbitChaosGravityBridge::TryGetMixedPointDirectionalFields(
 }
 
 bool FOrbitChaosGravityBridge::TryGetExpandedFields(
-    const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields)
+    const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields,
+    bool bAllowChannels, bool bAllowVortex)
 {
     OutFields.Reset();
-    // This first parity batch deliberately retains Channel-0-only ownership.
-    // The group callback has no per-particle receiver mask; assigning channel 1
-    // receivers here would silently apply someone else's gravity field.
+    // Legacy callers remain channel-0-only. The separate opted-in channel
+    // selector carries each body's mask by stable Chaos particle identity.
     for (const FOrbitFieldDefinition& Field : Fields)
     {
         if (!Field.bPhysics || Field.ChannelMask == 0u) { continue; }
-        if (OutFields.Num() >= MaxExperimentalPointSources || Field.ChannelMask != 1u ||
+        const bool bVortex = Field.Direction == EOrbitGravityDirection::VortexInward ||
+            Field.Direction == EOrbitGravityDirection::VortexOutward;
+        const bool bValidVortex = bAllowVortex && bVortex &&
+            (Field.Shape == EOrbitGravityShape::Point || Field.Shape == EOrbitGravityShape::Axis ||
+             Field.Shape == EOrbitGravityShape::Spline) &&
+            FMath::IsFinite(Field.VortexSpin) && FMath::IsFinite(Field.VortexResponseRate) &&
+            FMath::IsFinite(Field.VortexConvergenceRate) &&
+            FMath::IsFinite(Field.VortexAngularRateRadians) &&
+            FMath::IsFinite(Field.VortexMaxFlowSpeed) &&
+            FMath::IsFinite(Field.VortexMaxAccelerationFactor);
+        if (OutFields.Num() >= MaxExperimentalPointSources ||
+            (bAllowChannels ? ((Field.ChannelMask & ~0x07u) != 0u) : Field.ChannelMask != 1u) ||
+            (bVortex && !bValidVortex) ||
             Field.Center.ContainsNaN() || Field.Axis.ContainsNaN() ||
             Field.DirectionVector.ContainsNaN() || Field.Rotation.ContainsNaN() ||
             Field.BoxExtents.ContainsNaN() ||
@@ -300,7 +349,7 @@ bool FOrbitChaosGravityBridge::TryGetExpandedFields(
             (Field.Direction != EOrbitGravityDirection::Inward &&
              Field.Direction != EOrbitGravityDirection::Outward &&
              Field.Direction != EOrbitGravityDirection::SplineUp &&
-             Field.Direction != EOrbitGravityDirection::SplineDown))
+             Field.Direction != EOrbitGravityDirection::SplineDown && !bValidVortex))
         {
             OutFields.Reset();
             return false;
@@ -308,13 +357,15 @@ bool FOrbitChaosGravityBridge::TryGetExpandedFields(
         if (Field.Shape == EOrbitGravityShape::Point)
         {
             if (Field.Direction != EOrbitGravityDirection::Inward &&
-                Field.Direction != EOrbitGravityDirection::Outward) { OutFields.Reset(); return false; }
+                Field.Direction != EOrbitGravityDirection::Outward && !bValidVortex)
+            { OutFields.Reset(); return false; }
         }
         else if (Field.Shape == EOrbitGravityShape::Axis)
         {
             if (Field.Axis.IsNearlyZero() ||
                 (Field.Direction != EOrbitGravityDirection::Inward &&
-                 Field.Direction != EOrbitGravityDirection::Outward)) { OutFields.Reset(); return false; }
+                 Field.Direction != EOrbitGravityDirection::Outward && !bValidVortex))
+            { OutFields.Reset(); return false; }
         }
         else if (Field.Shape == EOrbitGravityShape::Directional || Field.Shape == EOrbitGravityShape::Volume)
         {
@@ -358,12 +409,28 @@ bool FOrbitChaosGravityBridge::TryGetExpandedFields(
         {
             OutFields.Reset(); return false;
         }
-        // Vortex steering is velocity-dependent and requires additional sleeping
-        // and per-particle velocity parity tests; it remains on Standard.
         OutFields.Add(Field);
     }
     if (OutFields.IsEmpty()) { return false; }
     return true;
+}
+
+bool FOrbitChaosGravityBridge::TryGetVortexFields(
+    const TArray<FOrbitFieldDefinition>& Fields, TArray<FOrbitFieldDefinition>& OutFields,
+    bool bAllowChannels)
+{
+    if (!TryGetExpandedFields(Fields, OutFields, bAllowChannels, true)) { return false; }
+    // Don't steal existing (non-Vortex) modes merely because this option is on.
+    for (const FOrbitFieldDefinition& Field : OutFields)
+    {
+        if (Field.Direction == EOrbitGravityDirection::VortexInward ||
+            Field.Direction == EOrbitGravityDirection::VortexOutward)
+        {
+            return true;
+        }
+    }
+    OutFields.Reset();
+    return false;
 }
 
 bool FOrbitChaosGravityBridge::Start(UWorld* World)
@@ -408,10 +475,15 @@ void FOrbitChaosGravityBridge::Update(const FOrbitFieldDefinition& Field,
         bMultiPointMode = false;
         bMixedPointDirectionalMode = false;
         bExpandedFieldsMode = false;
+        bChannelAwareMode = false;
+        bVortexMode = false;
         FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
         Input->Acceleration = Chaos::FVec3(UniformAcceleration);
         Input->bPerParticlePoint = bPerParticlePoint;
         Input->bPerParticleMultiPoint = false;
+        Input->bUseReceiverChannelMasks = false;
+        Input->bUseBodyVelocity = false;
+        Input->ReceiverMasksByParticleId.Reset();
         Input->MultiPointFields.Reset();
         if (bPerParticlePoint) { Input->PointField = Field; }
     }
@@ -426,10 +498,15 @@ void FOrbitChaosGravityBridge::UpdateMultiplePoint(
         bMultiPointMode = true;
         bMixedPointDirectionalMode = false;
         bExpandedFieldsMode = false;
+        bChannelAwareMode = false;
+        bVortexMode = false;
         FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
         Input->Acceleration = Chaos::FVec3(0, 0, 0);
         Input->bPerParticlePoint = false;
         Input->bPerParticleMultiPoint = true;
+        Input->bUseReceiverChannelMasks = false;
+        Input->bUseBodyVelocity = false;
+        Input->ReceiverMasksByParticleId.Reset();
         Input->MultiPointFields = Fields;
         Input->OverrideResolution = Resolution;
     }
@@ -444,12 +521,17 @@ void FOrbitChaosGravityBridge::UpdateMixedPointDirectional(
         bMultiPointMode = false;
         bMixedPointDirectionalMode = true;
         bExpandedFieldsMode = false;
+        bChannelAwareMode = false;
+        bVortexMode = false;
         // The solver callback already uses CombineForBody for multi-source
         // integration. Mixed support changes eligibility, not gravity math.
         FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
         Input->Acceleration = Chaos::FVec3(0, 0, 0);
         Input->bPerParticlePoint = false;
         Input->bPerParticleMultiPoint = true;
+        Input->bUseReceiverChannelMasks = false;
+        Input->bUseBodyVelocity = false;
+        Input->ReceiverMasksByParticleId.Reset();
         Input->MultiPointFields = Fields;
         Input->OverrideResolution = Resolution;
     }
@@ -463,13 +545,86 @@ void FOrbitChaosGravityBridge::UpdateExpandedFields(
     bMultiPointMode = false;
     bMixedPointDirectionalMode = false;
     bExpandedFieldsMode = true;
+    bChannelAwareMode = false;
+    bVortexMode = false;
     // Use the existing physics-thread multi-field evaluator. No new force path.
     FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
     Input->Acceleration = Chaos::FVec3(0, 0, 0);
     Input->bPerParticlePoint = false;
     Input->bPerParticleMultiPoint = true;
+    Input->bUseReceiverChannelMasks = false;
+    Input->bUseBodyVelocity = false;
+    Input->ReceiverMasksByParticleId.Reset();
     Input->MultiPointFields = Fields;
     Input->OverrideResolution = Resolution;
+}
+
+void FOrbitChaosGravityBridge::UpdateChannelFields(
+    const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution)
+{
+    if (!Callback) { return; }
+    bPointMode = false;
+    bMultiPointMode = false;
+    bMixedPointDirectionalMode = false;
+    bExpandedFieldsMode = true;
+    bChannelAwareMode = true;
+    bVortexMode = Fields.ContainsByPredicate([](const FOrbitFieldDefinition& Field)
+    {
+        return Field.Direction == EOrbitGravityDirection::VortexInward ||
+            Field.Direction == EOrbitGravityDirection::VortexOutward;
+    });
+    FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
+    Input->Acceleration = Chaos::FVec3(0, 0, 0);
+    Input->bPerParticlePoint = false;
+    Input->bPerParticleMultiPoint = true;
+    Input->bUseReceiverChannelMasks = true;
+    Input->bUseBodyVelocity = bVortexMode;
+    Input->MultiPointFields = Fields;
+    Input->ReceiverMasksByParticleId = ReceiverMasksByParticleId;
+    Input->OverrideResolution = Resolution;
+}
+
+void FOrbitChaosGravityBridge::UpdateVortexFields(
+    const TArray<FOrbitFieldDefinition>& Fields, EOrbitOverrideResolution Resolution)
+{
+    if (!Callback) { return; }
+    bPointMode = false;
+    bMultiPointMode = false;
+    bMixedPointDirectionalMode = false;
+    bExpandedFieldsMode = true;
+    bChannelAwareMode = false;
+    bVortexMode = true;
+    FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
+    Input->Acceleration = Chaos::FVec3(0, 0, 0);
+    Input->bPerParticlePoint = false;
+    Input->bPerParticleMultiPoint = true;
+    Input->bUseReceiverChannelMasks = false;
+    Input->bUseBodyVelocity = true;
+    Input->ReceiverMasksByParticleId.Reset();
+    Input->MultiPointFields = Fields;
+    Input->OverrideResolution = Resolution;
+}
+
+void FOrbitChaosGravityBridge::SetBodyReceiverMask(int32 ParticleId, uint8 ReceiverMask)
+{
+    if (ParticleId != INDEX_NONE && ReceiverMask != 0u)
+    {
+        ReceiverMasksByParticleId.Add(ParticleId, ReceiverMask);
+    }
+}
+
+void FOrbitChaosGravityBridge::RemoveBodyReceiverMask(int32 ParticleId)
+{
+    if (ParticleId != INDEX_NONE) { ReceiverMasksByParticleId.Remove(ParticleId); }
+}
+
+void FOrbitChaosGravityBridge::CommitReceiverMasks()
+{
+    if (Callback && bChannelAwareMode)
+    {
+        FOrbitUniformGravityInput* Input = Callback->GetProducerInputData_External();
+        Input->ReceiverMasksByParticleId = ReceiverMasksByParticleId;
+    }
 }
 
 void FOrbitChaosGravityBridge::Stop()
@@ -484,14 +639,19 @@ void FOrbitChaosGravityBridge::Stop()
     bMultiPointMode = false;
     bMixedPointDirectionalMode = false;
     bExpandedFieldsMode = false;
+    bChannelAwareMode = false;
+    bVortexMode = false;
+    ReceiverMasksByParticleId.Reset();
 }
 
-bool FOrbitChaosGravityBridge::AssignBody(UPrimitiveComponent* Component, int32& OutPreviousGroup)
+bool FOrbitChaosGravityBridge::AssignBody(UPrimitiveComponent* Component,
+    int32& OutPreviousGroup, int32& OutParticleId, uint8 ReceiverMask)
 {
     // This first-stage implementation intentionally excludes skeletal/compound
     // rigid bodies; one actor-wide gravity group must not be applied to only a
     // subset of their individual physics particles.
-    if (!Callback || !IsValid(Component) || !Component->IsSimulatingPhysics() ||
+    OutParticleId = INDEX_NONE;
+    if (!Callback || ReceiverMask == 0u || !IsValid(Component) || !Component->IsSimulatingPhysics() ||
         !Component->IsA<UStaticMeshComponent>()) { return false; }
     FBodyInstance* Body = Component->GetBodyInstance();
     if (!Body) { return false; }
@@ -501,10 +661,14 @@ bool FOrbitChaosGravityBridge::AssignBody(UPrimitiveComponent* Component, int32&
         if (!FChaosEngineInterface::IsValid(Handle)) { return; }
         const int32 ExistingGroup = FChaosEngineInterface::GetGravityGroupIndex_AssumesLocked(Handle);
         if (ExistingGroup != 0) { return; } // Never steal a custom group from another integration.
+        const Chaos::FUniqueIdx UniqueId = Handle->GetGameThreadAPI().UniqueIdx();
+        if (bChannelAwareMode && !UniqueId.IsValid()) { return; }
         OutPreviousGroup = ExistingGroup;
+        OutParticleId = UniqueId.IsValid() ? UniqueId.Idx : INDEX_NONE;
         FChaosEngineInterface::SetGravityGroupIndex_AssumesLocked(Handle, GravityGroup);
         bAssigned = true;
     });
+    if (bAssigned) { SetBodyReceiverMask(OutParticleId, ReceiverMask); }
     return bAssigned;
 }
 

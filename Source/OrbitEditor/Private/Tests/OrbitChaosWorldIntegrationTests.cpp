@@ -32,6 +32,8 @@ namespace OrbitWorldIntegrationTests
         const bool bMultiplePoint = Settings->bExperimentalMultiplePointSources;
         const bool bMixed = Settings->bExperimentalMixedPointDirectionalSources;
         const bool bExpanded = Settings->bExperimentalExpandedFieldCompatibility;
+        const bool bChannels = Settings->bExperimentalReceiverChannelCompatibility;
+        const bool bVortex = Settings->bExperimentalVortexCompatibility;
         const bool bIncludeDisabled = Settings->bIncludeInitiallyGravityDisabledBodies;
         const float DiscoveryInterval = Settings->PhysicsDiscoveryInterval;
         const bool bWorldFallback = Settings->bUseWorldGravityOutsideFields;
@@ -50,6 +52,8 @@ namespace OrbitWorldIntegrationTests
             Settings->bExperimentalMultiplePointSources = false;
             Settings->bExperimentalMixedPointDirectionalSources = false;
             Settings->bExperimentalExpandedFieldCompatibility = bExperimental;
+            Settings->bExperimentalReceiverChannelCompatibility = false;
+            Settings->bExperimentalVortexCompatibility = false;
             Settings->bIncludeInitiallyGravityDisabledBodies = false;
             Settings->PhysicsDiscoveryInterval = 0.0f;
             Settings->bUseWorldGravityOutsideFields = false;
@@ -68,6 +72,8 @@ namespace OrbitWorldIntegrationTests
             Settings->bExperimentalMultiplePointSources = bMultiplePoint;
             Settings->bExperimentalMixedPointDirectionalSources = bMixed;
             Settings->bExperimentalExpandedFieldCompatibility = bExpanded;
+            Settings->bExperimentalReceiverChannelCompatibility = bChannels;
+            Settings->bExperimentalVortexCompatibility = bVortex;
             Settings->bIncludeInitiallyGravityDisabledBodies = bIncludeDisabled;
             Settings->PhysicsDiscoveryInterval = DiscoveryInterval;
             Settings->bUseWorldGravityOutsideFields = bWorldFallback;
@@ -415,15 +421,32 @@ bool FOrbitWorldNativeSleepWake::RunTest(const FString& Parameters)
     TestTrue(TEXT("Directional Chaos body actually fell toward the support"), bFell);
     TestTrue(TEXT("Supported cube naturally slept without Orbit rest intervention"), bSlept);
     if (!bSlept) { return false; }
-    Source->SetActorRotation(FRotator(0.0, 90.0, 0.0));
+    // Orbit Directional gravity follows the source's NEGATIVE UP axis.
+    // Yaw around world Z leaves this direction unchanged, so tilt by pitch.
+    Source->SetActorRotation(FRotator(90.0, 0.0, 0.0));
+    FOrbitFieldDefinition TiltedField;
+    Source->BuildDefinition(TiltedField);
+    const FVector TiltedDown = TiltedField.DirectionVector.GetSafeNormal();
+    if (!TestTrue(TEXT("Pitch rotation changes Directional gravity from -Z to horizontal"),
+        FMath::Abs(TiltedDown.X) > 0.99 && FMath::Abs(TiltedDown.Z) < 0.01))
+    {
+        return false;
+    }
     if (UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>())
     {
         Subsystem->RefreshActiveSources();
+        const FVector SampledGravity = Subsystem->GetGravityAcceleration(
+            Body->GetCenterOfMass(NAME_None), EOrbitGravityChannel::Physics);
+        if (!TestTrue(TEXT("Orbit field snapshot reports the newly tilted gravity"),
+            FVector::DotProduct(SampledGravity.GetSafeNormal(), TiltedDown) > 0.99))
+        {
+            return false;
+        }
     }
     if (!Fixture.Step(40)) { return false; }
     TestTrue(TEXT("Changing gravity wakes sleeping body"), Body->IsAnyRigidBodyAwake());
-    TestTrue(TEXT("After wake, body responds horizontally to new gravity"),
-        FMath::Abs(Body->GetPhysicsLinearVelocity().X) > 15.0);
+    TestTrue(TEXT("After wake, body accelerates along the new gravity direction"),
+        FVector::DotProduct(Body->GetPhysicsLinearVelocity(), TiltedDown) > 15.0);
     return true;
 }
 
@@ -485,6 +508,219 @@ bool FOrbitWorldSourceRemovalCleanup::RunTest(const FString& Parameters)
         TestFalse(TEXT("Removed source releases Orbit managed-body diagnostics"),
             Subsystem->IsOrbitManagedPhysicsBody(Body));
     }
+    return true;
+}
+
+
+namespace OrbitWorldIntegrationTests
+{
+    UOrbitGravityReceiverComponent* AttachReceiver(FAutomationTestBase& Test, UStaticMeshComponent* Body,
+        bool bChannel0, bool bChannel1, bool bChannel2)
+    {
+        if (!Body || !Body->GetOwner()) { return nullptr; }
+        UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(Body->GetOwner());
+        if (!Test.TestNotNull(TEXT("Receiver component created"), Receiver)) { return nullptr; }
+        Receiver->GravityChannels.bChannel0 = bChannel0;
+        Receiver->GravityChannels.bChannel1 = bChannel1;
+        Receiver->GravityChannels.bChannel2 = bChannel2;
+        Body->GetOwner()->AddInstanceComponent(Receiver);
+        Receiver->RegisterComponent();
+        return Receiver;
+    }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042LiveReceiverIsolation,
+    "Orbit.Physics.IntegrationWorld.ChannelsIndependentBodiesAndUnion",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042LiveReceiverIsolation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    Settings.Settings->bExperimentalReceiverChannelCompatibility = true;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Down = Fixture.Source();
+    AOrbitGravitySource* Side = Fixture.Source();
+    if (!Down || !Side) { return false; }
+    Down->Shape = Side->Shape = EOrbitGravityShape::Directional;
+    Down->Combine = Side->Combine = EOrbitGravityCombine::Additive;
+    Down->GravityChannels.bChannel0 = false;
+    Down->GravityChannels.bChannel1 = true;
+    Side->GravityChannels.bChannel0 = false;
+    Side->GravityChannels.bChannel2 = true;
+    Side->SetActorRotation(FRotator(90.0,0.0,0.0));
+    FOrbitFieldDefinition SideField;
+    Side->BuildDefinition(SideField);
+    const FVector SideDirection = SideField.DirectionVector.GetSafeNormal();
+    UStaticMeshComponent* Only1 = Fixture.Cube(FVector(0,0,700));
+    UStaticMeshComponent* Only2 = Fixture.Cube(FVector(1500,0,700));
+    UStaticMeshComponent* Both = Fixture.Cube(FVector(3000,0,700));
+    UStaticMeshComponent* Neither = Fixture.Cube(FVector(4500,0,700));
+    if (!Only1 || !Only2 || !Both || !Neither ||
+        !AttachReceiver(*this,Only1,false,true,false) ||
+        !AttachReceiver(*this,Only2,false,false,true) ||
+        !AttachReceiver(*this,Both,false,true,true)) { return false; }
+    if (!Fixture.Begin() || !Fixture.Step(36)) { return false; }
+    Fixture.VerifyExpanded(Only1);
+    Fixture.VerifyExpanded(Only2);
+    Fixture.VerifyExpanded(Both);
+    // The Blueprint/C++ sampling surface must agree with the solver's channels.
+    if (UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>())
+    {
+        const auto A = Subsystem->SampleGravityForActor(Only1->GetOwner(),
+            Only1->GetCenterOfMass(NAME_None), EOrbitGravityChannel::Physics);
+        const auto B = Subsystem->SampleGravityForActor(Only2->GetOwner(),
+            Only2->GetCenterOfMass(NAME_None), EOrbitGravityChannel::Physics);
+        const auto AB = Subsystem->SampleGravityForActor(Both->GetOwner(),
+            Both->GetCenterOfMass(NAME_None), EOrbitGravityChannel::Physics);
+        TestTrue(TEXT("Shared actor API samples only channel 1 for receiver 1"),
+            A.Acceleration.Equals(FVector(0,0,-980), 0.01));
+        TestTrue(TEXT("Shared actor API samples only channel 2 for receiver 2"),
+            B.Acceleration.Equals(SideDirection * 980.0, 0.01));
+        TestTrue(TEXT("Shared actor API sums both channels for union receiver"),
+            AB.Acceleration.Equals(FVector(0,0,-980)+SideDirection*980.0, 0.01));
+    }
+    const FVector V1 = Only1->GetPhysicsLinearVelocity();
+    const FVector V2 = Only2->GetPhysicsLinearVelocity();
+    const FVector VBoth = Both->GetPhysicsLinearVelocity();
+    TestTrue(TEXT("Channel 1 rigid body accelerates downward"), V1.Z < -100.0);
+    TestTrue(TEXT("Channel 1 rigid body has no channel 2 horizontal acceleration"), FMath::Abs(V1.X) < 35.0);
+    TestTrue(TEXT("Channel 2 rigid body accelerates horizontally"), FVector::DotProduct(V2,SideDirection) > 100.0);
+    TestTrue(TEXT("Channel 2 rigid body has no channel 1 downward acceleration"), FMath::Abs(V2.Z) < 35.0);
+    TestTrue(TEXT("Multichannel body receives channel 1"), VBoth.Z < -100.0);
+    TestTrue(TEXT("Multichannel body receives channel 2"), FVector::DotProduct(VBoth,SideDirection) > 100.0);
+    TestTrue(TEXT("Default channel 0 body does not inherit either source"),
+        Neither->GetPhysicsLinearVelocity().Size() < 10.0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042LiveReceiverMutation,
+    "Orbit.Physics.IntegrationWorld.ChannelsRuntimeReceiverMaskChange",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042LiveReceiverMutation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    Settings.Settings->bExperimentalReceiverChannelCompatibility = true;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Down = Fixture.Source();
+    AOrbitGravitySource* Side = Fixture.Source();
+    if (!Down || !Side) { return false; }
+    Down->Shape = Side->Shape = EOrbitGravityShape::Directional;
+    Down->Combine = Side->Combine = EOrbitGravityCombine::Additive;
+    Down->GravityChannels.bChannel0 = false;
+    Down->GravityChannels.bChannel1 = true;
+    Side->GravityChannels.bChannel0 = false;
+    Side->GravityChannels.bChannel2 = true;
+    Side->SetActorRotation(FRotator(90,0,0));
+    FOrbitFieldDefinition SideField;
+    Side->BuildDefinition(SideField);
+    const FVector SideDirection = SideField.DirectionVector.GetSafeNormal();
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(0,0,700));
+    UOrbitGravityReceiverComponent* Receiver = AttachReceiver(*this,Body,false,true,false);
+    if (!Receiver || !Fixture.Begin() || !Fixture.Step(24)) { return false; }
+    Fixture.VerifyExpanded(Body);
+    const FVector Before = Body->GetPhysicsLinearVelocity();
+    TestTrue(TEXT("Before change, body is pulled down"), Before.Z < -80.0);
+    Receiver->GravityChannels.bChannel1 = false;
+    Receiver->GravityChannels.bChannel2 = true;
+    if (!Fixture.Step(36)) { return false; }
+    Fixture.VerifyExpanded(Body);
+    const FVector After = Body->GetPhysicsLinearVelocity();
+    TestTrue(TEXT("Changing receiver mask updates active Chaos gravity without new component"),
+        FVector::DotProduct(After - Before, SideDirection) > 100.0);
+    TestTrue(TEXT("Old gravity channel stops accelerating after mask switch"),
+        FMath::Abs(After.Z - Before.Z) < 55.0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042LiveVortexContinuous,
+    "Orbit.Physics.IntegrationWorld.VortexContinuousForceChaos",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042LiveVortexContinuous::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    Settings.Settings->bExperimentalVortexCompatibility = true;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Point;
+    Source->Direction = EOrbitGravityDirection::VortexInward;
+    Source->VortexPhysicsMode = EOrbitVortexPhysicsMode::ContinuousForce;
+    Source->VortexSpin = 1.0;
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(500,0,0));
+    if (!Body || !Fixture.Begin() || !Fixture.Step(24)) { return false; }
+    Fixture.VerifyExpanded(Body);
+    const FVector Velocity = Body->GetPhysicsLinearVelocity();
+    TestTrue(TEXT("Continuous Vortex in solver accelerates inward"), Velocity.X < -45.0);
+    TestTrue(TEXT("Continuous Vortex in solver adds tangential acceleration"), Velocity.Y < -45.0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042LiveVortexSpiral,
+    "Orbit.Physics.IntegrationWorld.VortexSpiralCaptureVelocityResponse",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042LiveVortexSpiral::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    Settings.Settings->bExperimentalVortexCompatibility = true;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Point;
+    Source->Direction = EOrbitGravityDirection::VortexInward;
+    Source->VortexPhysicsMode = EOrbitVortexPhysicsMode::SpiralCapture;
+    Source->VortexSpin = 1.0;
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(500,0,0));
+    if (!Body || !Fixture.Begin() || !Fixture.Step(4)) { return false; }
+    Fixture.VerifyExpanded(Body);
+    FOrbitFieldDefinition Field;
+    Source->BuildDefinition(Field);
+    for (const FVector InitialVelocity : {FVector(0,900,0), FVector(0,-900,0)})
+    {
+        Body->SetPhysicsLinearVelocity(InitialVelocity);
+        const FVector Position = Body->GetCenterOfMass(NAME_None);
+        const FVector Before = Body->GetPhysicsLinearVelocity();
+        FVector ExpectedAcceleration;
+        TestTrue(TEXT("Vortex captures this body state"),
+            FOrbitFieldEvaluator::EvaluateForBody(Field,Position,Before,ExpectedAcceleration));
+        if (!Fixture.Step(7)) { return false; }
+        const FVector Delta = Body->GetPhysicsLinearVelocity() - Before;
+        TestTrue(TEXT("Spiral capture accelerates toward the velocity-dependent target"),
+            FVector::DotProduct(Delta,ExpectedAcceleration.GetSafeNormal()) > 10.0);
+    }
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042RuntimeSpawnChannel,
+    "Orbit.Physics.IntegrationWorld.RuntimeSpawnedChannelReceiverDiscovery",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042RuntimeSpawnChannel::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    Settings.Settings->bExperimentalReceiverChannelCompatibility = true;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    Source->GravityChannels.bChannel0 = false;
+    Source->GravityChannels.bChannel1 = true;
+    if (!Fixture.Begin() || !Fixture.Step(3)) { return false; }
+    // A component created after world BeginPlay cannot be preclaimed by the
+    // normal world-start hook; discovery must register it safely at runtime.
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(500,0,700));
+    if (!Body || !AttachReceiver(*this,Body,false,true,false) || !Fixture.Step(40)) { return false; }
+    Fixture.VerifyExpanded(Body);
+    TestTrue(TEXT("Runtime-spawned channel-1 receiver accelerates under Chaos after discovery"),
+        Body->GetPhysicsLinearVelocity().Z < -100.0);
     return true;
 }
 

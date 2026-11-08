@@ -985,4 +985,146 @@ bool FOrbitChaosExpandedMixedParityTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042ChannelEligibility,
+    "Orbit.Physics.GravityIntegration.ChannelMaskOptInEligibility",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042ChannelEligibility::RunTest(const FString& Parameters)
+{
+    TArray<FOrbitFieldDefinition> Fields{MakePointField()};
+    TArray<FOrbitFieldDefinition> Selected;
+    Fields[0].ChannelMask = 2u;
+    TestFalse(TEXT("Legacy expanded mode cannot take Channel 1"),
+        FOrbitChaosGravityBridge::TryGetExpandedFields(Fields, Selected));
+    TestTrue(TEXT("Explicit channel-aware mode accepts Channel 1"),
+        FOrbitChaosGravityBridge::TryGetExpandedFields(Fields, Selected, true));
+    Fields[0].ChannelMask = 4u;
+    TestTrue(TEXT("Explicit channel-aware mode accepts Channel 2"),
+        FOrbitChaosGravityBridge::TryGetExpandedFields(Fields, Selected, true));
+    Fields[0].ChannelMask = 7u;
+    TestTrue(TEXT("All three authored source channels are supported"),
+        FOrbitChaosGravityBridge::TryGetExpandedFields(Fields, Selected, true));
+    TestTrue(TEXT("Channel-aware receiver 1 allowed"),
+        FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(true, 2u, true));
+    TestTrue(TEXT("Channel-aware multichannel receiver allowed"),
+        FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(true, 7u, true));
+    TestFalse(TEXT("Zero channel mask never claims a body"),
+        FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(true, 0u, true));
+    TestFalse(TEXT("Legacy receiver policy still denies non-default masks"),
+        FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(true, 2u));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042ChannelCombination,
+    "Orbit.Physics.GravityIntegration.ChannelMaskCombinationIsolation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042ChannelCombination::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition A = MakeDirectionalField();
+    A.ChannelMask = 2u;
+    A.DirectionVector = FVector(0,0,-1);
+    A.Combine = EOrbitGravityCombine::Additive;
+    FOrbitFieldDefinition B = A;
+    B.ChannelMask = 4u;
+    B.DirectionVector = FVector(1,0,0);
+    TArray<FOrbitFieldDefinition> Fields{A,B};
+    TArray<FOrbitFieldDefinition> Snapshot;
+    TestTrue(TEXT("Mixed-source channel snapshot is eligible"),
+        FOrbitChaosGravityBridge::TryGetExpandedFields(Fields, Snapshot, true));
+    const FVector P(100,200,300);
+    const auto Mask1 = FOrbitFieldEvaluator::CombineForBody(Snapshot, P, FVector::ZeroVector,
+        2u, EOrbitOverrideResolution::StrongestInfluence);
+    const auto Mask2 = FOrbitFieldEvaluator::CombineForBody(Snapshot, P, FVector::ZeroVector,
+        4u, EOrbitOverrideResolution::StrongestInfluence);
+    const auto Both = FOrbitFieldEvaluator::CombineForBody(Snapshot, P, FVector::ZeroVector,
+        6u, EOrbitOverrideResolution::StrongestInfluence);
+    const auto Neither = FOrbitFieldEvaluator::CombineForBody(Snapshot, P, FVector::ZeroVector,
+        1u, EOrbitOverrideResolution::StrongestInfluence);
+    TestTrue(TEXT("Channel 1 only gets downward gravity"), Mask1.Acceleration.Equals(FVector(0,0,-980),.001));
+    TestTrue(TEXT("Channel 2 only gets horizontal gravity"), Mask2.Acceleration.Equals(FVector(980,0,0),.001));
+    TestTrue(TEXT("Receiver with both masks sums additive fields"), Both.Acceleration.Equals(FVector(980,0,-980),.001));
+    TestFalse(TEXT("Unmatched channel has no influence"), Neither.bHasInfluence);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042SolverModePrecedence,
+    "Orbit.Physics.GravityIntegration.ChannelAndVortexSelectionPriority",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042SolverModePrecedence::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsIntegrationMath;
+    using EMode = EExperimentalSolverSelection;
+    TestTrue(TEXT("Unopted Standard never selects new modes"),
+        SelectExperimentalSolver(false,true,false,false,false,false,false,false,true,true,true,true) == EMode::None);
+    TestTrue(TEXT("Channel mode must override single field to preserve receiver masks"),
+        SelectExperimentalSolver(true,true,false,false,false,false,false,false,true,true,false,false) == EMode::ChannelFields);
+    TestTrue(TEXT("Vortex mode is selected only when separately opted in"),
+        SelectExperimentalSolver(true,false,false,false,false,false,false,false,false,false,true,true) == EMode::VortexFields);
+    TestTrue(TEXT("Legacy single field remains highest when both new opt-ins are off"),
+        SelectExperimentalSolver(true,true,false,false,false,false,false,false,false,true,false,true) == EMode::Single);
+    TestTrue(TEXT("Channel mode handles mixed channel-aware Vortex when both opt in"),
+        SelectExperimentalSolver(true,false,false,false,false,false,false,false,true,true,true,true) == EMode::ChannelFields);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042VortexEligibility,
+    "Orbit.Physics.GravityIntegration.VortexExpandedOptInEligibility",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042VortexEligibility::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field = MakePointField();
+    Field.Direction = EOrbitGravityDirection::VortexInward;
+    Field.VortexSpin = 1.0;
+    Field.VortexPhysicsMode = EOrbitVortexPhysicsMode::SpiralCapture;
+    TArray<FOrbitFieldDefinition> Fields{Field};
+    TArray<FOrbitFieldDefinition> Selected;
+    TestFalse(TEXT("Vortex is not silently enabled in old expanded mode"),
+        FOrbitChaosGravityBridge::TryGetExpandedFields(Fields, Selected));
+    TestTrue(TEXT("Vortex can be selected under its explicit opt-in"),
+        FOrbitChaosGravityBridge::TryGetVortexFields(Fields, Selected));
+    TestTrue(TEXT("Vortex authored mode remains Spiral Capture in physics snapshot"),
+        Selected.Num()==1 && Selected[0].VortexPhysicsMode==EOrbitVortexPhysicsMode::SpiralCapture);
+    Fields[0].ChannelMask = 2u;
+    TestFalse(TEXT("Vortex-only mode cannot steal channel 1"),
+        FOrbitChaosGravityBridge::TryGetVortexFields(Fields, Selected));
+    TestTrue(TEXT("Combined channel and Vortex opt-ins allow channel 1 vortex"),
+        FOrbitChaosGravityBridge::TryGetVortexFields(Fields, Selected, true));
+    Fields[0].Shape = EOrbitGravityShape::Directional;
+    TestFalse(TEXT("Unsupported directional vortex remains on Standard"),
+        FOrbitChaosGravityBridge::TryGetVortexFields(Fields, Selected, true));
+    Fields[0] = MakePointField();
+    TestFalse(TEXT("Vortex selector does not steal a non-vortex Point source"),
+        FOrbitChaosGravityBridge::TryGetVortexFields(Fields, Selected));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit042VortexVelocity,
+    "Orbit.Physics.GravityIntegration.VortexSpiralCaptureVelocityParity",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit042VortexVelocity::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field = MakePointField();
+    Field.Center = FVector::ZeroVector;
+    Field.Axis = FVector::UpVector;
+    Field.Direction = EOrbitGravityDirection::VortexInward;
+    Field.VortexSpin = 1.0;
+    Field.VortexPhysicsMode = EOrbitVortexPhysicsMode::SpiralCapture;
+    const FVector P(500,0,0);
+    TArray<FOrbitFieldDefinition> Fields{Field};
+    FOrbitGravitySample A = FOrbitFieldEvaluator::CombineForBody(Fields, P, FVector::ZeroVector,
+        1u, EOrbitOverrideResolution::StrongestInfluence);
+    FOrbitGravitySample B = FOrbitFieldEvaluator::CombineForBody(Fields, P, FVector(0,-300,0),
+        1u, EOrbitOverrideResolution::StrongestInfluence);
+    TestTrue(TEXT("Spiral capture uses actual body velocity"),
+        A.bHasInfluence && B.bHasInfluence && !A.Acceleration.Equals(B.Acceleration,0.01));
+    Field.VortexPhysicsMode = EOrbitVortexPhysicsMode::ContinuousForce;
+    Fields[0] = Field;
+    A = FOrbitFieldEvaluator::CombineForBody(Fields, P, FVector::ZeroVector,
+        1u, EOrbitOverrideResolution::StrongestInfluence);
+    B = FOrbitFieldEvaluator::CombineForBody(Fields, P, FVector(0,-300,0),
+        1u, EOrbitOverrideResolution::StrongestInfluence);
+    TestTrue(TEXT("Continuous Force remains velocity independent"),
+        A.Acceleration.Equals(B.Acceleration,0.001));
+    return true;
+}
+
 #endif

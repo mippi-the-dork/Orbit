@@ -39,15 +39,23 @@ namespace OrbitPhysicsIntegrationMath
         Single,
         MultiplePoint,
         MixedPointDirectional,
-        ExpandedFields
+        ExpandedFields,
+        ChannelFields,
+        VortexFields
     };
 
     inline EExperimentalSolverSelection SelectExperimentalSolver(bool bExperimentalMethod,
         bool bSingleEligible, bool bMultiPointOptIn, bool bMultiPointEligible,
         bool bMixedOptIn, bool bMixedEligible,
-        bool bExpandedOptIn = false, bool bExpandedEligible = false)
+        bool bExpandedOptIn = false, bool bExpandedEligible = false,
+        bool bChannelsOptIn = false, bool bChannelsEligible = false,
+        bool bVortexOptIn = false, bool bVortexEligible = false)
     {
         if (!bExperimentalMethod) { return EExperimentalSolverSelection::None; }
+        // A newly opted-in channel-aware path must take precedence, even for a
+        // single uniform field: its receivers can have distinct masks.
+        if (bChannelsOptIn && bChannelsEligible) { return EExperimentalSolverSelection::ChannelFields; }
+        if (bVortexOptIn && bVortexEligible) { return EExperimentalSolverSelection::VortexFields; }
         if (bSingleEligible) { return EExperimentalSolverSelection::Single; }
         if (bMultiPointOptIn && bMultiPointEligible) { return EExperimentalSolverSelection::MultiplePoint; }
         if (bMixedOptIn && bMixedEligible) { return EExperimentalSolverSelection::MixedPointDirectional; }

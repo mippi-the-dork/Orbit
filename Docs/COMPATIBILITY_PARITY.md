@@ -1,6 +1,6 @@
 # Orbit | Standard / Experimental Compatibility Inventory
 
-**Living reference | v0.2.29, Iteration 040 | UE 5.8.x | Last updated: November 2026**
+**Living reference | v0.2.31, Iteration 042 | UE 5.8.x | Updated: November 7, 2026**
 
 ## Goal
 
@@ -29,10 +29,10 @@ One Orbit plugin, one authored field system, one set of public Blueprint nodes a
 | Finite/Linear/Inverse Square Directional | Standard fallback | Experimental eligible | NEW: verify attenuation and source boundaries |
 | Rotated box-limited source | Standard fallback | Experimental eligible | NEW: verify same inside/outside classification |
 | Mixed Axis/Spline/Volume/Point/Directional | Standard fallback | Experimental eligible up to 32 sources | NEW: use authored Additive / Override, priority and resolution |
-| Vortex Inward / Outward; Spiral Capture / Continuous Force | Standard fallback | **Standard fallback** | Needs velocity-dependent substep parity and native sleep assessment |
+| Vortex Inward / Outward; Spiral Capture / Continuous Force | Standard fallback | **Opt-in Iteration 042 Vortex Compatibility** | Point/Axis/Spline; live UE test pending, may not naturally sleep when steered |
 | Field above 32 active physics sources | Standard | **Standard fallback** | Bounded first experiment; must never silently truncate |
 | Source Channel 0 only | Supported | Experimental eligible for rigid body receiver on Channel 0 only | NEW shape coverage |
-| Source or Receiver Channels 1/2 or multichannel masks | Supported | **Standard fallback** for expanded/multi-source path | Requires per-body physics-thread receiver mask ownership |
+| Source or Receiver Channels 1/2 or multichannel masks | Supported | **Opt-in Iteration 042 Receiver Channel Compatibility** | Per-Chaos-particle UniqueIdx masks, live UE test pending |
 | Nonphysics source (`Affect Physics = Off`) | Ignored by body physics | Ignored by body physics | Shared filtering |
 
 **Eligibility:** All participating physics sources must pass validation. Malformed vectors, missing spline samples, unsupported direction/shape combinations and unsupported channels fall back as a whole; don't drop a source silently. The field evaluator remains the single authority for source geometry, finite ranges, falloff and combination. The new selection has *lower priority* than every previously available experimental path so earlier opted-in scenes select precisely their previous path.
@@ -44,7 +44,7 @@ One Orbit plugin, one authored field system, one set of public Blueprint nodes a
 | Auto-managed ordinary simulated Static Mesh bodies with original native gravity enabled | Previously verified for Point/Directional; newly eligible expanded fields | Test unusual simple/convex collisions, sleeping, switching |
 | Source Actor (`AOrbitGravitySource`) | Shared snapshot source | Test all shapes in PIE |
 | Source Component (`UOrbitGravitySourceComponent`) | Shared snapshot source | Test moving / nested / runtime-created components |
-| Gravity Receiver on Actor | Shared for field queries; Channel 0-only for multi-source solver | Per-receiver independent channel masks remain a gap |
+| Gravity Receiver on Actor | Shared for field queries; opt-in channel-aware multi-source solver | Per-receiver isolation and mutable masks await UE integration-test results |
 | `Orbit.Ignore` / original native-gravity-disabled bodies | Existing protection retained | Test fallback and cleanup |
 | Runtime-spawned bodies | Existing periodic discovery | First physics step still may use native World Gravity |
 | Pre-existing bodies before BeginPlay | Early-ownership separate default-off opt-in | Regression test expanded fields and no first-Z impulse |
@@ -79,7 +79,7 @@ One Orbit plugin, one authored field system, one set of public Blueprint nodes a
 
 **Next: receiver channels and multiple source components.** Transfer per-body receiver mask safely to the physics thread, preserve channel masks 0/1/2 and combinations, prevent stale mask assignment and partial force application. Add physics-thread change tests.
 
-**Next: velocity-sensitive Vortex modes.** Pass the actual Chaos substep velocity into the existing velocity-aware evaluator; test Spiral Capture and Continuous Force with impulse/awake/sleep behavior and performance. Do not enable merely because position-only fields work.
+**Iteration 042: velocity-sensitive Vortex modes authored (UE validation pending).** Pass the actual Chaos substep velocity into the existing velocity-aware evaluator; test Spiral Capture and Continuous Force with impulse/awake/sleep behavior and performance. Do not enable merely because position-only fields work.
 
 **Next: body classes / lifetime.** Skeletal articulated and non-static primitives, spawned/streamed bodies, multiple simulated components, runtime source deletion, shared group conflicts, physics ownership switches, teardown and networking limitations.
 
@@ -100,4 +100,12 @@ Project Settings > Plugins > Orbit > Physics > Gravity Integration > `Rigid Body
 
 ## Iteration 041 automation coverage
 
-A new native Editor-only world simulation suite now covers live Axis, Spline Up/Down, four Volume boundaries, mixed Axis + Directional priority, Vortex fallback, source relocation/destruction, nondefault receiver-channel fallback, and natural Chaos sleep/wake on static support. It runs with temporary Game worlds and project settings restored afterward. **Coverage authored, not yet Windows UE5.8.3 compiled or validated.** `Orbit.Physics.GravityIntegration` still holds the previously user-verified 29 math/policy tests. See [Integration Testing](INTEGRATION_TESTING.md). There is no change to the Standard default, gravity sources or Blueprint nodes.
+A new native Editor-only world simulation suite now covers live Axis, Spline Up/Down, four Volume boundaries, mixed Axis + Directional priority, Vortex fallback, source relocation/destruction, nondefault receiver-channel fallback, and natural Chaos sleep/wake on static support. It runs with temporary Game worlds and project settings restored afterward. **All 9 tests passed in user UE5.8.3 on Iteration 041 Hotfix 2.** `Orbit.Physics.GravityIntegration` still holds the previously user-verified 29 math/policy tests. See [Integration Testing](INTEGRATION_TESTING.md). There is no change to the Standard default, gravity sources or Blueprint nodes.
+
+## Iteration 042 parity delta (pending UE 5.8.3 validation)
+
+- New `Experimental: Receiver Channel Compatibility`, default **Off**. Explicitly opts in to a per-body channel-aware solver selection, including source channels 0,1,2 and compound receiver masks. This mode deliberately takes precedence over legacy single/Point/expanded selectors when enabled so uniform fields cannot bypass per-body mask handling. All channel masks are passed as copied Chaos-particle identity snapshots, never looked up from game-thread UObjects during a Chaos substep. Missing mapping is **0 acceleration** until discovered, never channel 0.
+- New `Experimental: Vortex Compatibility`, default **Off**. Valid Point, Axis and Spline Vortex Continuous and Spiral Capture use the shared evaluator with actual physics-substep particle velocity. Unsupported source types/configurations remain Standard. Combined vortex+channel requires both opt-ins.
+- Source masking, runtime `UOrbitGravityReceiverComponent` mutation, mode fallback and cleanup now have dedicated native regression coverage. 34 math/policy plus 14 live Chaos world tests are authored, **not yet executed** on UE5.8.3.
+- The current experimental callback is still limited to a **single StaticMesh physics body per component**, ≤32 source fields, and post-BeginPlay discovery for dynamically spawned objects. It does not yet guarantee first-step gravity for runtime-spawned bodies. Articulated/skeletal or other compound multi-particle bodies remain on Standard. No back-compat defaults changed.
+- The existing 127-column CSV remains unchanged. `experimental_chaos_expanded_field_gravity` indicates that the expanded per-particle evaluator is active for channel and Vortex paths; it does **not** distinguish the two options.

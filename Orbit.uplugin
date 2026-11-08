@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 41,
-  "VersionName": "0.2.30",
+  "Version": 42,
+  "VersionName": "0.2.31",
   "FriendlyName": "Orbit",
   "Description": "Arbitrary gravity fields, actor and component sources, character controls and orientation, and optional Mover integration within one plugin.",
   "Category": "Physics",

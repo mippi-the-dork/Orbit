@@ -95,6 +95,31 @@ public:
               EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
     bool bExperimentalExpandedFieldCompatibility = false;
 
+    /**
+     * Iteration 042: route Channel 0/1/2 source and receiver masks through an
+     * identity-keyed Chaos particle snapshot, rather than assuming all bodies
+     * in gravity group 7 share Channel 0. When enabled, a valid position-based
+     * field configuration uses the channel-aware solver even if a single-source
+     * mode would otherwise take precedence. Off unless explicitly enabled.
+     * Unmapped particles receive ZERO custom acceleration, never another
+     * receiver's gravity. The source/receiver mask rules remain unchanged.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration",
+        meta=(DisplayName="Experimental: Receiver Channel Compatibility",
+              EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
+    bool bExperimentalReceiverChannelCompatibility = false;
+
+    /**
+     * Iteration 042: evaluate Continuous Force and Spiral Capture Vortex modes
+     * inside the Chaos physics substep using each particle's current velocity.
+     * Off by default. This does not alter old Standard Vortex gameplay or
+     * enable nondefault channels unless Receiver Channel Compatibility is on.
+     */
+    UPROPERTY(EditAnywhere, Config, Category="Physics|Gravity Integration",
+        meta=(DisplayName="Experimental: Vortex Compatibility",
+              EditCondition="RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform"))
+    bool bExperimentalVortexCompatibility = false;
+
     /** Do not silently turn objects intentionally configured for zero gravity into normal gravity objects. */
     UPROPERTY(EditAnywhere, Config, Category="Physics")
     bool bIncludeInitiallyGravityDisabledBodies = false;

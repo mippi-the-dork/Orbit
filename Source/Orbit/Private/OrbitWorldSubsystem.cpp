@@ -109,10 +109,19 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
     const bool bEligibleExpanded = !bEligibleSingle && !bEligibleMulti && !bEligibleMixed &&
         Settings->bExperimentalExpandedFieldCompatibility &&
         FOrbitChaosGravityBridge::TryGetExpandedFields(ActiveFields, ExpandedFields);
+    TArray<FOrbitFieldDefinition> ChannelFields;
+    const bool bEligibleChannels = Settings->bExperimentalReceiverChannelCompatibility &&
+        FOrbitChaosGravityBridge::TryGetExpandedFields(ActiveFields, ChannelFields,
+            true, Settings->bExperimentalVortexCompatibility);
+    TArray<FOrbitFieldDefinition> VortexFields;
+    const bool bEligibleVortex = Settings->bExperimentalVortexCompatibility &&
+        FOrbitChaosGravityBridge::TryGetVortexFields(ActiveFields, VortexFields);
     const bool bEligible = OrbitPhysicsIntegrationMath::SelectExperimentalSolver(
         true, bEligibleSingle, Settings->bExperimentalMultiplePointSources, bEligibleMulti,
         Settings->bExperimentalMixedPointDirectionalSources, bEligibleMixed,
-        Settings->bExperimentalExpandedFieldCompatibility, bEligibleExpanded) !=
+        Settings->bExperimentalExpandedFieldCompatibility, bEligibleExpanded,
+        Settings->bExperimentalReceiverChannelCompatibility, bEligibleChannels,
+        Settings->bExperimentalVortexCompatibility, bEligibleVortex) !=
         OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::None;
     if (!OrbitPhysicsIntegrationMath::ShouldPreclaimExperimentalGravity(
         Settings->bEnablePhysicsIntegration, Settings->bAutomaticRigidBodyGravity,
@@ -140,7 +149,8 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
         const bool bIgnored = Component->ComponentHasTag(IgnoreTag);
         if (!bRegistered || !bSimulating || !bOriginallyGravityEnabled || bIgnored ||
             !FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
-                ChaosGravityBridge->IsMultiSourceMode(), GetReceiverChannelMask(Component->GetOwner()))) { continue; }
+                ChaosGravityBridge->IsMultiSourceMode(), GetReceiverChannelMask(Component->GetOwner()),
+                ChaosGravityBridge->IsChannelAwareMode())) { continue; }
         const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
             ActiveFields, Component->GetCenterOfMass(NAME_None), Component->GetPhysicsLinearVelocity(),
             GetReceiverChannelMask(Component->GetOwner()), Settings->OverrideResolution);
@@ -150,13 +160,16 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
             continue;
         }
         int32 PreviousGroup = 0;
-        if (!ChaosGravityBridge->AssignBody(Component, PreviousGroup)) { continue; }
+        int32 ParticleId = INDEX_NONE;
+        const uint8 ReceiverMask = GetReceiverChannelMask(Component->GetOwner());
+        if (!ChaosGravityBridge->AssignBody(Component, PreviousGroup, ParticleId, ReceiverMask)) { continue; }
         FManagedBody& Body = ManagedBodies.AddDefaulted_GetRef();
         Body.Component = Component;
         Body.bOriginalGravity = true;
         Body.OriginalLinearDamping = Component->GetLinearDamping();
         Body.OriginalAngularDamping = Component->GetAngularDamping();
         Body.OriginalChaosGravityGroup = PreviousGroup;
+        Body.ExperimentalChaosParticleId = ParticleId;
         Body.bExperimentalChaosGroupAssigned = true;
         Component->OnComponentWake.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentWake);
         Component->OnComponentSleep.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentSleep);
@@ -164,11 +177,15 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
         // In particular, we do not temporarily disable gravity or AddForce here.
         ++ClaimedCount;
     }
+    // Make the pre-BeginPlay receiver registry visible to the physics thread
+    // before the first simulation step, not a tick later.
+    ChaosGravityBridge->CommitReceiverMasks();
     UE_LOG(LogOrbitWorld, Display,
         TEXT("Experimental early gravity ownership: %d existing static mesh bodies preclaimed before Actor BeginPlay (%s). Runtime-spawned bodies retain tick discovery."),
-        ClaimedCount, bEligibleExpanded ? TEXT("Expanded Fields") :
+        ClaimedCount, bEligibleChannels ? TEXT("Receiver Channels") :
+            (bEligibleVortex ? TEXT("Vortex") : (bEligibleExpanded ? TEXT("Expanded Fields") :
             (bEligibleMixed ? TEXT("Mixed Point + Directional") :
-            (bEligibleMulti ? TEXT("Multiple Point") : (bPoint ? TEXT("Point") : TEXT("Directional")))));
+            (bEligibleMulti ? TEXT("Multiple Point") : (bPoint ? TEXT("Point") : TEXT("Directional")))))));
     // The normal first tick still discovers new/ineligible bodies and refreshes
     // dynamic source snapshots. No special late cleanup is required.
     bNeedsInitialDiscovery = true;
@@ -504,6 +521,11 @@ void UOrbitWorldSubsystem::RestoreBodyDamping(FManagedBody& Body)
 void UOrbitWorldSubsystem::RestoreExperimentalBodyGroup(FManagedBody& Body)
 {
     if (!Body.bExperimentalChaosGroupAssigned) { return; }
+    // A reused particle identifier must never inherit another actor's mask.
+    if (ChaosGravityBridge)
+    {
+        ChaosGravityBridge->RemoveBodyReceiverMask(Body.ExperimentalChaosParticleId);
+    }
     if (UPrimitiveComponent* Component = Body.Component.Get())
     {
         // Never allow an intermediate tick with group-0 world gravity accidentally
@@ -512,6 +534,7 @@ void UOrbitWorldSubsystem::RestoreExperimentalBodyGroup(FManagedBody& Body)
         FOrbitChaosGravityBridge::RestoreBody(Component, Body.OriginalChaosGravityGroup);
     }
     Body.bExperimentalChaosGroupAssigned = false;
+    Body.ExperimentalChaosParticleId = INDEX_NONE;
 }
 
 void UOrbitWorldSubsystem::StopExperimentalGravityBridge()
@@ -543,11 +566,20 @@ void UOrbitWorldSubsystem::UpdateExperimentalGravityBridge(const UOrbitSettings*
     const bool bEligibleExpanded = bOptedIn && !bEligibleSingle && !bEligibleMulti && !bEligibleMixed &&
         Settings->bExperimentalExpandedFieldCompatibility &&
         FOrbitChaosGravityBridge::TryGetExpandedFields(ActiveFields, ExpandedFields);
+    TArray<FOrbitFieldDefinition> ChannelFields;
+    const bool bEligibleChannels = bOptedIn && Settings->bExperimentalReceiverChannelCompatibility &&
+        FOrbitChaosGravityBridge::TryGetExpandedFields(ActiveFields, ChannelFields,
+            true, Settings->bExperimentalVortexCompatibility);
+    TArray<FOrbitFieldDefinition> VortexFields;
+    const bool bEligibleVortex = bOptedIn && Settings->bExperimentalVortexCompatibility &&
+        FOrbitChaosGravityBridge::TryGetVortexFields(ActiveFields, VortexFields);
     const OrbitPhysicsIntegrationMath::EExperimentalSolverSelection Selection =
         OrbitPhysicsIntegrationMath::SelectExperimentalSolver(
             bOptedIn, bEligibleSingle, Settings && Settings->bExperimentalMultiplePointSources, bEligibleMulti,
             Settings && Settings->bExperimentalMixedPointDirectionalSources, bEligibleMixed,
-            Settings && Settings->bExperimentalExpandedFieldCompatibility, bEligibleExpanded);
+            Settings && Settings->bExperimentalExpandedFieldCompatibility, bEligibleExpanded,
+            Settings && Settings->bExperimentalReceiverChannelCompatibility, bEligibleChannels,
+            Settings && Settings->bExperimentalVortexCompatibility, bEligibleVortex);
     if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::None)
     {
         if (bOptedIn && !bExperimentalUniformFallbackLogged)
@@ -573,7 +605,15 @@ void UOrbitWorldSubsystem::UpdateExperimentalGravityBridge(const UOrbitSettings*
         StopExperimentalGravityBridge();
         return;
     }
-    if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::MultiplePoint)
+    if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::ChannelFields)
+    {
+        ChaosGravityBridge->UpdateChannelFields(ChannelFields, Settings->OverrideResolution);
+    }
+    else if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::VortexFields)
+    {
+        ChaosGravityBridge->UpdateVortexFields(VortexFields, Settings->OverrideResolution);
+    }
+    else if (Selection == OrbitPhysicsIntegrationMath::EExperimentalSolverSelection::MultiplePoint)
     {
         ChaosGravityBridge->UpdateMultiplePoint(MultiPointFields, Settings->OverrideResolution);
     }
@@ -761,22 +801,30 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
         const bool bNativeComparison = OrbitPhysicsIntegrationMath::CanCompareWithNativeWorldGravity(
             Settings->bCompareNativeWorldGravityWhenEquivalent, Body.bOriginalGravity,
             Sample.bHasInfluence, Acceleration, GetWorld()->GetGravityZ());
-        // Group 7 supports eligible single Directional/Point fields and,
-        // with independent opt-ins, multi-Point or mixed Point/Directional.
-        // Unsupported source configurations and receiver masks stay Standard.
+        // Channel-aware and velocity-aware integrations are separately opted
+        // in. Standard remains the fallback for every unsupported body/field.
         bool bExperimentalChaos = false;
         if (!bNativeComparison && ChaosGravityBridge && ChaosGravityBridge->IsActive() && Body.bOriginalGravity &&
             FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
-                ChaosGravityBridge->IsMultiSourceMode(), GetReceiverChannelMask(Component->GetOwner())))
+                ChaosGravityBridge->IsMultiSourceMode(), GetReceiverChannelMask(Component->GetOwner()),
+                ChaosGravityBridge->IsChannelAwareMode()))
         {
             if (!Body.bExperimentalChaosGroupAssigned)
             {
                 int32 PreviousGroup = 0;
-                if (ChaosGravityBridge->AssignBody(Component, PreviousGroup))
+                int32 ParticleId = INDEX_NONE;
+                const uint8 ReceiverMask = GetReceiverChannelMask(Component->GetOwner());
+                if (ChaosGravityBridge->AssignBody(Component, PreviousGroup, ParticleId, ReceiverMask))
                 {
                     Body.OriginalChaosGravityGroup = PreviousGroup;
+                    Body.ExperimentalChaosParticleId = ParticleId;
                     Body.bExperimentalChaosGroupAssigned = true;
                 }
+            }
+            if (Body.bExperimentalChaosGroupAssigned)
+            {
+                ChaosGravityBridge->SetBodyReceiverMask(Body.ExperimentalChaosParticleId,
+                    GetReceiverChannelMask(Component->GetOwner()));
             }
             bExperimentalChaos = Body.bExperimentalChaosGroupAssigned;
         }
@@ -1250,6 +1298,9 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
     }
 #endif
     ApplyPhysicsForces(DeltaTime);
+    // Newly discovered bodies and receiver-mask changes are applied as one
+    // coherent physics-thread input; never read UObject receiver state in Chaos.
+    if (ChaosGravityBridge) { ChaosGravityBridge->CommitReceiverMasks(); }
     if (bMotionHistoryRecording)
     {
         // A captured roster is fixed for this session. Removal of an individual body in
