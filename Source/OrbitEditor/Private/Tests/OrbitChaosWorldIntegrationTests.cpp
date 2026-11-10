@@ -149,7 +149,9 @@ namespace OrbitWorldIntegrationTests
             AStaticMeshActor* Actor = World->SpawnActor<AStaticMeshActor>(Position, FRotator::ZeroRotator);
             if (!Test.TestNotNull(TEXT("Spawn test static-mesh actor"), Actor)) { return nullptr; }
             UStaticMeshComponent* Mesh = Actor->GetStaticMeshComponent();
-            Mesh->SetMobility(bSimulating ? EComponentMobility::Movable : EComponentMobility::Static);
+            // Keep the test mesh movable even when not simulating; Static mobility
+            // emits an unrelated SetStaticMesh warning during test setup.
+            Mesh->SetMobility(EComponentMobility::Movable);
             Mesh->SetStaticMesh(CubeMesh);
             Mesh->SetWorldScale3D(Scale);
             Mesh->SetCollisionProfileName(bSimulating ? FName(TEXT("PhysicsActor")) : FName(TEXT("BlockAll")));
@@ -721,6 +723,219 @@ bool FOrbit042RuntimeSpawnChannel::RunTest(const FString& Parameters)
     Fixture.VerifyExpanded(Body);
     TestTrue(TEXT("Runtime-spawned channel-1 receiver accelerates under Chaos after discovery"),
         Body->GetPhysicsLinearVelocity().Z < -100.0);
+    return true;
+}
+
+// Iteration 043: explicit registration contract for bodies configured after BeginPlay.
+// This checks that solver ownership is established synchronously, before any Step().
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit043ExplicitSpawnOwnership,
+    "Orbit.Physics.IntegrationWorld.ExplicitSpawnOwnershipBeforeFirstStep",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit043ExplicitSpawnOwnership::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(200,0,600));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Runtime subsystem"), Subsystem) || !Body) { return false; }
+    TestTrue(TEXT("Explicit claim succeeds before world ticks the spawned body"),
+        Subsystem->PrepareSpawnedPhysicsBody(Body));
+    TestTrue(TEXT("Body immediately appears in managed registry"),
+        Subsystem->IsOrbitManagedPhysicsBody(Body));
+    TestTrue(TEXT("Second preparation is idempotent"),
+        Subsystem->PrepareSpawnedPhysicsBody(Body));
+    if (!Fixture.Step(30)) { return false; }
+    TestTrue(TEXT("Prepared body remains solver-managed after stepping"),
+        Subsystem->IsOrbitManagedPhysicsBody(Body));
+    TestTrue(TEXT("Prepared body accelerates in the intended direction"),
+        Body->GetPhysicsLinearVelocity().Z < -100.0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit043ExplicitSpawnIsolation,
+    "Orbit.Physics.IntegrationWorld.ExplicitSpawnChannelIsolation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit043ExplicitSpawnIsolation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    Settings.Settings->bExperimentalReceiverChannelCompatibility = true;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    Source->GravityChannels.bChannel0 = false;
+    Source->GravityChannels.bChannel1 = true;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Matching = Fixture.Cube(FVector(200,0,700));
+    UStaticMeshComponent* Mismatch = Fixture.Cube(FVector(-200,0,700));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Matching || !Mismatch || !TestNotNull(TEXT("Runtime subsystem"), Subsystem) ||
+        !AttachReceiver(*this,Matching,false,true,false)) { return false; }
+    TestTrue(TEXT("Matching channel claimed immediately"),
+        Subsystem->PrepareSpawnedPhysicsBody(Matching));
+    TestFalse(TEXT("Mismatched channel not claimed"),
+        Subsystem->PrepareSpawnedPhysicsBody(Mismatch));
+    TestFalse(TEXT("Nonmatching body remains unmanaged"),
+        Subsystem->IsOrbitManagedPhysicsBody(Mismatch));
+    if (!Fixture.Step(30)) { return false; }
+    TestTrue(TEXT("Matched body responds to channel 1"),
+        Matching->GetPhysicsLinearVelocity().Z < -100.0);
+    TestTrue(TEXT("Mismatched body does not receive channel 1 gravity"),
+        FMath::Abs(Mismatch->GetPhysicsLinearVelocity().Z) < 15.0);
+    return true;
+}
+
+// Iteration 044: a single Actor can own multiple independent Chaos rigid bodies.
+// Explicit Actor preparation must register every component before any Step().
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit044ActorMultipleBodies,
+    "Orbit.Physics.IntegrationWorld.ActorMultipleBodiesExplicitOwnership",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit044ActorMultipleBodies::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+
+    UStaticMeshComponent* First = Fixture.Cube(FVector(200,0,700));
+    if (!First) { return false; }
+    AActor* Owner = First->GetOwner();
+    UStaticMesh* CubeMesh = First->GetStaticMesh();
+    if (!TestNotNull(TEXT("First body owner"), Owner) ||
+        !TestNotNull(TEXT("Cube mesh"), CubeMesh)) { return false; }
+
+    UStaticMeshComponent* Second = NewObject<UStaticMeshComponent>(Owner, TEXT("OrbitSecondSimulatedBody"));
+    if (!TestNotNull(TEXT("Second body component"), Second)) { return false; }
+    Owner->AddInstanceComponent(Second);
+    Second->SetMobility(EComponentMobility::Movable);
+    Second->SetStaticMesh(CubeMesh);
+    Second->SetWorldScale3D(FVector(0.5,0.5,0.5));
+    Second->SetCollisionProfileName(FName(TEXT("PhysicsActor")));
+    Second->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+    Second->SetupAttachment(First);
+    Second->SetRelativeLocation(FVector(300,0,0));
+    Second->RegisterComponent();
+    Second->SetSimulatePhysics(true);
+    Second->SetEnableGravity(true);
+    Second->SetLinearDamping(0.0f);
+
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Runtime subsystem"), Subsystem)) { return false; }
+    TestEqual(TEXT("Actor prepares both independent physics components immediately"),
+        Subsystem->PrepareSpawnedPhysicsActor(Owner), 2);
+    TestTrue(TEXT("First body managed"), Subsystem->IsOrbitManagedPhysicsBody(First));
+    TestTrue(TEXT("Second body managed"), Subsystem->IsOrbitManagedPhysicsBody(Second));
+    TestEqual(TEXT("Preparing an already claimed Actor is idempotent"),
+        Subsystem->PrepareSpawnedPhysicsActor(Owner), 2);
+    if (!Fixture.Step(30)) { return false; }
+    TestTrue(TEXT("First body accelerates"), First->GetPhysicsLinearVelocity().Z < -100.0);
+    TestTrue(TEXT("Second body accelerates independently"), Second->GetPhysicsLinearVelocity().Z < -100.0);
+    return true;
+}
+
+// Non-matching channel receivers and non-simulating components must not be
+// counted as successfully prepared Chaos bodies.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit044ActorPreparationEligibility,
+    "Orbit.Physics.IntegrationWorld.ActorPreparationEligibility",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit044ActorPreparationEligibility::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    Settings.Settings->bExperimentalReceiverChannelCompatibility = true;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    Source->GravityChannels.bChannel0 = false;
+    Source->GravityChannels.bChannel1 = true;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Matching = Fixture.Cube(FVector(100,0,700));
+    UStaticMeshComponent* Mismatch = Fixture.Cube(FVector(-100,0,700));
+    UStaticMeshComponent* NonSimulating = Fixture.Cube(FVector(400,0,700), false);
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Matching || !Mismatch || !NonSimulating ||
+        !TestNotNull(TEXT("Runtime subsystem"), Subsystem) ||
+        !AttachReceiver(*this,Matching,false,true,false)) { return false; }
+    TestEqual(TEXT("Matching receiver Actor claims exactly one body"),
+        Subsystem->PrepareSpawnedPhysicsActor(Matching->GetOwner()), 1);
+    TestEqual(TEXT("Channel mismatch claims zero bodies"),
+        Subsystem->PrepareSpawnedPhysicsActor(Mismatch->GetOwner()), 0);
+    TestEqual(TEXT("Non-simulating Actor claims zero bodies"),
+        Subsystem->PrepareSpawnedPhysicsActor(NonSimulating->GetOwner()), 0);
+    TestFalse(TEXT("Channel mismatch remains unmanaged"), Subsystem->IsOrbitManagedPhysicsBody(Mismatch));
+    TestFalse(TEXT("Non-simulating remains unmanaged"), Subsystem->IsOrbitManagedPhysicsBody(NonSimulating));
+    return true;
+}
+
+
+// Iteration 045: releasing an explicitly prepared body when simulation is
+// disabled must allow clean reacquisition when simulation resumes.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit045SimulationToggle,
+    "Orbit.Physics.IntegrationWorld.SimulationToggleOwnershipLifecycle",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit045SimulationToggle::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(0,0,700));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Body || !TestNotNull(TEXT("Subsystem"), Subsystem)) { return false; }
+    TestTrue(TEXT("Initial explicit claim"), Subsystem->PrepareSpawnedPhysicsBody(Body));
+    Body->SetSimulatePhysics(false);
+    if (!Fixture.Step(2)) { return false; }
+    TestFalse(TEXT("Disabled body released"), Subsystem->IsOrbitManagedPhysicsBody(Body));
+    Body->SetSimulatePhysics(true);
+    Body->SetEnableGravity(true);
+    TestTrue(TEXT("Reenabled body explicitly reclaimed"), Subsystem->PrepareSpawnedPhysicsBody(Body));
+    if (!Fixture.Step(15)) { return false; }
+    TestTrue(TEXT("Reenabled body responds to gravity"), Body->GetPhysicsLinearVelocity().Z < -30.0);
+    return true;
+}
+
+// A new physics state on the same component must not retain the old
+// particle's group/mask record, and explicit preparation must be reusable.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit045RecreatePhysicsState,
+    "Orbit.Physics.IntegrationWorld.RecreatedParticleIdentity",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit045RecreatePhysicsState::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(0,0,700));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Body || !TestNotNull(TEXT("Subsystem"), Subsystem)) { return false; }
+    TestTrue(TEXT("Initial Chaos claim"), Subsystem->PrepareSpawnedPhysicsBody(Body));
+    Body->RecreatePhysicsState();
+    if (!Fixture.Step(3)) { return false; }
+    TestTrue(TEXT("Replacement particle can be claimed"), Subsystem->PrepareSpawnedPhysicsBody(Body));
+    if (!Fixture.Step(15)) { return false; }
+    TestTrue(TEXT("Recreated body responds to gravity"), Body->GetPhysicsLinearVelocity().Z < -30.0);
     return true;
 }
 

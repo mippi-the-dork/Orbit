@@ -71,7 +71,10 @@ public:
     // Return true only if the group was assigned successfully to a valid body.
     bool AssignBody(UPrimitiveComponent* Component, int32& OutPreviousGroup,
         int32& OutParticleId, uint8 ReceiverMask);
-    static void RestoreBody(UPrimitiveComponent* Component, int32 PreviousGroup);
+    // A component may be backed by a different Chaos particle after physics-state recreation.
+    // Never restore an old ownership record onto that replacement particle.
+    static bool IsCurrentParticle(UPrimitiveComponent* Component, int32 ExpectedParticleId);
+    static void RestoreBody(UPrimitiveComponent* Component, int32 PreviousGroup, int32 ExpectedParticleId = INDEX_NONE);
 
 private:
     Chaos::FPhysicsSolverBase* Solver = nullptr;

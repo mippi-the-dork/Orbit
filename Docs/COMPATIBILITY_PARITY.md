@@ -1,6 +1,6 @@
 # Orbit | Standard / Experimental Compatibility Inventory
 
-**Living reference | v0.2.31, Iteration 042 | UE 5.8.x | Updated: November 7, 2026**
+**Living reference | v0.2.32, Iteration 043 | UE 5.8.x | Updated: November 8, 2026**
 
 ## Goal
 
@@ -109,3 +109,11 @@ A new native Editor-only world simulation suite now covers live Axis, Spline Up/
 - Source masking, runtime `UOrbitGravityReceiverComponent` mutation, mode fallback and cleanup now have dedicated native regression coverage. 34 math/policy plus 14 live Chaos world tests are authored, **not yet executed** on UE5.8.3.
 - The current experimental callback is still limited to a **single StaticMesh physics body per component**, ≤32 source fields, and post-BeginPlay discovery for dynamically spawned objects. It does not yet guarantee first-step gravity for runtime-spawned bodies. Articulated/skeletal or other compound multi-particle bodies remain on Standard. No back-compat defaults changed.
 - The existing 127-column CSV remains unchanged. `experimental_chaos_expanded_field_gravity` indicates that the expanded per-particle evaluator is active for channel and Vortex paths; it does **not** distinguish the two options.
+
+## Iteration 043 runtime-spawn update
+
+An explicit `PrepareSpawnedPhysicsBody` call is available for fully configured runtime-spawned simulated Static Mesh components. It attempts immediate experimental ownership and commits channel masks without waiting for periodic discovery. **Automatic first-step ownership, skeletal/articulated particles, and full multi-body parity are not yet complete.** See [Iteration 043](ITERATION_043.md). Iteration 042: all 48 tests were reported passing by the user in UE 5.8.3; Iteration 043: 2 additional live tests authored, not yet run.
+
+## Iteration 044 — Actor multi-component explicit preparation
+
+Blueprint-callable `PrepareSpawnedPhysicsActor` prepares independent simulated Static Mesh components belonging to a single Actor before the next world step when invoked at the correct point in spawn setup. It does not provide automatic spawn interception, nor skeletal/articulated multi-particle ownership. See [Iteration 044](ITERATION_044.md). Iteration 043 tests: user-validated 50/50; Iteration 044 compilation and two new tests pending.

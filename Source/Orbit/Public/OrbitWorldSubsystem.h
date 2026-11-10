@@ -10,6 +10,7 @@ class UOrbitGravitySourceComponent;
 class AActor;
 class UPrimitiveComponent;
 class FOrbitChaosGravityBridge;
+class UOrbitSettings;
 
 /** A single gravity authority per runtime world. Existing sources register automatically in BeginPlay. */
 UCLASS()
@@ -29,6 +30,26 @@ public:
      *  to queries later in the CURRENT tick. Call after editing many properties at once. */
     UFUNCTION(BlueprintCallable, Category="Orbit|Gravity|Runtime")
     void RefreshActiveSources();
+
+    /** Explicitly register a fully configured runtime-spawned static-mesh physics body
+     *  with the opt-in Experimental Chaos solver BEFORE its first simulation step.
+     *  Call on the game thread after registering the component, enabling simulation,
+     *  attaching any Orbit receiver, and configuring the active gravity sources.
+     *  Returns false without changing the body if eligibility or ownership fails.
+     *  Standard mode and unsupported multi-particle skeletal bodies are not claimed.
+     *  This is an explicit spawn contract, not an automatic guarantee for all spawns. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Physics|Runtime")
+    bool PrepareSpawnedPhysicsBody(UPrimitiveComponent* Component);
+
+    /** Prepare every eligible simulated Static Mesh component owned by Actor in
+     *  one synchronous call. Returns the number currently owned by Experimental
+     *  Chaos, including components previously prepared. This is intentionally
+     *  per-component, not one gravity group blindly assigned to the whole Actor.
+     *  Call after the Actor's components and receiver have been configured and
+     *  registered, before advancing the physics world. Unsupported body types
+     *  are skipped and retain the existing Standard fallback. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Physics|Runtime")
+    int32 PrepareSpawnedPhysicsActor(AActor* Actor);
 
     /** Observes physics-dispatched sleep/wake notifications when the mesh has
      *  Generate Wake Events enabled; not an authoritative classification. */
@@ -328,6 +349,7 @@ private:
     static FString DescribeCollisionGeometry(const UPrimitiveComponent* Component);
     void UpdateSourceSnapshot();
     void PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorld);
+    bool TryClaimExperimentalBody(UPrimitiveComponent* Component, const UOrbitSettings* Settings);
     void DiscoverBodies();
     void ApplyPhysicsForces(float DeltaTime);
     FRestSupportProbe ProbeSupportAlongGravity(UPrimitiveComponent* Component, const FVector& Down, float ProbeDistance, UPrimitiveComponent* CachedSideBlocker = nullptr) const;

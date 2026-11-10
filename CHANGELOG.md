@@ -1,3 +1,17 @@
+## 0.2.34 — Iteration 045 (partial particle lifecycle safety)
+
+- Guard experimental gravity ownership against Chaos particle identity replacement during physics-state recreation.
+- Avoid restoring an old particle's gravity group onto the new particle.
+- Add live tests for simulate-physics toggle and physics-state recreation / reacquisition.
+- Correct non-simulating fixture mobility to avoid the SetStaticMesh PIE warning.
+- Automatic runtime spawn interception and skeletal multi-particle Chaos ownership remain outstanding.
+
+## 0.2.32 — Iteration 043 (explicit runtime gravity ownership)
+
+- Added `PrepareSpawnedPhysicsBody` on the world subsystem for opt-in synchronous ownership of configured runtime-spawned static-mesh physics bodies.
+- Shared ownership eligibility code between pre-BeginPlay and runtime paths; commits new Chaos receiver channel snapshots immediately.
+- Two new live Chaos regression tests (UE validation pending). No default settings changed; skeletal and automatic first-step ownership remain open.
+
 ## 0.2.31 — Iteration 042 (receiver channel and Vortex Chaos parity)
 
 - **No change to Standard, existing opt-in defaults, public Blueprint node signatures or gravity authoring.** Two independent **default-off** experiments: `Experimental: Receiver Channel Compatibility` and `Experimental: Vortex Compatibility`. Earlier modes retain selection behavior when these are disabled.
@@ -462,3 +476,9 @@
 - Added editor field previews, project settings, six field tests, a compatibility matrix and a technical roadmap.
 
 **Build note:** Unreal Engine 5.8.3 compilation and gameplay tests have not yet been performed. This is a developer source iteration rather than a tested public release.
+
+## 0.2.33 — Iteration 044 (partial compatibility pass)
+
+- Add explicit `PrepareSpawnedPhysicsActor` Blueprint API for multiple independent simulated Static Mesh components on the same Actor.
+- Add two live Chaos integration tests for multi-body preparation and eligibility.
+- Standard remains the default; skeletal/articulated and automatic first-step ownership remain outstanding.

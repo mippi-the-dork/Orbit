@@ -672,15 +672,33 @@ bool FOrbitChaosGravityBridge::AssignBody(UPrimitiveComponent* Component,
     return bAssigned;
 }
 
-void FOrbitChaosGravityBridge::RestoreBody(UPrimitiveComponent* Component, int32 PreviousGroup)
+bool FOrbitChaosGravityBridge::IsCurrentParticle(UPrimitiveComponent* Component, int32 ExpectedParticleId)
+{
+    if (ExpectedParticleId == INDEX_NONE || !IsValid(Component) || !Component->IsRegistered()) { return false; }
+    FBodyInstance* Body = Component->GetBodyInstance();
+    if (!Body) { return false; }
+    bool bMatches = false;
+    FPhysicsCommand::ExecuteWrite(Body->GetPhysicsActorHandle(), [&](const FPhysicsActorHandle& Handle)
+    {
+        if (!FChaosEngineInterface::IsValid(Handle)) { return; }
+        const Chaos::FUniqueIdx Identity = Handle->GetGameThreadAPI().UniqueIdx();
+        bMatches = Identity.IsValid() && Identity.Idx == ExpectedParticleId;
+    });
+    return bMatches;
+}
+
+void FOrbitChaosGravityBridge::RestoreBody(UPrimitiveComponent* Component, int32 PreviousGroup, int32 ExpectedParticleId)
 {
     if (!IsValid(Component) || !Component->IsRegistered()) { return; }
     FBodyInstance* Body = Component->GetBodyInstance();
     if (!Body) { return; }
-    FPhysicsCommand::ExecuteWrite(Body->GetPhysicsActorHandle(), [PreviousGroup](const FPhysicsActorHandle& Handle)
+    FPhysicsCommand::ExecuteWrite(Body->GetPhysicsActorHandle(), [PreviousGroup, ExpectedParticleId](const FPhysicsActorHandle& Handle)
     {
         if (FChaosEngineInterface::IsValid(Handle))
         {
+            const Chaos::FUniqueIdx Identity = Handle->GetGameThreadAPI().UniqueIdx();
+            if (ExpectedParticleId != INDEX_NONE &&
+                (!Identity.IsValid() || Identity.Idx != ExpectedParticleId)) { return; }
             FChaosEngineInterface::SetGravityGroupIndex_AssumesLocked(Handle, PreviousGroup);
         }
     });

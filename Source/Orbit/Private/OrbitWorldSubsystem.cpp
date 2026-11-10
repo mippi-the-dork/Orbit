@@ -134,48 +134,16 @@ void UOrbitWorldSubsystem::PreclaimExperimentalGravityAtBeginPlay(UWorld& InWorl
     if (!ChaosGravityBridge || !ChaosGravityBridge->IsActive()) { return; }
 
     int32 ClaimedCount = 0;
-    static const FName IgnoreTag(TEXT("Orbit.Ignore"));
-    // Do NOT run DiscoverBodies() here: it also prepares bodies whose only
-    // available integration is Standard. They need their historical tick path.
+    // Only ordinary single-particle static-mesh bodies are supported here. Each
+    // component is claimed independently, including multiple components on one Actor.
     for (TObjectIterator<UStaticMeshComponent> It; It; ++It)
     {
         UStaticMeshComponent* Component = *It;
-        if (!IsValid(Component) || Component->IsTemplate() || Component->GetWorld() != &InWorld ||
-            HasManagedBody(Component)) { continue; }
-
-        const bool bRegistered = Component->IsRegistered();
-        const bool bSimulating = bRegistered && Component->IsSimulatingPhysics();
-        const bool bOriginallyGravityEnabled = bSimulating && Component->IsGravityEnabled();
-        const bool bIgnored = Component->ComponentHasTag(IgnoreTag);
-        if (!bRegistered || !bSimulating || !bOriginallyGravityEnabled || bIgnored ||
-            !FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
-                ChaosGravityBridge->IsMultiSourceMode(), GetReceiverChannelMask(Component->GetOwner()),
-                ChaosGravityBridge->IsChannelAwareMode())) { continue; }
-        const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
-            ActiveFields, Component->GetCenterOfMass(NAME_None), Component->GetPhysicsLinearVelocity(),
-            GetReceiverChannelMask(Component->GetOwner()), Settings->OverrideResolution);
-        if (!OrbitPhysicsIntegrationMath::CanPreclaimExperimentalBody(
-            bRegistered, bSimulating, bOriginallyGravityEnabled, bIgnored, Sample.bHasInfluence))
+        if (IsValid(Component) && !Component->IsTemplate() && Component->GetWorld() == &InWorld &&
+            TryClaimExperimentalBody(Component, Settings))
         {
-            continue;
+            ++ClaimedCount;
         }
-        int32 PreviousGroup = 0;
-        int32 ParticleId = INDEX_NONE;
-        const uint8 ReceiverMask = GetReceiverChannelMask(Component->GetOwner());
-        if (!ChaosGravityBridge->AssignBody(Component, PreviousGroup, ParticleId, ReceiverMask)) { continue; }
-        FManagedBody& Body = ManagedBodies.AddDefaulted_GetRef();
-        Body.Component = Component;
-        Body.bOriginalGravity = true;
-        Body.OriginalLinearDamping = Component->GetLinearDamping();
-        Body.OriginalAngularDamping = Component->GetAngularDamping();
-        Body.OriginalChaosGravityGroup = PreviousGroup;
-        Body.ExperimentalChaosParticleId = ParticleId;
-        Body.bExperimentalChaosGroupAssigned = true;
-        Component->OnComponentWake.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentWake);
-        Component->OnComponentSleep.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentSleep);
-        // Gravity remains enabled and is now routed to our owned Chaos group.
-        // In particular, we do not temporarily disable gravity or AddForce here.
-        ++ClaimedCount;
     }
     // Make the pre-BeginPlay receiver registry visible to the physics thread
     // before the first simulation step, not a tick later.
@@ -461,6 +429,107 @@ void UOrbitWorldSubsystem::UnbindBodyEvents(FManagedBody& Body)
     }
 }
 
+bool UOrbitWorldSubsystem::TryClaimExperimentalBody(UPrimitiveComponent* Component,
+    const UOrbitSettings* Settings)
+{
+    static const FName IgnoreTag(TEXT("Orbit.Ignore"));
+    if (!Settings || !ChaosGravityBridge || !ChaosGravityBridge->IsActive() ||
+        !IsValid(Component) || Component->IsTemplate() || Component->GetWorld() != GetWorld() ||
+        !Component->IsA<UStaticMeshComponent>() || HasManagedBody(Component))
+    {
+        return false;
+    }
+    const bool bRegistered = Component->IsRegistered();
+    const bool bSimulating = bRegistered && Component->IsSimulatingPhysics();
+    const bool bGravityEnabled = bSimulating && Component->IsGravityEnabled();
+    const bool bIgnored = Component->ComponentHasTag(IgnoreTag);
+    const uint8 Mask = GetReceiverChannelMask(Component->GetOwner());
+    if (!bRegistered || !bSimulating || !bGravityEnabled || bIgnored ||
+        !FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
+            ChaosGravityBridge->IsMultiSourceMode(), Mask,
+            ChaosGravityBridge->IsChannelAwareMode()))
+    {
+        return false;
+    }
+    const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
+        ActiveFields, Component->GetCenterOfMass(NAME_None), Component->GetPhysicsLinearVelocity(),
+        Mask, Settings->OverrideResolution);
+    if (!OrbitPhysicsIntegrationMath::CanPreclaimExperimentalBody(
+        bRegistered, bSimulating, bGravityEnabled, bIgnored, Sample.bHasInfluence))
+    {
+        return false;
+    }
+    int32 PreviousGroup = 0;
+    int32 ParticleId = INDEX_NONE;
+    if (!ChaosGravityBridge->AssignBody(Component, PreviousGroup, ParticleId, Mask))
+    {
+        return false;
+    }
+    FManagedBody& Body = ManagedBodies.AddDefaulted_GetRef();
+    Body.Component = Component;
+    Body.bOriginalGravity = bGravityEnabled;
+    Body.OriginalLinearDamping = Component->GetLinearDamping();
+    Body.OriginalAngularDamping = Component->GetAngularDamping();
+    Body.OriginalChaosGravityGroup = PreviousGroup;
+    Body.ExperimentalChaosParticleId = ParticleId;
+    Body.bExperimentalChaosGroupAssigned = true;
+    Component->OnComponentWake.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentWake);
+    Component->OnComponentSleep.AddUniqueDynamic(this, &UOrbitWorldSubsystem::HandlePhysicsComponentSleep);
+    // No SetEnableGravity(false) or AddForce: the solver-owned group applies the
+    // acceleration in Chaos and prevents a game-thread/physics-thread double force.
+    return true;
+}
+
+bool UOrbitWorldSubsystem::PrepareSpawnedPhysicsBody(UPrimitiveComponent* Component)
+{
+    const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
+    if (!Settings || !GetWorld() || !GetWorld()->IsGameWorld() || !IsValid(Component) ||
+        Component->GetWorld() != GetWorld() ||
+        !OrbitPhysicsIntegrationMath::ShouldPreclaimExperimentalGravity(
+            Settings->bEnablePhysicsIntegration, Settings->bAutomaticRigidBodyGravity,
+            Settings->RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform,
+            Settings->bExperimentalPreBeginPlayGravityOwnership, true) ||
+        Settings->bCompareNativeWorldGravityWhenEquivalent)
+    {
+        return false;
+    }
+    // Being managed by Standard is not proof of Experimental Chaos ownership.
+    // Never report success for a body currently routed through AddForce.
+    for (const FManagedBody& Body : ManagedBodies)
+    {
+        if (Body.Component.Get() == Component)
+        {
+            return Body.bExperimentalChaosGroupAssigned;
+        }
+    }
+    // A just-spawned source may have registered or changed since the previous tick.
+    UpdateSourceSnapshot();
+    UpdateExperimentalGravityBridge(Settings);
+    if (!TryClaimExperimentalBody(Component, Settings)) { return false; }
+    ChaosGravityBridge->CommitReceiverMasks();
+    return true;
+}
+
+int32 UOrbitWorldSubsystem::PrepareSpawnedPhysicsActor(AActor* Actor)
+{
+    if (!IsValid(Actor) || Actor->GetWorld() != GetWorld() || !GetWorld() ||
+        !GetWorld()->IsGameWorld()) { return 0; }
+
+    // GetComponents includes independently simulated child components. Never
+    // infer that preparing one rigid body also prepares the Actor's other bodies.
+    TInlineComponentArray<UStaticMeshComponent*> Components;
+    Actor->GetComponents(Components);
+    int32 Claimed = 0;
+    for (UStaticMeshComponent* Component : Components)
+    {
+        if (IsValid(Component) && PrepareSpawnedPhysicsBody(Component))
+        {
+            ++Claimed;
+        }
+    }
+    return Claimed;
+}
+
 void UOrbitWorldSubsystem::DiscoverBodies()
 {
     const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
@@ -528,10 +597,16 @@ void UOrbitWorldSubsystem::RestoreExperimentalBodyGroup(FManagedBody& Body)
     }
     if (UPrimitiveComponent* Component = Body.Component.Get())
     {
-        // Never allow an intermediate tick with group-0 world gravity accidentally
-        // substituted for Orbit gravity when reverting to Standard.
-        if (Component->IsRegistered()) { Component->SetEnableGravity(false); }
-        FOrbitChaosGravityBridge::RestoreBody(Component, Body.OriginalChaosGravityGroup);
+        // A recreated particle belongs to a new physics state. Do not change
+        // its gravity flag based on an ownership record from its predecessor.
+        const bool bSameParticle = Body.ExperimentalChaosParticleId == INDEX_NONE ||
+            FOrbitChaosGravityBridge::IsCurrentParticle(Component, Body.ExperimentalChaosParticleId);
+        if (bSameParticle)
+        {
+            // Avoid one native-gravity step while switching back to Standard.
+            if (Component->IsRegistered()) { Component->SetEnableGravity(false); }
+            FOrbitChaosGravityBridge::RestoreBody(Component, Body.OriginalChaosGravityGroup, Body.ExperimentalChaosParticleId);
+        }
     }
     Body.bExperimentalChaosGroupAssigned = false;
     Body.ExperimentalChaosParticleId = INDEX_NONE;
@@ -778,6 +853,19 @@ void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)
             continue;
         }
 
+        // Recreating a physics state replaces the Chaos particle without replacing
+        // its UPrimitiveComponent. Remove the stale receiver identity, then let
+        // the normal current-tick assignment claim the replacement safely.
+        if (Body.bExperimentalChaosGroupAssigned && Body.ExperimentalChaosParticleId != INDEX_NONE &&
+            !FOrbitChaosGravityBridge::IsCurrentParticle(Component, Body.ExperimentalChaosParticleId))
+        {
+            if (ChaosGravityBridge)
+            {
+                ChaosGravityBridge->RemoveBodyReceiverMask(Body.ExperimentalChaosParticleId);
+            }
+            Body.bExperimentalChaosGroupAssigned = false;
+            Body.ExperimentalChaosParticleId = INDEX_NONE;
+        }
         const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
             ActiveFields, Component->GetCenterOfMass(NAME_None), Component->GetPhysicsLinearVelocity(),
             GetReceiverChannelMask(Component->GetOwner()), GetDefault<UOrbitSettings>()->OverrideResolution);

@@ -58,3 +58,21 @@ Automation RunTests Orbit.Physics.IntegrationWorld
 ```
 
 Expected new totals are **34** and **14**. **Do not call the new cases passed until they actually run in UE 5.8.3**. Tests use temporary game worlds, mutate only transient `UOrbitSettings` and restore them, save no assets, and do not require an external test plugin. Leave the user's Project Settings on Standard.
+
+## Iteration 043 (v0.2.32) — explicit runtime claim
+
+User-validated Iteration 042 baseline: 34 Gravity Integration and 14 live Chaos tests passed on UE 5.8.3. Two additional native live Chaos tests are authored in Iteration 043 and **have not been run or compiled in Unreal**:
+
+- `Orbit.Physics.IntegrationWorld.ExplicitSpawnOwnershipBeforeFirstStep`: explicit call must synchronously register an eligible runtime-spawned rigid body before ticking; repeated call is safe; the body then accelerates under Chaos.
+- `Orbit.Physics.IntegrationWorld.ExplicitSpawnChannelIsolation`: only the matching receiver channel may be explicitly claimed, and an unmatched body must not acquire that source's acceleration.
+
+Run `Automation RunTests Orbit.Physics.GravityIntegration` (34 expected) and `Automation RunTests Orbit.Physics.IntegrationWorld` (16 expected). Explicit preparation requires the existing experimental early-ownership opt-in and cannot be interpreted as automatic first-step ownership for all spawned physics bodies.
+
+## Iteration 044 (v0.2.33) — Actor multi-component explicit claim
+
+User-validated Iteration 043: **34/34 Gravity Integration and 16/16 live Chaos** tests succeeded in Unreal. Iteration 044 adds two authored live-world tests, `ActorMultipleBodiesExplicitOwnership` and `ActorPreparationEligibility`; Unreal compilation/execution not yet verified. Expected total **34+18=52**. See [ITERATION_044.md](ITERATION_044.md).
+
+
+## Iteration 045
+
+Run `Automation RunTests Orbit.Physics.GravityIntegration` (34 expected) and `Automation RunTests Orbit.Physics.IntegrationWorld` (20 expected). New live tests: `SimulationToggleOwnershipLifecycle` and `RecreatedParticleIdentity`. See [ITERATION_045.md](ITERATION_045.md).
