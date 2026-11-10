@@ -1,3 +1,17 @@
+## v0.2.36 — Iteration 047
+
+- Clarify Volume direction precedence in Actor and Component Details by disabling Field Direction for nonlegacy Volume modes without resetting it.
+- Rename the cylinder-axis dropdown labels to Local Z Axis (internal enum values unchanged).
+- Add two native regression tests for editor metadata and all-shape direction precedence.
+- Preserve Standard/Experimental behavior and legacy defaults.
+
+## v0.2.35 — Iteration 046
+
+- Dual corner box authoring with automatic legacy half-extents migration, preserved serialized values and editor gizmos.
+- Shared Standard/Experimental volume direction modes (center, cylinder axis, local Z) with legacy directional default.
+- Limit-box and max-distance wireframe color/thickness customization.
+- Two native gravity field regression tests; C++/UE runtime validation pending.
+
 ## 0.2.34 — Iteration 045 (partial particle lifecycle safety)
 
 - Guard experimental gravity ownership against Chaos particle identity replacement during physics-state recreation.

@@ -6,6 +6,7 @@
 #include "OrbitGravitySourceComponent.generated.h"
 
 class USplineComponent;
+struct FPropertyChangedEvent;
 
 /** Embeds a complete Orbit gravity field inside any Actor. The field follows this
  * component's WORLD transform, independently of its owner Actor's pivot. */
@@ -15,12 +16,17 @@ class ORBIT_API UOrbitGravitySourceComponent : public USceneComponent
     GENERATED_BODY()
 public:
     UOrbitGravitySourceComponent();
+    virtual void PostLoad() override;
+#if WITH_EDITOR
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
     bool bEnabled = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
     EOrbitGravityShape Shape = EOrbitGravityShape::Point;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
+    /** For Volume, this controls direction only in Directional (Legacy) mode. Other Volume Direction Modes take precedence; the saved value is preserved. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(EditCondition="Shape != EOrbitGravityShape::Volume || VolumeDirectionMode == EOrbitVolumeDirectionMode::Directional", ToolTip="Gravity direction for non-Volume fields and Directional (Legacy) volumes. For other Volume Direction Modes, edit the mode under Orbit | Volume; this value is retained but inactive."))
     EOrbitGravityDirection Direction = EOrbitGravityDirection::Inward;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(ClampMin="0.0", Units="cm/s^2"))
     double Strength = 980.0;
@@ -44,10 +50,20 @@ public:
     bool bAffectCharacters = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence")
     bool bLimitToBox = false;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence")
+    UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Migrated to Box Corner A/B"))
     FVector BoxHalfExtents = FVector(1000.0);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence|Box", meta=(MakeEditWidget, EditCondition="bLimitToBox || (Shape == EOrbitGravityShape::Volume && VolumeShape == EOrbitVolumeShape::Box)"))
+    FTransform BoxCornerA = FTransform(FVector(-1000.0));
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence|Box", meta=(MakeEditWidget, EditCondition="bLimitToBox || (Shape == EOrbitGravityShape::Volume && VolumeShape == EOrbitVolumeShape::Box)"))
+    FTransform BoxCornerB = FTransform(FVector(1000.0));
+    UPROPERTY()
+    bool bBoxCornersInitialized = false;
+    void EnsureBoxCornersMigrated();
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Volume")
     EOrbitVolumeShape VolumeShape = EOrbitVolumeShape::Box;
+    /** Governs gravity direction for Volumes. In nonlegacy modes, the Field Direction setting is inactive and retains its existing value. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Volume")
+    EOrbitVolumeDirectionMode VolumeDirectionMode = EOrbitVolumeDirectionMode::Directional;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Volume", meta=(ClampMin="1.0", Units="cm"))
     double VolumeRadius = 1000.0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Volume", meta=(ClampMin="1.0", Units="cm"))

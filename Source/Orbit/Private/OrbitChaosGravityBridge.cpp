@@ -340,6 +340,7 @@ bool FOrbitChaosGravityBridge::TryGetExpandedFields(
             Field.Center.ContainsNaN() || Field.Axis.ContainsNaN() ||
             Field.DirectionVector.ContainsNaN() || Field.Rotation.ContainsNaN() ||
             Field.BoxExtents.ContainsNaN() ||
+            (Field.bUseBoxCorners && (Field.BoxLocalMin.ContainsNaN() || Field.BoxLocalMax.ContainsNaN())) ||
             !FMath::IsFinite(Field.Strength) || !FMath::IsFinite(Field.MaxDistance) ||
             !FMath::IsFinite(Field.ReferenceDistance) ||
             !FMath::IsFinite(Field.VolumeRadius) || !FMath::IsFinite(Field.VolumeHalfHeight) ||

@@ -256,6 +256,9 @@ namespace OrbitWorldIntegrationTests
         Source->Shape = EOrbitGravityShape::Volume;
         Source->VolumeShape = Shape;
         Source->BoxHalfExtents = FVector(500.0);
+        Source->BoxCornerA.SetTranslation(FVector(-500.0));
+        Source->BoxCornerB.SetTranslation(FVector(500.0));
+        Source->bBoxCornersInitialized = true;
         Source->VolumeRadius = 500.0;
         Source->VolumeHalfHeight = 500.0;
         UStaticMeshComponent* Inside = Fixture.Cube(FVector(0.0, 0.0, 200.0));

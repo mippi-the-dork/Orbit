@@ -428,3 +428,11 @@ For Manny / Quinn locomotion, the ordinary template Animation Blueprint may stil
 In v0.2.4 two overlapping equal-priority Point/Override sources began choosing the nearer center. In v0.2.5 this is superseded by configurable Strongest Influence (default), Blended Influence and Legacy Priority Override. An actual planet-to-planet jump still requires sufficient launch velocity and overlapping/reachable source ranges; the gravity direction may switch sharply near the midpoint. See [`Docs/ITERATION_015.md`](Docs/ITERATION_015.md).
 
 In the Level Editor, select one or more ordinary level actors and choose **Right-click > Orbit > Orient to Gravity** to align their local +Z to the sampled gravity Up at each pivot. Supports Undo; skips sources, unmatched fields and zero-gravity points. This authoring command does not continuously orient moving actors.
+
+### Iteration 046 authoring compatibility
+
+See [Dual Corner Bounds and Volume Direction Modes](Docs/ITERATION_046.md) for migration and validation details.
+
+### Volume direction authoring (Iteration 047)
+
+For Volume sources, **Volume Direction Mode** controls the effective direction. **Field Direction** remains editable only for **Directional (Legacy)** volumes and other field shapes; it is disabled but preserved for other Volume modes. Axis-direction modes are labeled **Away From Local Z Axis** and **Toward Local Z Axis**, and work for all Volume shapes. See [Iteration 047](Docs/ITERATION_047.md).

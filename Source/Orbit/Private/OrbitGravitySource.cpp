@@ -40,10 +40,33 @@ AOrbitGravitySource::AOrbitGravitySource()
     bReplicates = false; // Network replication remains outside the current implementation.
 }
 
+void AOrbitGravitySource::EnsureBoxCornersMigrated()
+{
+    if (bBoxCornersInitialized) { return; }
+    const FVector Extents = BoxHalfExtents.GetAbs();
+    BoxCornerA.SetTranslation(-Extents);
+    BoxCornerB.SetTranslation(Extents);
+    bBoxCornersInitialized = true;
+}
+
+void AOrbitGravitySource::PostLoad()
+{
+    Super::PostLoad();
+    EnsureBoxCornersMigrated();
+}
+
 #if WITH_EDITOR
 void AOrbitGravitySource::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
     Super::PostEditChangeProperty(PropertyChangedEvent);
+    if (PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, BoxCornerA) ||
+        PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, BoxCornerB) ||
+        (PropertyChangedEvent.MemberProperty &&
+         (PropertyChangedEvent.MemberProperty->GetFName() == GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, BoxCornerA) ||
+          PropertyChangedEvent.MemberProperty->GetFName() == GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, BoxCornerB))))
+    {
+        bBoxCornersInitialized = true;
+    }
     bStreamlinesCached = false;
     UWorld* World = GetWorld();
     if (!World) { return; }
@@ -206,6 +229,15 @@ void AOrbitGravitySource::BuildDefinition(FOrbitFieldDefinition& Field) const
     Field.bCharacters = bAffectCharacters;
     Field.bLimitToBox = bLimitToBox;
     Field.BoxExtents = BoxHalfExtents.GetAbs();
+    Field.bUseBoxCorners = bBoxCornersInitialized;
+    Field.BoxLocalMin = BoxCornerA.GetTranslation().ComponentMin(BoxCornerB.GetTranslation());
+    Field.BoxLocalMax = BoxCornerA.GetTranslation().ComponentMax(BoxCornerB.GetTranslation());
+    if (!Field.bUseBoxCorners)
+    {
+        Field.BoxLocalMin = -Field.BoxExtents;
+        Field.BoxLocalMax = Field.BoxExtents;
+    }
+    Field.VolumeDirectionMode = VolumeDirectionMode;
     Field.VolumeShape = VolumeShape;
     Field.VolumeRadius = FMath::Max(VolumeRadius, 1.0);
     Field.VolumeHalfHeight = FMath::Max(VolumeHalfHeight, 1.0);
@@ -255,6 +287,14 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
     const FVector Up = GetActorUpVector();
     const UWorld* World = GetWorld();
     constexpr float DebugLifetime = 0.0f;
+    const FVector LocalBoxMin = bBoxCornersInitialized
+        ? BoxCornerA.GetTranslation().ComponentMin(BoxCornerB.GetTranslation()) : -BoxHalfExtents.GetAbs();
+    const FVector LocalBoxMax = bBoxCornersInitialized
+        ? BoxCornerA.GetTranslation().ComponentMax(BoxCornerB.GetTranslation()) : BoxHalfExtents.GetAbs();
+    const FVector LocalBoxCenter = (LocalBoxMin + LocalBoxMax) * 0.5;
+    const FVector LocalBoxExtent = (LocalBoxMax - LocalBoxMin) * 0.5;
+    const FVector BoxWorldCenter = Origin + Rotation.RotateVector(LocalBoxCenter);
+    const FColor BoxLimitDisplayColor = bEnabled ? LimitBoxColor.ToFColor(true) : FColor(110, 110, 110);
 
     // Show influence bounds independently from the vector preview. Use the same
     // dimensions and source rotation as the actual field evaluator.
@@ -268,7 +308,9 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
             switch (VolumeShape)
             {
             case EOrbitVolumeShape::Box:
-                DrawDebugBox(World, Origin, BoxHalfExtents.GetAbs(), Rotation, Color, false, DebugLifetime, 0, 1.6f);
+                DrawDebugBox(World, BoxWorldCenter, LocalBoxExtent, Rotation,
+                    bLimitToBox ? BoxLimitDisplayColor : Color, false, DebugLifetime, 0,
+                    bLimitToBox ? LimitBoxThickness : 1.6f);
                 break;
             case EOrbitVolumeShape::Sphere:
                 DrawDebugSphere(World, Origin, Radius, 32, Color, false, DebugLifetime, 0, 1.6f);
@@ -283,7 +325,7 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
         }
         if (bLimitToBox && (Shape != EOrbitGravityShape::Volume || VolumeShape != EOrbitVolumeShape::Box))
         {
-            DrawDebugBox(World, Origin, BoxHalfExtents.GetAbs(), Rotation, FColor::Yellow, false, DebugLifetime, 0, 1.0f);
+            DrawDebugBox(World, BoxWorldCenter, LocalBoxExtent, Rotation, BoxLimitDisplayColor, false, DebugLifetime, 0, LimitBoxThickness);
         }
     }
 
@@ -292,13 +334,13 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
     // unrelated spherical intersection. Other fields retain radial bounds.
     if (bShowMaxDistanceBoundary && MaxDistance > 0.0)
     {
-        const FColor BoundColor = bEnabled ? FColor(70, 180, 245) : FColor(110, 110, 110);
+        const FColor BoundColor = bEnabled ? MaxDistanceColor.ToFColor(true) : FColor(110, 110, 110);
         const double Radius = MaxDistance;
         switch (Shape)
         {
         case EOrbitGravityShape::Point:
         case EOrbitGravityShape::Directional:
-            DrawDebugSphere(World, Origin, Radius, 32, BoundColor, false, DebugLifetime, 0, 1.3f);
+            DrawDebugSphere(World, Origin, Radius, 32, BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
             break;
         case EOrbitGravityShape::Volume:
         {
@@ -308,18 +350,18 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
             switch (VolumeShape)
             {
             case EOrbitVolumeShape::Box:
-                DrawDebugBox(World, Origin, Bounds.BoxHalfExtents, Rotation, BoundColor, false, DebugLifetime, 0, 1.3f);
+                DrawDebugBox(World, BoxWorldCenter, Bounds.BoxHalfExtents, Rotation, BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
                 break;
             case EOrbitVolumeShape::Sphere:
-                DrawDebugSphere(World, Origin, Bounds.Radius, 32, BoundColor, false, DebugLifetime, 0, 1.3f);
+                DrawDebugSphere(World, Origin, Bounds.Radius, 32, BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
                 break;
             case EOrbitVolumeShape::Cylinder:
                 DrawDebugCylinder(World, Origin - Up * Bounds.HalfHeight, Origin + Up * Bounds.HalfHeight,
-                    Bounds.Radius, 32, BoundColor, false, DebugLifetime, 0, 1.3f);
+                    Bounds.Radius, 32, BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
                 break;
             case EOrbitVolumeShape::Capsule:
                 DrawDebugCapsule(World, Origin, Bounds.HalfHeight, Bounds.Radius, Rotation,
-                    BoundColor, false, DebugLifetime, 0, 1.3f);
+                    BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
                 break;
             }
             break;
@@ -330,7 +372,7 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
             // portion near the actor, with visible radial boundaries.
             const double HalfLength = FMath::Max(PreviewExtent, 50.0);
             DrawDebugCylinder(World, Origin - Up * HalfLength, Origin + Up * HalfLength,
-                Radius, 32, BoundColor, false, DebugLifetime, 0, 1.3f);
+                Radius, 32, BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
             break;
         }
         case EOrbitGravityShape::Spline:
@@ -361,10 +403,10 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
                     }
                     for (int32 Side = 0; Side < RingSides; ++Side)
                     {
-                        DrawDebugLine(World, CurrentRing[Side], CurrentRing[(Side + 1) % RingSides], BoundColor, false, DebugLifetime, 0, 1.2f);
+                        DrawDebugLine(World, CurrentRing[Side], CurrentRing[(Side + 1) % RingSides], BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
                         if (PreviousRing.Num() == RingSides && Side % 2 == 0)
                         {
-                            DrawDebugLine(World, PreviousRing[Side], CurrentRing[Side], BoundColor, false, DebugLifetime, 0, 1.0f);
+                            DrawDebugLine(World, PreviousRing[Side], CurrentRing[Side], BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
                         }
                     }
                     PreviousRing = MoveTemp(CurrentRing);
@@ -464,9 +506,9 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
                 }
                 if (bLimitToBox)
                 {
-                    HalfExtents.X = FMath::Min(HalfExtents.X, FMath::Abs(BoxHalfExtents.X));
-                    HalfExtents.Y = FMath::Min(HalfExtents.Y, FMath::Abs(BoxHalfExtents.Y));
-                    HalfExtents.Z = FMath::Min(HalfExtents.Z, FMath::Abs(BoxHalfExtents.Z));
+                    HalfExtents.X = FMath::Min(HalfExtents.X, FMath::Max(FMath::Abs(LocalBoxMin.X), FMath::Abs(LocalBoxMax.X)));
+                    HalfExtents.Y = FMath::Min(HalfExtents.Y, FMath::Max(FMath::Abs(LocalBoxMin.Y), FMath::Abs(LocalBoxMax.Y)));
+                    HalfExtents.Z = FMath::Min(HalfExtents.Z, FMath::Max(FMath::Abs(LocalBoxMin.Z), FMath::Abs(LocalBoxMax.Z)));
                 }
                 const int32 SamplesPerAxis = Level + 2;
                 for (int32 I = 0; I < SamplesPerAxis; ++I)
@@ -479,7 +521,9 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
                                 ((I + 0.5) * 2.0 / SamplesPerAxis - 1.0) * HalfExtents.X,
                                 ((J + 0.5) * 2.0 / SamplesPerAxis - 1.0) * HalfExtents.Y,
                                 ((K + 0.5) * 2.0 / SamplesPerAxis - 1.0) * HalfExtents.Z);
-                            Candidates.Add(Origin + Rotation.RotateVector(LocalPoint));
+                            Candidates.Add((Shape == EOrbitGravityShape::Volume && VolumeShape == EOrbitVolumeShape::Box)
+                                ? BoxWorldCenter + Rotation.RotateVector(LocalPoint)
+                                : Origin + Rotation.RotateVector(LocalPoint));
                         }
                     }
                 }
@@ -638,7 +682,7 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
         }
         if (bLimitToBox)
         {
-            const FVector MaskExtents = BoxHalfExtents.GetAbs();
+            const FVector MaskExtents = LocalBoxMin.GetAbs().ComponentMax(LocalBoxMax.GetAbs());
             LocalExtents.X = FMath::Min(LocalExtents.X, MaskExtents.X);
             LocalExtents.Y = FMath::Min(LocalExtents.Y, MaskExtents.Y);
             LocalExtents.Z = FMath::Min(LocalExtents.Z, MaskExtents.Z);

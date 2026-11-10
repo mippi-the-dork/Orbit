@@ -1,4 +1,6 @@
 #include "OrbitGravityTypes.h"
+#include "OrbitGravitySource.h"
+#include "OrbitGravitySourceComponent.h"
 #include "OrbitCharacterControlsComponent.h"
 #include "OrbitGravityAnimInstance.h"
 #include "OrbitPhysicsRestMath.h"
@@ -1916,6 +1918,144 @@ bool FOrbitCameraFacingVerticalFallbackTest::RunTest(const FString& Parameters)
         FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(FVector::ZeroVector, Prior, Prior, Heading));
     TestFalse(TEXT("No invented heading without camera or prior orientation"),
         FOrbitGravityFrame::ResolveGravityRelativeCameraHeading(Up, Up, FVector::ZeroVector, Heading));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitBoxCornersMigrationParityTest,
+    "Orbit.Field.BoxCornersLegacyParity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitBoxCornersMigrationParityTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Legacy;
+    Legacy.Shape = EOrbitGravityShape::Directional;
+    Legacy.DirectionVector = FVector::DownVector;
+    Legacy.bLimitToBox = true;
+    Legacy.BoxExtents = FVector(600.0, 200.0, 300.0);
+    FOrbitFieldDefinition Converted = Legacy;
+    Converted.bUseBoxCorners = true;
+    Converted.BoxLocalMin = -Legacy.BoxExtents;
+    Converted.BoxLocalMax = Legacy.BoxExtents;
+    for (const FVector Position : {FVector(0.0), FVector(599.0, -199.0, 299.0), FVector(601.0, 0.0, 0.0)})
+    {
+        FVector Before, After;
+        const bool bBefore = FOrbitFieldEvaluator::Evaluate(Legacy, Position, Before);
+        const bool bAfter = FOrbitFieldEvaluator::Evaluate(Converted, Position, After);
+        TestEqual(TEXT("Converted corners preserve legacy inclusion"), bAfter, bBefore);
+        TestTrue(TEXT("Converted corners preserve gravity"), Before.Equals(After, 1.e-6));
+    }
+    Converted.BoxLocalMin = FVector(100.0, -100.0, -100.0);
+    Converted.BoxLocalMax = FVector(300.0, 100.0, 100.0);
+    FVector Acceleration;
+    TestTrue(TEXT("Offset box includes its displaced interior"), FOrbitFieldEvaluator::Evaluate(Converted, FVector(200.0, 0.0, 0.0), Acceleration));
+    TestFalse(TEXT("Offset box excludes old origin"), FOrbitFieldEvaluator::Evaluate(Converted, FVector::ZeroVector, Acceleration));
+    Converted.bLimitToBox = false;
+    Converted.Shape = EOrbitGravityShape::Volume;
+    Converted.VolumeShape = EOrbitVolumeShape::Box;
+    TestTrue(TEXT("Offset Box volume includes new local center"),
+        FOrbitFieldEvaluator::Evaluate(Converted, FVector(200.0, 0.0, 0.0), Acceleration));
+    TestFalse(TEXT("Offset Box volume excludes old origin"),
+        FOrbitFieldEvaluator::Evaluate(Converted, FVector::ZeroVector, Acceleration));
+    Converted.Rotation = FQuat(FVector::UpVector, PI * 0.5);
+    TestTrue(TEXT("Rotated box contains matching rotated local point"),
+        FOrbitFieldEvaluator::Evaluate(Converted, FVector(0.0, 200.0, 0.0), Acceleration));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVolumeDirectionModesTest,
+    "Orbit.Field.VolumeDirectionModes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitVolumeDirectionModesTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Volume;
+    Field.VolumeShape = EOrbitVolumeShape::Cylinder;
+    Field.VolumeRadius = 500.0;
+    Field.VolumeHalfHeight = 500.0;
+    Field.Strength = 980.0;
+    Field.DirectionVector = FVector::DownVector;
+    FVector Acceleration;
+    const FVector Probe(150.0, 0.0, 200.0);
+    Field.VolumeDirectionMode = EOrbitVolumeDirectionMode::Directional;
+    TestTrue(TEXT("Legacy cylinder accepted"), FOrbitFieldEvaluator::Evaluate(Field, Probe, Acceleration));
+    TestTrue(TEXT("Default remains downward"), Acceleration.Equals(FVector(0.0, 0.0, -980.0), 1.e-4));
+    Field.VolumeDirectionMode = EOrbitVolumeDirectionMode::AwayFromAxis;
+    FOrbitFieldEvaluator::Evaluate(Field, Probe, Acceleration);
+    TestTrue(TEXT("Cylinder flows outward from centerline"), Acceleration.Equals(FVector(980.0, 0.0, 0.0), 1.e-4));
+    Field.VolumeDirectionMode = EOrbitVolumeDirectionMode::TowardAxis;
+    FOrbitFieldEvaluator::Evaluate(Field, Probe, Acceleration);
+    TestTrue(TEXT("Cylinder flows toward centerline"), Acceleration.Equals(FVector(-980.0, 0.0, 0.0), 1.e-4));
+    Field.Rotation = FQuat(FVector::ForwardVector, PI * 0.5);
+    Field.VolumeDirectionMode = EOrbitVolumeDirectionMode::PositiveLocalZ;
+    FOrbitFieldEvaluator::Evaluate(Field, FVector(150.0, -200.0, 0.0), Acceleration);
+    TestTrue(TEXT("Local-Z mode respects source rotation"), Acceleration.Equals(FVector(0.0, -980.0, 0.0), 1.e-3));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVolumeDirectionDetailsPolicyTest,
+    "Orbit.Field.VolumeDirectionDetailsPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitVolumeDirectionDetailsPolicyTest::RunTest(const FString& Parameters)
+{
+    const FString ExpectedCondition = TEXT("Shape != EOrbitGravityShape::Volume || VolumeDirectionMode == EOrbitVolumeDirectionMode::Directional");
+    for (UClass* SourceClass : {AOrbitGravitySource::StaticClass(), UOrbitGravitySourceComponent::StaticClass()})
+    {
+        const FProperty* Property = SourceClass->FindPropertyByName(GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, Direction));
+        TestNotNull(TEXT("Field Direction property exists on each source type"), Property);
+        if (Property)
+        {
+            TestEqual(TEXT("Field Direction disabled for nonlegacy volumes, preserved for all other shapes"),
+                Property->GetMetaData(TEXT("EditCondition")), ExpectedCondition);
+        }
+    }
+    const UEnum* DirectionEnum = StaticEnum<EOrbitVolumeDirectionMode>();
+    TestNotNull(TEXT("Volume direction enum exists"), DirectionEnum);
+    if (DirectionEnum)
+    {
+        TestEqual(TEXT("Away axis label is shape-independent"),
+            DirectionEnum->GetDisplayNameTextByValue(static_cast<int64>(EOrbitVolumeDirectionMode::AwayFromAxis)).ToString(),
+            FString(TEXT("Away From Local Z Axis")));
+        TestEqual(TEXT("Toward axis label is shape-independent"),
+            DirectionEnum->GetDisplayNameTextByValue(static_cast<int64>(EOrbitVolumeDirectionMode::TowardAxis)).ToString(),
+            FString(TEXT("Toward Local Z Axis")));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVolumeDirectionPriorityParityTest,
+    "Orbit.Field.VolumeDirectionPriorityParity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitVolumeDirectionPriorityParityTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Volume;
+    Field.Strength = 980.0;
+    Field.VolumeRadius = 500.0;
+    Field.VolumeHalfHeight = 500.0;
+    Field.BoxExtents = FVector(500.0);
+    Field.DirectionVector = FVector::DownVector;
+    const FVector Probe(150.0, 80.0, 60.0);
+    for (EOrbitVolumeShape Boundary : {EOrbitVolumeShape::Box, EOrbitVolumeShape::Sphere, EOrbitVolumeShape::Cylinder, EOrbitVolumeShape::Capsule})
+    {
+        Field.VolumeShape = Boundary;
+        for (EOrbitVolumeDirectionMode Mode : {
+            EOrbitVolumeDirectionMode::AwayFromCenter, EOrbitVolumeDirectionMode::TowardCenter,
+            EOrbitVolumeDirectionMode::AwayFromAxis, EOrbitVolumeDirectionMode::TowardAxis,
+            EOrbitVolumeDirectionMode::PositiveLocalZ, EOrbitVolumeDirectionMode::NegativeLocalZ})
+        {
+            Field.VolumeDirectionMode = Mode;
+            Field.Direction = EOrbitGravityDirection::Inward;
+            FVector Inward;
+            TestTrue(TEXT("Nonlegacy volume mode has influence"), FOrbitFieldEvaluator::Evaluate(Field, Probe, Inward));
+            Field.Direction = EOrbitGravityDirection::Outward;
+            FVector Outward;
+            TestTrue(TEXT("Nonlegacy mode remains eligible with opposing Field Direction"), FOrbitFieldEvaluator::Evaluate(Field, Probe, Outward));
+            TestTrue(TEXT("Nonlegacy volume ignores Field Direction for all boundary shapes"), Inward.Equals(Outward, 1.e-4));
+        }
+    }
+    Field.VolumeShape = EOrbitVolumeShape::Sphere;
+    Field.VolumeDirectionMode = EOrbitVolumeDirectionMode::Directional;
+    Field.Direction = EOrbitGravityDirection::Inward;
+    FVector LegacyInward, LegacyOutward;
+    TestTrue(TEXT("Legacy direction accepted"), FOrbitFieldEvaluator::Evaluate(Field, Probe, LegacyInward));
+    Field.Direction = EOrbitGravityDirection::Outward;
+    TestTrue(TEXT("Legacy reverse accepted"), FOrbitFieldEvaluator::Evaluate(Field, Probe, LegacyOutward));
+    TestTrue(TEXT("Legacy reversal is preserved"), LegacyInward.Equals(-LegacyOutward, 1.e-4));
     return true;
 }
 

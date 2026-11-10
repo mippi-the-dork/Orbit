@@ -10,6 +10,33 @@ UOrbitGravitySourceComponent::UOrbitGravitySourceComponent()
     SetMobility(EComponentMobility::Movable);
 }
 
+void UOrbitGravitySourceComponent::EnsureBoxCornersMigrated()
+{
+    if (bBoxCornersInitialized) { return; }
+    const FVector Extents = BoxHalfExtents.GetAbs();
+    BoxCornerA.SetTranslation(-Extents);
+    BoxCornerB.SetTranslation(Extents);
+    bBoxCornersInitialized = true;
+}
+
+void UOrbitGravitySourceComponent::PostLoad()
+{
+    Super::PostLoad();
+    EnsureBoxCornersMigrated();
+}
+
+#if WITH_EDITOR
+void UOrbitGravitySourceComponent::PostEditChangeProperty(FPropertyChangedEvent& Event)
+{
+    Super::PostEditChangeProperty(Event);
+    if (Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UOrbitGravitySourceComponent, BoxCornerA) ||
+        Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UOrbitGravitySourceComponent, BoxCornerB))
+    {
+        bBoxCornersInitialized = true;
+    }
+}
+#endif
+
 void UOrbitGravitySourceComponent::BeginPlay()
 {
     Super::BeginPlay();
@@ -75,6 +102,15 @@ void UOrbitGravitySourceComponent::BuildDefinition(FOrbitFieldDefinition& Field)
     Field.bCharacters = bAffectCharacters;
     Field.bLimitToBox = bLimitToBox;
     Field.BoxExtents = BoxHalfExtents.GetAbs();
+    Field.bUseBoxCorners = bBoxCornersInitialized;
+    Field.BoxLocalMin = BoxCornerA.GetTranslation().ComponentMin(BoxCornerB.GetTranslation());
+    Field.BoxLocalMax = BoxCornerA.GetTranslation().ComponentMax(BoxCornerB.GetTranslation());
+    if (!Field.bUseBoxCorners)
+    {
+        Field.BoxLocalMin = -Field.BoxExtents;
+        Field.BoxLocalMax = Field.BoxExtents;
+    }
+    Field.VolumeDirectionMode = VolumeDirectionMode;
     Field.VolumeShape = VolumeShape;
     Field.VolumeRadius = FMath::Max(VolumeRadius, 1.0);
     Field.VolumeHalfHeight = FMath::Max(VolumeHalfHeight, 1.0);

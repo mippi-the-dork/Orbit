@@ -37,7 +37,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
     EOrbitGravityShape Shape = EOrbitGravityShape::Point;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field")
+    /** For Volume, this controls direction only in Directional (Legacy) mode. Other Volume Direction Modes take precedence; the saved value is preserved. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Field", meta=(EditCondition="Shape != EOrbitGravityShape::Volume || VolumeDirectionMode == EOrbitVolumeDirectionMode::Directional", ToolTip="Gravity direction for non-Volume fields and Directional (Legacy) volumes. For other Volume Direction Modes, edit the mode under Orbit | Volume; this value is retained but inactive."))
     EOrbitGravityDirection Direction = EOrbitGravityDirection::Inward;
 
     /** Radial vortex modes only: signed tangent-to-radial acceleration ratio.
@@ -125,12 +126,28 @@ public:
     bool bLimitToBox = false;
 
     /** Also configures the Box volume dimensions even when the additional box mask is disabled. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence", meta=(ClampMin="1.0", Units="cm"))
+    /** Retained as serialized migration data; existing level and Blueprint values are never discarded. */
+    UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Migrated to Box Corner A/B"))
     FVector BoxHalfExtents = FVector(1000.0);
+
+    /** Editable local-space opposite corners. Translation controls bounds; rotation and scale are not used. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence|Box", meta=(MakeEditWidget, EditCondition="bLimitToBox || (Shape == EOrbitGravityShape::Volume && VolumeShape == EOrbitVolumeShape::Box)"))
+    FTransform BoxCornerA = FTransform(FVector(-1000.0));
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Influence|Box", meta=(MakeEditWidget, EditCondition="bLimitToBox || (Shape == EOrbitGravityShape::Volume && VolumeShape == EOrbitVolumeShape::Box)"))
+    FTransform BoxCornerB = FTransform(FVector(1000.0));
+    /** Saved migration marker; old actors convert on load, including instance-specific half extents. */
+    UPROPERTY()
+    bool bBoxCornersInitialized = false;
+    void EnsureBoxCornersMigrated();
 
     /** Physical influence boundary for a Volume gravity source. Box preserves the existing BoxHalfExtents behavior. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Volume", meta=(EditCondition="Shape == EOrbitGravityShape::Volume"))
     EOrbitVolumeShape VolumeShape = EOrbitVolumeShape::Box;
+
+    /** Additional volume acceleration directions; Directional retains the original behavior. */
+    /** Governs gravity direction for Volumes. In nonlegacy modes, the Field Direction setting is inactive and retains its existing value. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Volume", meta=(EditCondition="Shape == EOrbitGravityShape::Volume"))
+    EOrbitVolumeDirectionMode VolumeDirectionMode = EOrbitVolumeDirectionMode::Directional;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Volume", meta=(EditCondition="Shape == EOrbitGravityShape::Volume", ClampMin="1.0", Units="cm"))
     double VolumeRadius = 1000.0;
@@ -169,6 +186,15 @@ public:
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug")
     bool bShowMaxDistanceBoundary = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Bounds")
+    FLinearColor LimitBoxColor = FLinearColor(1.0f, 0.82f, 0.10f);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Bounds", meta=(ClampMin="0.1", UIMin="0.5", UIMax="10.0"))
+    float LimitBoxThickness = 1.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Bounds")
+    FLinearColor MaxDistanceColor = FLinearColor(0.27f, 0.7f, 0.96f);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug|Bounds", meta=(ClampMin="0.1", UIMin="0.5", UIMax="10.0"))
+    float MaxDistanceThickness = 1.3f;
 
     /** Expand the 3D preview to the entire finite Max Distance, instead of being capped by Preview Extent.
      *  For unbounded sources (Max Distance = 0), Preview Extent still controls the visualization.
@@ -238,6 +264,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Debug", meta=(EditCondition="bShowGravityPreview"))
     bool bScalePreviewByStrength = true;
 
+    virtual void PostLoad() override;
     virtual void Tick(float DeltaSeconds) override;
 #if WITH_EDITOR
     virtual void PostRegisterAllComponents() override;

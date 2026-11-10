@@ -29,10 +29,12 @@ FOrbitEffectiveVolumeBounds FOrbitFieldEvaluator::GetEffectiveVolumeBounds(const
 {
     FOrbitEffectiveVolumeBounds Bounds;
     const double Limit = Field.MaxDistance > 0.0 ? Field.MaxDistance : TNumericLimits<double>::Max();
+    const FVector AuthoredHalf = Field.bUseBoxCorners
+        ? (Field.BoxLocalMax - Field.BoxLocalMin) * 0.5 : Field.BoxExtents.GetAbs();
     Bounds.BoxHalfExtents = FVector(
-        FMath::Min(FMath::Abs(Field.BoxExtents.X), Limit),
-        FMath::Min(FMath::Abs(Field.BoxExtents.Y), Limit),
-        FMath::Min(FMath::Abs(Field.BoxExtents.Z), Limit));
+        FMath::Min(FMath::Abs(AuthoredHalf.X), Limit),
+        FMath::Min(FMath::Abs(AuthoredHalf.Y), Limit),
+        FMath::Min(FMath::Abs(AuthoredHalf.Z), Limit));
     Bounds.Radius = FMath::Min(FMath::Max(Field.VolumeRadius, 1.0), Limit);
     Bounds.HalfHeight = FMath::Min(FMath::Max(Field.VolumeHalfHeight, 1.0), Limit);
     if (Field.VolumeShape == EOrbitVolumeShape::Capsule)
@@ -95,14 +97,23 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
 {
     OutAcceleration = FVector::ZeroVector;
     if (Position.ContainsNaN() || Field.Center.ContainsNaN() ||
+        (Field.bUseBoxCorners && (Field.BoxLocalMin.ContainsNaN() || Field.BoxLocalMax.ContainsNaN())) ||
         !FMath::IsFinite(Field.Strength) || !FMath::IsFinite(Field.VortexSpin)) { return false; }
     // Optional legacy box mask remains independent of the new Volume boundary.
     const FVector Local = Field.Rotation.Inverse().RotateVector(Position - Field.Center);
     if (Local.ContainsNaN()) { return false; }
-    if (Field.bLimitToBox &&
-        (FMath::Abs(Local.X) > Field.BoxExtents.X ||
-         FMath::Abs(Local.Y) > Field.BoxExtents.Y ||
-         FMath::Abs(Local.Z) > Field.BoxExtents.Z)) { return false; }
+    if (Field.bLimitToBox)
+    {
+        if (Field.bUseBoxCorners)
+        {
+            if (Local.X < Field.BoxLocalMin.X || Local.X > Field.BoxLocalMax.X ||
+                Local.Y < Field.BoxLocalMin.Y || Local.Y > Field.BoxLocalMax.Y ||
+                Local.Z < Field.BoxLocalMin.Z || Local.Z > Field.BoxLocalMax.Z) { return false; }
+        }
+        else if (FMath::Abs(Local.X) > Field.BoxExtents.X ||
+                 FMath::Abs(Local.Y) > Field.BoxExtents.Y ||
+                 FMath::Abs(Local.Z) > Field.BoxExtents.Z) { return false; }
+    }
 
     FOrbitEffectiveVolumeBounds VolumeBounds;
     double VolumeBoundaryFraction = 0.0;
@@ -111,12 +122,14 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         VolumeBounds = GetEffectiveVolumeBounds(Field);
         const double Radius = VolumeBounds.Radius;
         const double HalfHeight = VolumeBounds.HalfHeight;
+        const FVector BoxLocal = Field.bUseBoxCorners
+            ? Local - (Field.BoxLocalMin + Field.BoxLocalMax) * 0.5 : Local;
         switch (Field.VolumeShape)
         {
         case EOrbitVolumeShape::Box:
-            if (FMath::Abs(Local.X) > VolumeBounds.BoxHalfExtents.X ||
-                FMath::Abs(Local.Y) > VolumeBounds.BoxHalfExtents.Y ||
-                FMath::Abs(Local.Z) > VolumeBounds.BoxHalfExtents.Z) { return false; }
+            if (FMath::Abs(BoxLocal.X) > VolumeBounds.BoxHalfExtents.X ||
+                FMath::Abs(BoxLocal.Y) > VolumeBounds.BoxHalfExtents.Y ||
+                FMath::Abs(BoxLocal.Z) > VolumeBounds.BoxHalfExtents.Z) { return false; }
             break;
         case EOrbitVolumeShape::Sphere:
             if (Local.SizeSquared() > FMath::Square(Radius)) { return false; }
@@ -135,7 +148,7 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         }
         if (Field.Falloff == EOrbitGravityFalloff::Linear && Field.MaxDistance > 0.0)
         {
-            VolumeBoundaryFraction = OrbitVolumeBoundaryFraction(Local, Field.VolumeShape, VolumeBounds);
+            VolumeBoundaryFraction = OrbitVolumeBoundaryFraction(Field.VolumeShape == EOrbitVolumeShape::Box ? BoxLocal : Local, Field.VolumeShape, VolumeBounds);
         }
     }
 
@@ -173,6 +186,23 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         break;
     }
     case EOrbitGravityShape::Volume:
+    {
+        const FVector Relative = (Field.VolumeShape == EOrbitVolumeShape::Box && Field.bUseBoxCorners)
+            ? Local - (Field.BoxLocalMin + Field.BoxLocalMax) * 0.5 : Local;
+        const FVector AxisRadial(Relative.X, Relative.Y, 0.0);
+        switch (Field.VolumeDirectionMode)
+        {
+        case EOrbitVolumeDirectionMode::Directional: Direction = Field.DirectionVector.GetSafeNormal(); break;
+        case EOrbitVolumeDirectionMode::AwayFromCenter: Direction = Field.Rotation.RotateVector(Relative.GetSafeNormal()); break;
+        case EOrbitVolumeDirectionMode::TowardCenter: Direction = -Field.Rotation.RotateVector(Relative.GetSafeNormal()); break;
+        case EOrbitVolumeDirectionMode::AwayFromAxis: Direction = Field.Rotation.RotateVector(AxisRadial.GetSafeNormal()); break;
+        case EOrbitVolumeDirectionMode::TowardAxis: Direction = -Field.Rotation.RotateVector(AxisRadial.GetSafeNormal()); break;
+        case EOrbitVolumeDirectionMode::PositiveLocalZ: Direction = Field.Rotation.RotateVector(FVector::UpVector); break;
+        case EOrbitVolumeDirectionMode::NegativeLocalZ: Direction = -Field.Rotation.RotateVector(FVector::UpVector); break;
+        }
+        Distance = Relative.Size();
+        break;
+    }
     case EOrbitGravityShape::Directional:
         Direction = Field.DirectionVector.GetSafeNormal();
         Distance = (Position - Field.Center).Size();
@@ -209,7 +239,8 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
     {
         Direction *= -1.0;
     }
-    else if ((Field.Shape == EOrbitGravityShape::Directional || Field.Shape == EOrbitGravityShape::Volume) &&
+    else if ((Field.Shape == EOrbitGravityShape::Directional ||
+              (Field.Shape == EOrbitGravityShape::Volume && Field.VolumeDirectionMode == EOrbitVolumeDirectionMode::Directional)) &&
         (Field.Direction == EOrbitGravityDirection::Outward || bVortexOutward))
     {
         Direction *= -1.0;

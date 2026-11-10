@@ -45,6 +45,19 @@ enum class EOrbitVolumeShape : uint8
     Capsule
 };
 
+/** Optional direction behavior inside a bounded Volume; existing assets remain Directional. */
+UENUM(BlueprintType)
+enum class EOrbitVolumeDirectionMode : uint8
+{
+    Directional UMETA(DisplayName="Directional (Legacy)"),
+    AwayFromCenter UMETA(DisplayName="Away From Center"),
+    TowardCenter UMETA(DisplayName="Toward Center"),
+    AwayFromAxis UMETA(DisplayName="Away From Local Z Axis", ToolTip="Gravity points away from the source local Z centerline, regardless of volume boundary shape."),
+    TowardAxis UMETA(DisplayName="Toward Local Z Axis", ToolTip="Gravity points toward the source local Z centerline, regardless of volume boundary shape."),
+    PositiveLocalZ UMETA(DisplayName="Along Local +Z"),
+    NegativeLocalZ UMETA(DisplayName="Along Local -Z")
+};
+
 UENUM(BlueprintType)
 enum class EOrbitGravityFalloff : uint8
 {
@@ -113,12 +126,16 @@ struct ORBIT_API FOrbitFieldDefinition
     EOrbitGravityDirection Direction = EOrbitGravityDirection::Inward;
     EOrbitGravityFalloff Falloff = EOrbitGravityFalloff::Constant;
     EOrbitVolumeShape VolumeShape = EOrbitVolumeShape::Box;
+    EOrbitVolumeDirectionMode VolumeDirectionMode = EOrbitVolumeDirectionMode::Directional;
     EOrbitGravityCombine Combine = EOrbitGravityCombine::Override;
     FVector Center = FVector::ZeroVector;
     FVector Axis = FVector::UpVector;
     FVector DirectionVector = FVector::DownVector;
     FQuat Rotation = FQuat::Identity;
-    FVector BoxExtents = FVector(1000.0);
+    FVector BoxExtents = FVector(1000.0); // Legacy snapshot / default
+    bool bUseBoxCorners = false;
+    FVector BoxLocalMin = FVector(-1000.0);
+    FVector BoxLocalMax = FVector(1000.0);
     double VolumeRadius = 1000.0;
     double VolumeHalfHeight = 1000.0;
     TArray<FVector> Curve;
