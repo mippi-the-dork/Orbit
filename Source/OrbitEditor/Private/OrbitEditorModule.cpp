@@ -21,6 +21,8 @@
 #include "Framework/Commands/UIAction.h"
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
+#include "PropertyEditorModule.h"
+#include "OrbitSourceDirectionDetails.h"
 
 /**
  * Orbit's runtime module has no Slate or editor dependencies.
@@ -81,6 +83,13 @@ public:
 
         FSlateStyleRegistry::RegisterSlateStyle(*StyleSet);
 
+        FPropertyEditorModule& PropertyEditor = FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
+        PropertyEditor.RegisterCustomClassLayout(TEXT("OrbitGravitySource"),
+            FOnGetDetailCustomizationInstance::CreateStatic(&FOrbitSourceDirectionDetails::MakeInstance));
+        PropertyEditor.RegisterCustomClassLayout(TEXT("OrbitGravitySourceComponent"),
+            FOnGetDetailCustomizationInstance::CreateStatic(&FOrbitSourceDirectionDetails::MakeInstance));
+        PropertyEditor.NotifyCustomizationModuleChanged();
+
         // Extend UE's native actor context menu after ToolMenus is initialized.
         UToolMenus::RegisterStartupCallback(
             FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FOrbitEditorModule::RegisterMenus));
@@ -88,6 +97,14 @@ public:
 
     virtual void ShutdownModule() override
     {
+        if (FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
+        {
+            FPropertyEditorModule& PropertyEditor = FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
+            PropertyEditor.UnregisterCustomClassLayout(TEXT("OrbitGravitySource"));
+            PropertyEditor.UnregisterCustomClassLayout(TEXT("OrbitGravitySourceComponent"));
+            PropertyEditor.NotifyCustomizationModuleChanged();
+        }
+
         UToolMenus::UnRegisterStartupCallback(this);
         UToolMenus::UnregisterOwner(this);
         if (StyleSet.IsValid())

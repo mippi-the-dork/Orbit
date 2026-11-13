@@ -1,7 +1,9 @@
 #include "OrbitGravitySource.h"
 #include "OrbitWorldSubsystem.h"
+#include "OrbitBoundarySelectionComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SplineComponent.h"
+#include "OrbitSplineSampling.h"
 #include "Components/ArrowComponent.h"
 #include "Components/BillboardComponent.h"
 #include "Engine/World.h"
@@ -32,6 +34,11 @@ AOrbitGravitySource::AOrbitGravitySource()
     GravitySpline->SetupAttachment(SceneRoot);
     GravitySpline->SetClosedLoop(false);
 #if WITH_EDITORONLY_DATA
+    BoundarySelection = CreateEditorOnlyDefaultSubobject<UOrbitBoundarySelectionComponent>(TEXT("OrbitBoundarySelection"));
+    if (BoundarySelection)
+    {
+        BoundarySelection->SetupAttachment(SceneRoot);
+    }
     OrbitBillboard = CreateDefaultSubobject<UBillboardComponent>(TEXT("OrbitBillboard"));
     OrbitBillboard->SetupAttachment(SceneRoot);
     OrbitBillboard->SetHiddenInGame(true);
@@ -49,6 +56,32 @@ void AOrbitGravitySource::EnsureBoxCornersMigrated()
     bBoxCornersInitialized = true;
 }
 
+void AOrbitGravitySource::PostActorCreated()
+{
+    Super::PostActorCreated();
+    // Existing deserialized assets do not receive this creation callback, so
+    // they keep Every Frame and their original procedural-spline behavior.
+    if (!IsTemplate() && GetArchetype() == GetClass()->GetDefaultObject())
+    {
+        SplineUpdateMode = EOrbitSplineUpdateMode::Automatic;
+    }
+}
+
+void AOrbitGravitySource::RefreshSplineGravity()
+{
+    SplineGeometryCache.Invalidate();
+    if (UWorld* World = GetWorld())
+    {
+        if (World->IsGameWorld())
+        {
+            if (UOrbitWorldSubsystem* Subsystem = World->GetSubsystem<UOrbitWorldSubsystem>())
+            {
+                Subsystem->RefreshActiveSources();
+            }
+        }
+    }
+}
+
 void AOrbitGravitySource::PostLoad()
 {
     Super::PostLoad();
@@ -59,6 +92,10 @@ void AOrbitGravitySource::PostLoad()
 void AOrbitGravitySource::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
     Super::PostEditChangeProperty(PropertyChangedEvent);
+    // Shape edits and the direction fallback belong to the same UE transaction.
+    // The previous direction is restored when Undo restores the previous shape.
+    Direction = OrbitDirectionForShape(Shape, Direction);
+
     if (PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, BoxCornerA) ||
         PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, BoxCornerB) ||
         (PropertyChangedEvent.MemberProperty &&
@@ -68,6 +105,7 @@ void AOrbitGravitySource::PostEditChangeProperty(FPropertyChangedEvent& Property
         bBoxCornersInitialized = true;
     }
     bStreamlinesCached = false;
+    UpdateSelectableBounds();
     UWorld* World = GetWorld();
     if (!World) { return; }
 
@@ -123,6 +161,10 @@ void AOrbitGravitySource::PostEditChangeProperty(FPropertyChangedEvent& Property
         if (!bIdentityMatches) { continue; }
 
         EditedProperty->CopyCompleteValue_InContainer(RuntimeActor, this);
+        if (EditedProperty->GetFName() == GET_MEMBER_NAME_CHECKED(AOrbitGravitySource, Shape))
+        {
+            RuntimeActor->Direction = Direction;
+        }
         RuntimeActor->bStreamlinesCached = false;
         if (UOrbitWorldSubsystem* Subsystem = RuntimeWorld->GetSubsystem<UOrbitWorldSubsystem>())
         {
@@ -135,6 +177,7 @@ void AOrbitGravitySource::PostEditChangeProperty(FPropertyChangedEvent& Property
 void AOrbitGravitySource::PostRegisterAllComponents()
 {
     Super::PostRegisterAllComponents();
+    UpdateSelectableBounds();
 #if WITH_EDITORONLY_DATA
     if (!OrbitBillboard || IsTemplate() || !GetWorld() || GetWorld()->IsGameWorld())
     {
@@ -201,11 +244,21 @@ void AOrbitGravitySource::SetGravityStrength(double NewStrength)
     }
 }
 
-void AOrbitGravitySource::BuildDefinition(FOrbitFieldDefinition& Field) const
+void AOrbitGravitySource::BuildDefinition(FOrbitFieldDefinition& Field, bool bReuseSplineArrays) const
 {
-    Field = FOrbitFieldDefinition();
+    // The world subsystem moves forward the previous definition of this exact source.
+    // Keep only its spline buffers; overwrite all scalar field settings below.
+    bReuseSplineArrays = bReuseSplineArrays && Field.Shape == EOrbitGravityShape::Spline;
+    if (!bReuseSplineArrays)
+    {
+        Field = FOrbitFieldDefinition();
+    }
+    if (Shape != EOrbitGravityShape::Spline)
+    {
+        Field.Curve.Reset(); Field.CurveUp.Reset(); Field.CurveBlocks.Reset();
+    }
     Field.Shape = Shape;
-    Field.Direction = Direction;
+    Field.Direction = OrbitDirectionForShape(Shape, Direction);
     Field.Falloff = Falloff;
     Field.Combine = Combine;
     Field.Center = GetActorLocation();
@@ -243,16 +296,10 @@ void AOrbitGravitySource::BuildDefinition(FOrbitFieldDefinition& Field) const
     Field.VolumeHalfHeight = FMath::Max(VolumeHalfHeight, 1.0);
     if (Shape == EOrbitGravityShape::Spline && GravitySpline)
     {
-        const double Length = GravitySpline->GetSplineLength();
-        const int32 Samples = FMath::Clamp(FMath::CeilToInt(Length / FMath::Max(SplineSampleSpacing, 25.0)), 1, 2048);
-        Field.Curve.Reserve(Samples + 1);
-        Field.CurveUp.Reserve(Samples + 1);
-        for (int32 I = 0; I <= Samples; ++I)
-        {
-            const double Dist = Length * static_cast<double>(I) / Samples;
-            Field.Curve.Add(GravitySpline->GetLocationAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World));
-            Field.CurveUp.Add(GravitySpline->GetUpVectorAtDistanceAlongSpline(Dist, ESplineCoordinateSpace::World));
-        }
+        SplineGeometryCache.Get(GravitySpline, SplineSampleSpacing, SplineMaxSegments, Field.Curve, Field.CurveUp, Field.CurveBlocks, bReuseSplineArrays,
+            SplineUpdateMode == EOrbitSplineUpdateMode::EveryFrame ? 0.0 :
+                (SplineUpdateMode == EOrbitSplineUpdateMode::Automatic ? 0.1 : FMath::Max(0.05, SplineCheckInterval)),
+            SplineUpdateMode == EOrbitSplineUpdateMode::Manual);
     }
 }
 
@@ -276,10 +323,228 @@ bool AOrbitGravitySource::ShouldTickIfViewportsOnly() const
 }
 #endif
 
+#if WITH_EDITOR
+void AOrbitGravitySource::UpdateSelectableBounds()
+{
+#if WITH_EDITORONLY_DATA
+    if (!BoundarySelection || !GetWorld() || GetWorld()->WorldType != EWorldType::Editor || IsTemplate())
+    {
+        return;
+    }
+
+    using FLine = UOrbitBoundarySelectionComponent::FLine;
+    TArray<FLine> Lines;
+    const FVector Origin = GetActorLocation();
+    const FQuat Rotation = GetActorQuat();
+    const FVector Up = Rotation.RotateVector(FVector::UpVector);
+    const FColor Muted(110, 110, 110);
+    const FColor BoxColor = bEnabled ? LimitBoxColor.ToFColor(true) : Muted;
+    const FColor DistanceColor = bEnabled ? MaxDistanceColor.ToFColor(true) : Muted;
+    const FColor VolumeColor = bEnabled ? FColor(65, 205, 145) : Muted;
+
+    auto AddLine = [&Lines](const FVector& A, const FVector& B, FColor Color, float Width)
+    {
+        if (A.ContainsNaN() || B.ContainsNaN()) { return; }
+        Lines.Add({A, B, Color, FMath::Max(0.1f, Width)});
+    };
+    auto AddBox = [&](const FVector& Center, const FVector& Extents, FColor Color, float Width)
+    {
+        const FVector E = Extents.GetAbs();
+        FVector V[8];
+        for (int32 I = 0; I < 8; ++I)
+        {
+            const FVector Local((I & 1) ? E.X : -E.X, (I & 2) ? E.Y : -E.Y, (I & 4) ? E.Z : -E.Z);
+            V[I] = Center + Rotation.RotateVector(Local);
+        }
+        for (int32 I = 0; I < 8; ++I)
+        {
+            for (int32 Bit = 1; Bit <= 4; Bit <<= 1)
+            {
+                if (!(I & Bit)) { AddLine(V[I], V[I | Bit], Color, Width); }
+            }
+        }
+    };
+    auto AddRing = [&](const FVector& Center, const FVector& AxisA, const FVector& AxisB,
+                       double Radius, FColor Color, float Width, int32 Sides = 32)
+    {
+        const double SafeRadius = FMath::Max(1.0, Radius);
+        for (int32 I = 0; I < Sides; ++I)
+        {
+            const double A0 = 2.0 * PI * I / Sides;
+            const double A1 = 2.0 * PI * (I + 1) / Sides;
+            const FVector P0 = Center + SafeRadius * (AxisA * FMath::Cos(A0) + AxisB * FMath::Sin(A0));
+            const FVector P1 = Center + SafeRadius * (AxisA * FMath::Cos(A1) + AxisB * FMath::Sin(A1));
+            AddLine(P0, P1, Color, Width);
+        }
+    };
+    auto AddSphere = [&](const FVector& Center, double Radius, FColor Color, float Width)
+    {
+        const FVector X = Rotation.RotateVector(FVector::ForwardVector);
+        const FVector Y = Rotation.RotateVector(FVector::RightVector);
+        AddRing(Center, X, Y, Radius, Color, Width);
+        AddRing(Center, X, Up, Radius, Color, Width);
+        AddRing(Center, Y, Up, Radius, Color, Width);
+    };
+    auto AddCylinder = [&](const FVector& Center, double Radius, double HalfHeight, FColor Color, float Width)
+    {
+        const FVector X = Rotation.RotateVector(FVector::ForwardVector);
+        const FVector Y = Rotation.RotateVector(FVector::RightVector);
+        const FVector Bottom = Center - Up * HalfHeight;
+        const FVector Top = Center + Up * HalfHeight;
+        AddRing(Bottom, X, Y, Radius, Color, Width);
+        AddRing(Top, X, Y, Radius, Color, Width);
+        for (int32 I = 0; I < 8; ++I)
+        {
+            const double Angle = 2.0 * PI * I / 8.0;
+            const FVector Radial = (X * FMath::Cos(Angle) + Y * FMath::Sin(Angle)) * Radius;
+            AddLine(Bottom + Radial, Top + Radial, Color, Width);
+        }
+    };
+    auto AddCapsule = [&](const FVector& Center, double Radius, double HalfHeight, FColor Color, float Width)
+    {
+        const double CylinderHalf = FMath::Max(0.0, HalfHeight - Radius);
+        AddCylinder(Center, Radius, CylinderHalf, Color, Width);
+        const FVector X = Rotation.RotateVector(FVector::ForwardVector);
+        const FVector Y = Rotation.RotateVector(FVector::RightVector);
+        for (int32 Side = 0; Side < 8; ++Side)
+        {
+            const double Angle = 2.0 * PI * Side / 8.0;
+            const FVector Radial = X * FMath::Cos(Angle) + Y * FMath::Sin(Angle);
+            for (int32 Sign = -1; Sign <= 1; Sign += 2)
+            {
+                const FVector CapCenter = Center + Up * CylinderHalf * Sign;
+                for (int32 Segment = 0; Segment < 8; ++Segment)
+                {
+                    const double T0 = PI * 0.5 * Segment / 8.0;
+                    const double T1 = PI * 0.5 * (Segment + 1) / 8.0;
+                    AddLine(CapCenter + Radius * (Radial * FMath::Cos(T0) + Up * Sign * FMath::Sin(T0)),
+                            CapCenter + Radius * (Radial * FMath::Cos(T1) + Up * Sign * FMath::Sin(T1)), Color, Width);
+                }
+            }
+        }
+    };
+    const FVector MinCorner = bBoxCornersInitialized
+        ? BoxCornerA.GetTranslation().ComponentMin(BoxCornerB.GetTranslation()) : -BoxHalfExtents.GetAbs();
+    const FVector MaxCorner = bBoxCornersInitialized
+        ? BoxCornerA.GetTranslation().ComponentMax(BoxCornerB.GetTranslation()) : BoxHalfExtents.GetAbs();
+    const FVector BoxCenter = Origin + Rotation.RotateVector((MinCorner + MaxCorner) * 0.5);
+    const FVector BoxExtent = (MaxCorner - MinCorner) * 0.5;
+
+    if (bShowVolumeBounds)
+    {
+        if (Shape == EOrbitGravityShape::Volume)
+        {
+            const double Radius = FMath::Max(1.0, VolumeRadius);
+            const double HalfHeight = FMath::Max(1.0, VolumeHalfHeight);
+            switch (VolumeShape)
+            {
+            case EOrbitVolumeShape::Box:
+                AddBox(BoxCenter, BoxExtent, bLimitToBox ? BoxColor : VolumeColor,
+                       bLimitToBox ? LimitBoxThickness : 1.6f);
+                break;
+            case EOrbitVolumeShape::Sphere: AddSphere(Origin, Radius, VolumeColor, 1.6f); break;
+            case EOrbitVolumeShape::Cylinder: AddCylinder(Origin, Radius, HalfHeight, VolumeColor, 1.6f); break;
+            case EOrbitVolumeShape::Capsule: AddCapsule(Origin, Radius, FMath::Max(Radius, HalfHeight), VolumeColor, 1.6f); break;
+            }
+        }
+        if (bLimitToBox && (Shape != EOrbitGravityShape::Volume || VolumeShape != EOrbitVolumeShape::Box))
+        {
+            AddBox(BoxCenter, BoxExtent, BoxColor, LimitBoxThickness);
+        }
+    }
+    if (bShowMaxDistanceBoundary && MaxDistance > 0.0)
+    {
+        const double Radius = MaxDistance;
+        switch (Shape)
+        {
+        case EOrbitGravityShape::Point:
+        case EOrbitGravityShape::Directional:
+            AddSphere(Origin, Radius, DistanceColor, MaxDistanceThickness);
+            break;
+        case EOrbitGravityShape::Volume:
+        {
+            FOrbitFieldDefinition Field;
+            BuildDefinition(Field);
+            const FOrbitEffectiveVolumeBounds Bounds = FOrbitFieldEvaluator::GetEffectiveVolumeBounds(Field);
+            switch (VolumeShape)
+            {
+            case EOrbitVolumeShape::Box:
+                // Effective half-extents may be capped by MaxDistance, but the authored center is retained.
+                AddBox(BoxCenter, Bounds.BoxHalfExtents, DistanceColor, MaxDistanceThickness);
+                break;
+            case EOrbitVolumeShape::Sphere: AddSphere(Origin, Bounds.Radius, DistanceColor, MaxDistanceThickness); break;
+            case EOrbitVolumeShape::Cylinder: AddCylinder(Origin, Bounds.Radius, Bounds.HalfHeight, DistanceColor, MaxDistanceThickness); break;
+            case EOrbitVolumeShape::Capsule: AddCapsule(Origin, Bounds.Radius, Bounds.HalfHeight, DistanceColor, MaxDistanceThickness); break;
+            }
+            break;
+        }
+        case EOrbitGravityShape::Axis:
+            AddCylinder(Origin, Radius, FMath::Max(PreviewExtent, 50.0), DistanceColor, MaxDistanceThickness);
+            break;
+        case EOrbitGravityShape::Spline:
+            if (GravitySpline && GravitySpline->GetNumberOfSplinePoints() > 1)
+            {
+                // Render the same world-space polyline used by gravity, not 48 widely
+                // spaced rings that cut across tight bends or uniform-scale hierarchies.
+                TArray<FVector> Centers, CurveUps;
+                TArray<FOrbitSplineSegmentBlock> UnusedBlocks;
+                SplineGeometryCache.Get(GravitySpline, SplineSampleSpacing, SplineMaxSegments, Centers, CurveUps, UnusedBlocks);
+                const int32 Sides = Centers.Num() > 4096 ? 4 : 8;
+                const int32 RingStride = Centers.Num() > 4096 ? 32 : 8;
+                TArray<FVector> Previous;
+                for (int32 I = 0; I < Centers.Num(); ++I)
+                {
+                    const FVector Tangent = (Centers[FMath::Min(I + 1, Centers.Num() - 1)] -
+                        Centers[FMath::Max(I - 1, 0)]).GetSafeNormal();
+                    FVector Right = FVector::CrossProduct(Tangent, CurveUps[I]).GetSafeNormal();
+                    if (Right.IsNearlyZero()) { Right = FVector::CrossProduct(Tangent, FVector::RightVector).GetSafeNormal(); }
+                    if (Right.IsNearlyZero()) { continue; }
+                    const FVector RingUp = FVector::CrossProduct(Right, Tangent).GetSafeNormal();
+                    TArray<FVector> Current;
+                    Current.Reserve(Sides);
+                    for (int32 Side = 0; Side < Sides; ++Side)
+                    {
+                        const double Angle = 2.0 * PI * Side / Sides;
+                        Current.Add(Centers[I] + (RingUp * FMath::Cos(Angle) + Right * FMath::Sin(Angle)) * Radius);
+                    }
+                    for (int32 Side = 0; Side < Sides; ++Side)
+                    {
+                        // Keep every longitudinal wire for bend fidelity; draw transverse
+                        // rings sparsely to avoid multiplying large splines by every side.
+                        if (I == 0 || I + 1 == Centers.Num() || I % RingStride == 0)
+                        {
+                            AddLine(Current[Side], Current[(Side + 1) % Sides], DistanceColor, MaxDistanceThickness);
+                        }
+                        if (Previous.Num() == Sides)
+                        {
+                            AddLine(Previous[Side], Current[Side], DistanceColor, MaxDistanceThickness);
+                        }
+                    }
+                    Previous = MoveTemp(Current);
+                }
+            }
+            break;
+        }
+    }
+    BoundarySelection->SetPreviewLines(MoveTemp(Lines));
+#endif // WITH_EDITORONLY_DATA
+}
+#endif // WITH_EDITOR
+
 void AOrbitGravitySource::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    if ((!bShowGravityPreview && !bShowStreamlines && !bShowVolumeBounds && !bShowMaxDistanceBoundary) || !GetWorld()) { return; }
+#if WITH_EDITOR
+    UpdateSelectableBounds();
+#endif
+    if (!GetWorld()) { return; }
+#if WITH_EDITOR
+    // In PIE/SIE, skip *all* debug drawing (including expensive spline tubes)
+    // unless the designer explicitly opts this source in. Do not affect the
+    // editor-world selectable boundaries or the gravity field snapshots.
+    if (GetWorld()->IsGameWorld() && !bShowDebugInGame) { return; }
+#endif
+    if (!bShowGravityPreview && !bShowStreamlines && !bShowVolumeBounds && !bShowMaxDistanceBoundary) { return; }
 #if WITH_EDITOR
 
     const FVector Origin = GetActorLocation();
@@ -298,7 +563,8 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
 
     // Show influence bounds independently from the vector preview. Use the same
     // dimensions and source rotation as the actual field evaluator.
-    if (bShowVolumeBounds)
+    const bool bSelectableEditorBounds = BoundarySelection && World->WorldType == EWorldType::Editor;
+    if (bShowVolumeBounds && !bSelectableEditorBounds)
     {
         if (Shape == EOrbitGravityShape::Volume)
         {
@@ -332,7 +598,7 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
     // Show the finite influence boundary even with preview arrows disabled.
     // Volumes use their selected local shape capped by MaxDistance, not an
     // unrelated spherical intersection. Other fields retain radial bounds.
-    if (bShowMaxDistanceBoundary && MaxDistance > 0.0)
+    if (bShowMaxDistanceBoundary && MaxDistance > 0.0 && !bSelectableEditorBounds)
     {
         const FColor BoundColor = bEnabled ? MaxDistanceColor.ToFColor(true) : FColor(110, 110, 110);
         const double Radius = MaxDistance;
@@ -376,40 +642,41 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
             break;
         }
         case EOrbitGravityShape::Spline:
-            if (GravitySpline && GravitySpline->GetSplineLength() > 1.0)
+            if (GravitySpline && GravitySpline->GetNumberOfSplinePoints() > 1)
             {
-                // A sampled wire tube around the authored centerline. The real
-                // field is evaluated against an interpolated polyline, so this
-                // wireframe is an approximation on strongly curved segments.
-                const double Length = GravitySpline->GetSplineLength();
-                const int32 RingCount = FMath::Clamp(FMath::CeilToInt(Length / FMath::Max(Radius * 0.5, 100.0)), 6, 48);
-                constexpr int32 RingSides = 16;
-                TArray<FVector> PreviousRing;
-                PreviousRing.Reserve(RingSides);
-                for (int32 RingIndex = 0; RingIndex <= RingCount; ++RingIndex)
+                TArray<FVector> Centers, CurveUps;
+                TArray<FOrbitSplineSegmentBlock> UnusedBlocks;
+                SplineGeometryCache.Get(GravitySpline, SplineSampleSpacing, SplineMaxSegments, Centers, CurveUps, UnusedBlocks);
+                const int32 Sides = Centers.Num() > 4096 ? 4 : 8;
+                const int32 RingStride = Centers.Num() > 4096 ? 32 : 8;
+                TArray<FVector> Previous;
+                for (int32 I = 0; I < Centers.Num(); ++I)
                 {
-                    const double Distance = Length * static_cast<double>(RingIndex) / RingCount;
-                    const FVector Center = GravitySpline->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
-                    const FVector Forward = GravitySpline->GetDirectionAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World).GetSafeNormal();
-                    const FVector SplineUp = GravitySpline->GetUpVectorAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World).GetSafeNormal();
-                    const FVector Right = FVector::CrossProduct(Forward, SplineUp).GetSafeNormal();
+                    const FVector Tangent = (Centers[FMath::Min(I + 1, Centers.Num() - 1)] -
+                        Centers[FMath::Max(I - 1, 0)]).GetSafeNormal();
+                    FVector Right = FVector::CrossProduct(Tangent, CurveUps[I]).GetSafeNormal();
+                    if (Right.IsNearlyZero()) { Right = FVector::CrossProduct(Tangent, FVector::RightVector).GetSafeNormal(); }
                     if (Right.IsNearlyZero()) { continue; }
-                    TArray<FVector> CurrentRing;
-                    CurrentRing.Reserve(RingSides);
-                    for (int32 Side = 0; Side < RingSides; ++Side)
+                    const FVector RingUp = FVector::CrossProduct(Right, Tangent).GetSafeNormal();
+                    TArray<FVector> Current;
+                    Current.Reserve(Sides);
+                    for (int32 Side = 0; Side < Sides; ++Side)
                     {
-                        const double Angle = 2.0 * PI * static_cast<double>(Side) / RingSides;
-                        CurrentRing.Add(Center + (SplineUp * FMath::Cos(Angle) + Right * FMath::Sin(Angle)) * Radius);
+                        const double Angle = 2.0 * PI * Side / Sides;
+                        Current.Add(Centers[I] + (RingUp * FMath::Cos(Angle) + Right * FMath::Sin(Angle)) * Radius);
                     }
-                    for (int32 Side = 0; Side < RingSides; ++Side)
+                    for (int32 Side = 0; Side < Sides; ++Side)
                     {
-                        DrawDebugLine(World, CurrentRing[Side], CurrentRing[(Side + 1) % RingSides], BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
-                        if (PreviousRing.Num() == RingSides && Side % 2 == 0)
+                        if (I == 0 || I + 1 == Centers.Num() || I % RingStride == 0)
                         {
-                            DrawDebugLine(World, PreviousRing[Side], CurrentRing[Side], BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
+                            DrawDebugLine(World, Current[Side], Current[(Side + 1) % Sides], BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
+                        }
+                        if (Previous.Num() == Sides)
+                        {
+                            DrawDebugLine(World, Previous[Side], Current[Side], BoundColor, false, DebugLifetime, 0, MaxDistanceThickness);
                         }
                     }
-                    PreviousRing = MoveTemp(CurrentRing);
+                    Previous = MoveTemp(Current);
                 }
             }
             break;
@@ -574,7 +841,7 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
         }
 
         const float Width = FMath::Clamp(StreamlineThickness, 0.5f, 4.0f);
-        const FColor CurveColor(194, 116, 250);
+        const FColor CurveColor = StreamlineColor.ToFColor(true);
         for (const TPair<FVector, FVector>& Segment : CachedStreamlineSegments)
         {
             DrawDebugLine(World, Segment.Key, Segment.Value, CurveColor, false, DebugLifetime, 0, Width);
@@ -585,7 +852,7 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
             {
                 const float MarkerLength = static_cast<float>((Arrow.Value - Arrow.Key).Size());
                 DrawDebugDirectionalArrow(World, Arrow.Key, Arrow.Value,
-                    FMath::Clamp(MarkerLength * 0.3f, 6.0f, 20.0f), FColor(244, 194, 255),
+                    FMath::Clamp(MarkerLength * 0.3f, 6.0f, 20.0f), StreamlineColor.ToFColor(true),
                     false, DebugLifetime, 0, Width + 0.4f);
             }
         }
@@ -723,7 +990,7 @@ void AOrbitGravitySource::Tick(float DeltaSeconds)
             }
             const float ActualLength = static_cast<float>(ArrowLength * SizeMultiplier);
             DrawDebugDirectionalArrow(World, Probe, Probe + Acceleration.GetSafeNormal() * ActualLength,
-                FMath::Clamp(ActualLength * 0.2f, 8.0f, 36.0f), FColor::Cyan, false, DebugLifetime, 0, 1.2f);
+                FMath::Clamp(ActualLength * 0.2f, 8.0f, 36.0f), PreviewArrowColor.ToFColor(true), false, DebugLifetime, 0, FMath::Max(0.1f, PreviewArrowThickness));
         }
     }
 #endif // WITH_EDITOR: visualization is a development tool, not shipped gameplay.

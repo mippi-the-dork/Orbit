@@ -942,4 +942,218 @@ bool FOrbit045RecreatePhysicsState::RunTest(const FString& Parameters)
     return true;
 }
 
+// Iteration 048: explicit preparation must not reuse an obsolete particle record
+// when the physics state is recreated *without* an intervening Orbit tick.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit048ImmediateParticleRecreation,
+    "Orbit.Physics.IntegrationWorld.ImmediateRecreatedParticlePreparation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit048ImmediateParticleRecreation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(0,0,700));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Body || !TestNotNull(TEXT("Subsystem"), Subsystem)) { return false; }
+    TestTrue(TEXT("Initial explicit claim succeeds"), Subsystem->PrepareSpawnedPhysicsBody(Body));
+    Body->RecreatePhysicsState();
+    TestTrue(TEXT("Replacement explicitly prepared without a world tick"),
+        Subsystem->PrepareSpawnedPhysicsBody(Body));
+    TestTrue(TEXT("Repeat preparation remains idempotent"),
+        Subsystem->PrepareSpawnedPhysicsBody(Body));
+    if (!Fixture.Step(15)) { return false; }
+    TestTrue(TEXT("Replacement receives gravity"), Body->GetPhysicsLinearVelocity().Z < -30.0);
+    return true;
+}
+
+// A disabled body must not be reported as Chaos-owned just because a record
+// remains from an earlier successful explicit preparation.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit048NoStaleDisabledClaim,
+    "Orbit.Physics.IntegrationWorld.DisabledBodyPreparationRejectsStaleClaim",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit048NoStaleDisabledClaim::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!Source) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Body = Fixture.Cube(FVector(0,0,700));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Body || !TestNotNull(TEXT("Subsystem"), Subsystem)) { return false; }
+    TestTrue(TEXT("Initial explicit claim succeeds"), Subsystem->PrepareSpawnedPhysicsBody(Body));
+    Body->SetSimulatePhysics(false);
+    TestFalse(TEXT("Disabled body cannot reuse a prior ownership claim"),
+        Subsystem->PrepareSpawnedPhysicsBody(Body));
+    TestFalse(TEXT("Disabled body has no managed record"),
+        Subsystem->IsOrbitManagedPhysicsBody(Body));
+    Body->SetSimulatePhysics(true);
+    Body->SetEnableGravity(true);
+    TestTrue(TEXT("Reenabled body can be prepared before a world tick"),
+        Subsystem->PrepareSpawnedPhysicsBody(Body));
+    return true;
+}
+
+// Iteration 050: the optional Receiver offers an explicit, bounded automatic
+// early-ownership lifecycle at its BeginPlay (not arbitrary component spawns).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit050ReceiverBeginPlayOwnership,
+    "Orbit.Physics.IntegrationWorld.ReceiverBeginPlayAutomaticPreparation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit050ReceiverBeginPlayOwnership::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Directional source"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+
+    UStaticMeshComponent* Mesh = Fixture.Cube(FVector(0,0,700));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Mesh || !TestNotNull(TEXT("World subsystem"), Subsystem)) { return false; }
+    // No Step() between mesh creation and Receiver registration. The actor
+    // is already playing, so RegisterComponent invokes Receiver BeginPlay.
+    TestFalse(TEXT("Fresh mesh not claimed before receiver opt-in"),
+        Subsystem->IsOrbitManagedPhysicsBody(Mesh));
+    AActor* Owner = Mesh->GetOwner();
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(
+        Owner, TEXT("OrbitAutoPreparationReceiver"));
+    if (!TestNotNull(TEXT("Receiver"), Receiver)) { return false; }
+    Receiver->bPreparePhysicsBodiesOnBeginPlay = true;
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    TestTrue(TEXT("Receiver began play"), Receiver->HasBegunPlay());
+    TestTrue(TEXT("Receiver synchronously prepared physics body without a world tick"),
+        Subsystem->IsOrbitManagedPhysicsBody(Mesh));
+    TestEqual(TEXT("Repreparation is idempotent"), Receiver->PreparePhysicsBodiesNow(), 1);
+    if (!Fixture.Step(25)) { return false; }
+    TestTrue(TEXT("Auto-prepared mesh accelerates in Chaos"),
+        Mesh->GetPhysicsLinearVelocity().Z < -30.0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit050ReceiverDefaultAndLatePreparation,
+    "Orbit.Physics.IntegrationWorld.ReceiverDefaultOffAndLatePreparation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit050ReceiverDefaultAndLatePreparation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Directional source"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Mesh = Fixture.Cube(FVector(0,0,700));
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Mesh || !TestNotNull(TEXT("World subsystem"), Subsystem)) { return false; }
+    AActor* Owner = Mesh->GetOwner();
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(
+        Owner, TEXT("OrbitManualPreparationReceiver"));
+    if (!TestNotNull(TEXT("Receiver"), Receiver)) { return false; }
+    TestFalse(TEXT("Receiver automatic ownership is opt-in"),
+        Receiver->bPreparePhysicsBodiesOnBeginPlay);
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    TestTrue(TEXT("Receiver began play"), Receiver->HasBegunPlay());
+    TestFalse(TEXT("Default receiver doesn't change physics ownership"),
+        Subsystem->IsOrbitManagedPhysicsBody(Mesh));
+    TestEqual(TEXT("Explicit late preparation works without a tick"),
+        Receiver->PreparePhysicsBodiesNow(), 1);
+    TestTrue(TEXT("Late prepared mesh is owned"),
+        Subsystem->IsOrbitManagedPhysicsBody(Mesh));
+    Mesh->SetSimulatePhysics(false);
+    TestEqual(TEXT("Disabled body cannot use stale ownership"),
+        Receiver->PreparePhysicsBodiesNow(), 0);
+    return true;
+}
+
+// Iteration 051: opt-in Pre-Physics monitoring for late body lifecycle changes.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit051ReceiverLateAddition,
+    "Orbit.Physics.IntegrationWorld.ReceiverAutoPrepareLateAddition",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit051ReceiverLateAddition::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Directional source"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Mesh = Fixture.Cube(FVector(0,0,700));
+    if (!TestNotNull(TEXT("Late mesh"), Mesh)) { return false; }
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("World subsystem"), Subsystem)) { return false; }
+    AActor* Owner = Mesh->GetOwner();
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(
+        Owner, TEXT("OrbitLifecycleReceiver"));
+    if (!TestNotNull(TEXT("Receiver"), Receiver)) { return false; }
+    Receiver->bAutoPrepareChangedPhysicsBodies = true;
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    TestFalse(TEXT("BeginPlay preparation stays independently off"),
+        Receiver->bPreparePhysicsBodiesOnBeginPlay);
+    TestFalse(TEXT("Late body not yet claimed"), Subsystem->IsOrbitManagedPhysicsBody(Mesh));
+    // Directly exercise the Pre-Physics callback without a world step. A normal
+    // fixture tick cannot distinguish this path from the periodic discoverer.
+    Receiver->TickComponent(1.0f / 60.0f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("Lifecycle watch claims late body immediately on its tick"),
+        Subsystem->IsCurrentExperimentalBodyOwned(Mesh));
+    Receiver->TickComponent(1.0f / 60.0f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("Stable body remains owned after repeated watch"),
+        Subsystem->IsCurrentExperimentalBodyOwned(Mesh));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit051ReceiverSimulationRecreate,
+    "Orbit.Physics.IntegrationWorld.ReceiverAutoPrepareSimulationRecreate",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit051ReceiverSimulationRecreate::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Directional source"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Mesh = Fixture.Cube(FVector(0,0,700));
+    if (!TestNotNull(TEXT("Mesh"), Mesh)) { return false; }
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("World subsystem"), Subsystem)) { return false; }
+    AActor* Owner = Mesh->GetOwner();
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(
+        Owner, TEXT("OrbitRecreationReceiver"));
+    if (!TestNotNull(TEXT("Receiver"), Receiver)) { return false; }
+    Receiver->bAutoPrepareChangedPhysicsBodies = true;
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    Receiver->TickComponent(1.0f/60.0f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("Initially claimed"), Subsystem->IsCurrentExperimentalBodyOwned(Mesh));
+    Mesh->SetSimulatePhysics(false);
+    Mesh->SetSimulatePhysics(true);
+    Mesh->SetEnableGravity(true);
+    Receiver->TickComponent(1.0f/60.0f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("Recreated body is owned before normal world tick"),
+        Subsystem->IsCurrentExperimentalBodyOwned(Mesh));
+    Receiver->bAutoPrepareChangedPhysicsBodies = false;
+    TestFalse(TEXT("Lifecycle watch can be disabled independently"),
+        Receiver->bAutoPrepareChangedPhysicsBodies);
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

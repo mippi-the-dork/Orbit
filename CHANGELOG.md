@@ -1,3 +1,125 @@
+## 0.2.55 — Iteration 059: Spline Cache Update Policies
+
+- Configurable spline geometry validation frequency: Every Frame (legacy), Automatic, Interval, Manual.
+- New sources opt into Automatic; older serialized sources preserve legacy default.
+- Blueprint-callable Refresh Spline Gravity, common to Actors and Components.
+- Added update-policy and Details metadata tests. See `Docs/ITERATION_059.md`.
+
+# 0.2.54 — Iteration 058 Editor build fix
+
+- Correct the UE 5.8 PropertyEditor interface include to `IDetailGroup.h` (not `DetailGroup.h`).
+- No changes to gravity behavior, serialization, or editor layout logic.
+
+# 0.2.53 — Iteration 058 Editor build fix
+
+- Include `DetailGroup.h` in the source Details customization so the complete `IDetailGroup` API is available in UE 5.8 independent compilation units.
+- No changes to serialized properties, gravity behavior, or category/group arrangement.
+
+## 0.2.51 — Iteration 057
+- Added Show In Game (off by default) for source Actor debug previews in PIE/SIE; editor authoring visuals and gravity remain unchanged.
+- Added Details metadata/default regression checks and documentation.
+
+## 0.2.50 — Iteration 056: Gravity Source Details Panel UX
+
+- Reorganized the Actor and Component authoring categories, with primary gravity and affected-object settings first; specialized geometry, vortex and viewport diagnostics after.
+- Added field-specific tooltips for source properties, clarified Box Limit versus Volume Box and Max Distance versus Preview Extent.
+- Contextually hide inactive spline, Volume, inverse-square and vortex settings instead of leaving them as unrelated editable controls. The values remain saved.
+- Preserved property identities, enum values, defaults, gravity evaluation, serialized migration and existing level behavior.
+- Added `Orbit.Editor.Details.SourcePresentationMetadata` and `Docs/DETAILS_PANEL_UX.md`.
+- Unreal Editor build and packaging not yet verified.
+
+## 0.2.49 — Iteration 055 editor compile fix
+
+- Use the UE 5.8 PropertyEditor public header `PropertyHandle.h` rather than the nonexistent `IPropertyHandle.h` in the spline-only Gravity Direction Details customization.
+- No gravity, runtime, spline cache, editor behavior or serialized-property changes.
+- UE 5.8.3 editor compilation, plugin packaging, and tests require validation in Unreal.
+
+## 0.2.48 — Iteration 055
+- Hide tangent-only Gravity Direction choices for non-spline fields in both source Details panels; shape-switch fallback with Undo/Redo and runtime guard.
+
+## 0.2.47 — Iteration 054: Spline snapshot reuse and tangent flow
+
+- Reuse unchanged spline sample buffers across runtime field snapshots rather than copying every frame; invalidate correctly when spline or sampling changes.
+- Add **Along Spline Tangent** and **Reverse Spline Tangent** gravity direction options (appended serialized enum values).
+- Add spline direction and immutable-buffer reuse automation tests.
+- UE packaging and gameplay profiling require validation.
+
+## 0.2.46 — Iteration 053 Win64 packaging hotfix
+
+- Include `UObject/WeakObjectPtr.h` explicitly in `OrbitSplineSampling.h` so `TWeakObjectPtr<USplineComponent>` has a complete weak-pointer base when this public runtime header is compiled by standalone UnrealGame and OrbitMover targets.
+- No spline sampling, gravity, caching, spatial-query, debugging, or serialized property changes.
+- Native UE 5.8.3 packaging and automation validation pending.
+
+## 0.2.45 — Iteration 053: Spline performance
+
+- Cache adaptive spline sample geometry; invalidate on authored position/tangent/rotation, world transform and sampling settings changes.
+- Preserve immutable field snapshots and existing non-accelerated authored test definitions.
+- Add exact nearest-segment AABB block pruning with consistent tie-breaking.
+- Reuse samples in boundary preview; reduce tube sides/ring frequency for >4096 points without losing centerline detail.
+- Add cache invalidation, nearest-point parity, and diagnostic timing native automation tests.
+
+## 0.2.44 — Iteration 052 packaging hotfix
+
+- Fix UE 5.8 Win64 UnrealGame compile error C2672 in `OrbitFieldTests.cpp`: use `GetTransientPackageAsObject()` for the new spline test fixture `NewObject` outer instead of passing `UPackage*` to an API requiring `UObject*`.
+- No spline sampling, editor-preview, gravity behavior, or serialized property changes.
+- UE 5.8.3 packaging and native automation remain to be verified in Unreal.
+
+## 0.2.43 — Iteration 052 (long spline sampling and boundary parity)
+
+- Adaptive world-space sampling shared by Actor and Component spline gravity sources.
+- Long/tight spline bounds now render along evaluator samples rather than 48 global rings.
+- Additive per-source SplineMaxSegments control (8192 default); regression for 824 knots, world-space scale, radius.
+- See Docs/ITERATION_052.md for constraints and performance notes.
+
+## 0.2.42 — Iteration 051 — Opt-in late-body lifecycle watch
+
+- Add Receiver option **Auto Prepare Changed Physics Bodies** (default off). Its Pre-Physics tick detects eligible new or recreated Static Mesh physics bodies and prepares Experimental Chaos ownership without repeated snapshot work for already-owned particles.
+- Keep BeginPlay preparation and manual preparation APIs independent; preserve Standard fallback and other existing settings.
+- Add two isolated live Chaos integration tests for pre-physics late discovery and particle recreation. No synchronous registration interception or skeletal ownership is claimed.
+- Full Win64 packaging and native UE tests require user verification.
+
+## 0.2.41 — Iteration 050 — Opt-in Receiver BeginPlay preparation
+
+- Add `Prepare Owner Physics Bodies On BeginPlay` to Orbit Gravity Receiver components, default **off**. When enabled, registered simulating Static Mesh bodies are synchronously prepared at the receiver's `BeginPlay`, including multiple independent components on one Actor.
+- Add Blueprint-callable `PreparePhysicsBodiesNow()` on the receiver for later configuration, simulated-component creation, or physics state recreation; the existing world-subsystem preparation APIs remain available.
+- Preserve Standard as the default; Experimental and project early-ownership opt-ins remain required. Ineligible fields, channel mismatches and unsupported skeletal bodies retain existing fallback.
+- Add live Chaos regression tests for automatic receiver preparation before a tick and default-off/manual late preparation.
+- This is a narrow, deterministic opt-in path, **not** a general guarantee for arbitrary runtime spawns, components registered after BeginPlay, or a physics step that occurred before registration.
+- UE 5.8.3 compile, editor automation and BuildPlugin packaging are not executable in this environment and require user verification.
+
+## 0.2.40 — Iteration 049 packaging hotfix
+
+- Fix Win64 non-editor packaging error C2039 in `OrbitGravitySource.cpp`: `UpdateSelectableBounds()` now has the same `#if WITH_EDITOR` compilation guard as its declaration and call sites.
+- Keep the selectable box, volume, and max-distance boundary wireframe exclusive to Unreal Editor; preserve the existing PIE debug drawing and runtime gravity calculations.
+- No authoring property changes, saved-asset migrations, or physics behavior changes.
+- UE 5.8.3 BuildPlugin packaging and viewport hit-testing still require external verification.
+
+## 0.2.39 — Iteration 049 — Selectable editor bounds and visualization controls
+
+- Add editable color and thickness for vector-preview arrows, and streamline color (streamline thickness was already exposed).
+- Draw the limit-box, volume outline and finite max-distance boundary through a **non-colliding editor-only primitive scene proxy**, allowing selection of the source Actor by clicking the visible boundary lines.
+- Use the same converted dual-corner positions, source rotation, and effective volume bounds as the existing debug visualization.
+- Do not draw duplicate debug lines in the editor when the selectable primitive is active; retain DrawDebug behavior in PIE.
+- Leave Standard and Experimental gravity calculations unchanged and preserve all previous serialized authoring values.
+- Unreal Editor click hit-testing and Windows plugin packaging are pending validation in UE 5.8.3.
+
+## 0.2.38 — Iteration 048 — Immediate Chaos ownership revalidation
+
+- Fix an explicit preparation lifecycle gap: calling `PrepareSpawnedPhysicsBody` immediately after `RecreatePhysicsState`, without a world tick, now verifies the current Chaos particle rather than reporting success from a stale record.
+- When a previously owned particle is replaced, release its stale mask/record and attempt a fresh explicit claim in the same call. Do not restore the obsolete gravity group onto the replacement particle.
+- Reject an explicitly prepared body if simulation was disabled, even when a prior ownership record still exists. Re-enabling simulation permits explicit reacquisition.
+- Preserve Standard-owned bodies rather than discarding their bookkeeping during an Experimental preparation request.
+- Added two editor-only live Chaos tests: `ImmediateRecreatedParticlePreparation` and `DisabledBodyPreparationRejectsStaleClaim`.
+- Automatic first-step handling of arbitrary spawns and multi-particle skeletal ownership remain unsupported; no promises of parity were added.
+
+**Verification:** Source-level checks and ZIP integrity checks only. UE 5.8.3 compilation, packaged-plugin build and automated tests pending.
+
+## v0.2.37 — Iteration 047 packaging hotfix
+
+- Restrict the editor-only Details metadata automation test to builds with editor-only data.
+- Fix UnrealGame Win64 Development packaging errors C2039 and C2661 in OrbitFieldTests.cpp.
+- Preserve runtime physics, volume direction defaults, and serialized properties unchanged.
+
 ## v0.2.36 — Iteration 047
 
 - Clarify Volume direction precedence in Actor and Component Details by disabling Field Direction for nonlegacy Volume modes without resetting it.

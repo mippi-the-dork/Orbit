@@ -90,6 +90,10 @@ public:
      *  Used to avoid modifying Character Movement's interactions with unrelated bodies. */
     bool IsOrbitManagedPhysicsBody(const UPrimitiveComponent* Component) const;
 
+    /** True only when an eligible component is managed by the SAME live Chaos
+     *  particle. Used by the Receiver's opt-in Pre-Physics lifecycle watch. */
+    bool IsCurrentExperimentalBodyOwned(UPrimitiveComponent* Component) const;
+
     /** Retrieve measured, read-only runtime physics diagnostics for a single simulated primitive.
      *  Unlike transient viewport text, this is inspectable while paused in PIE.
      *  Requires that Orbit discovered and manages this primitive. */

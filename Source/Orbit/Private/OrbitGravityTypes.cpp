@@ -211,7 +211,7 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
     {
         int32 Segment = INDEX_NONE;
         double Alpha = 0.0;
-        const FVector Closest = ClosestOnCurve(Field.Curve, Position, Segment, Alpha);
+        const FVector Closest = OrbitClosestOnCurveAccelerated(Field.Curve, Field.CurveBlocks, Position, Segment, Alpha);
         if (Segment == INDEX_NONE) { return false; }
         const FVector Radial = Position - Closest;
         Distance = Radial.Size();
@@ -220,6 +220,14 @@ bool FOrbitFieldEvaluator::Evaluate(const FOrbitFieldDefinition& Field, const FV
         {
             const FVector Tangent = (Field.Curve[Segment + 1] - Field.Curve[Segment]).GetSafeNormal();
             ClockwiseTangent = FVector::CrossProduct(Direction, Tangent);
+        }
+        if ((Field.Direction == EOrbitGravityDirection::SplineTangent ||
+             Field.Direction == EOrbitGravityDirection::SplineReverseTangent) && Field.Curve.IsValidIndex(Segment + 1))
+        {
+            // The sampled polyline is already in world space (including Actor and component scale).
+            // Tangent is determined at the nearest segment, not from the source Actor's axes.
+            Direction = (Field.Curve[Segment + 1] - Field.Curve[Segment]).GetSafeNormal();
+            if (Field.Direction == EOrbitGravityDirection::SplineReverseTangent) { Direction *= -1.0; }
         }
         if ((Field.Direction == EOrbitGravityDirection::SplineUp || Field.Direction == EOrbitGravityDirection::SplineDown) && Field.CurveUp.IsValidIndex(Segment + 1))
         {
@@ -312,7 +320,7 @@ bool FOrbitFieldEvaluator::EvaluateForBody(const FOrbitFieldDefinition& Field,
     {
         int32 Segment = INDEX_NONE;
         double Alpha = 0.0;
-        const FVector Closest = ClosestOnCurve(Field.Curve, Position, Segment, Alpha);
+        const FVector Closest = OrbitClosestOnCurveAccelerated(Field.Curve, Field.CurveBlocks, Position, Segment, Alpha);
         if (Segment == INDEX_NONE || !Field.Curve.IsValidIndex(Segment + 1)) { return true; }
         Axis = (Field.Curve[Segment + 1] - Field.Curve[Segment]).GetSafeNormal();
         if (Axis.IsNearlyZero()) { return true; }
@@ -371,7 +379,7 @@ static double OrbitCompetitionDistance(const FOrbitFieldDefinition& Field, const
     {
         int32 Segment = INDEX_NONE;
         double Alpha = 0.0;
-        const FVector Closest = FOrbitFieldEvaluator::ClosestOnCurve(Field.Curve, Position, Segment, Alpha);
+        const FVector Closest = OrbitClosestOnCurveAccelerated(Field.Curve, Field.CurveBlocks, Position, Segment, Alpha);
         return Segment == INDEX_NONE ? TNumericLimits<double>::Max() : FVector::Dist(Position, Closest);
     }
     return FVector::Dist(Position, Field.Center);

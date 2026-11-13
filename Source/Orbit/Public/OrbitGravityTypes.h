@@ -1,7 +1,20 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "OrbitSplineSampling.h"
 #include "OrbitGravityTypes.generated.h"
+
+/** Select when Orbit validates an authored spline against its cached geometry.
+ * Legacy is the default for old serialized actors/components that predate this property.
+ */
+UENUM(BlueprintType)
+enum class EOrbitSplineUpdateMode : uint8
+{
+    EveryFrame UMETA(DisplayName="Every Frame (Legacy)"),
+    Automatic UMETA(DisplayName="Automatic (Recommended)"),
+    Interval UMETA(DisplayName="Interval"),
+    Manual UMETA(DisplayName="Manual")
+};
 
 UENUM(BlueprintType)
 enum class EOrbitGravityShape : uint8
@@ -22,8 +35,26 @@ enum class EOrbitGravityDirection : uint8
     SplineDown UMETA(DisplayName="Spline Down (Oriented)"),
     /** Appended to retain existing serialized enum values for SplineUp/SplineDown. */
     VortexInward UMETA(DisplayName="Vortex Inward"),
-    VortexOutward UMETA(DisplayName="Vortex Outward")
+    VortexOutward UMETA(DisplayName="Vortex Outward"),
+    /** For spline sources only: acceleration follows the closest sampled segment direction. */
+    SplineTangent UMETA(DisplayName="Along Spline Tangent"),
+    /** For spline sources only: acceleration opposes the closest sampled segment direction. */
+    SplineReverseTangent UMETA(DisplayName="Reverse Spline Tangent")
 };
+
+/** Spline tangent modes have no meaningful interpretation for non-spline shapes. */
+inline bool OrbitIsSplineTangentDirection(EOrbitGravityDirection Direction)
+{
+    return Direction == EOrbitGravityDirection::SplineTangent ||
+        Direction == EOrbitGravityDirection::SplineReverseTangent;
+}
+
+/** Used by both source types and the editor Details picker. Keeps legacy enum values intact. */
+inline EOrbitGravityDirection OrbitDirectionForShape(EOrbitGravityShape Shape, EOrbitGravityDirection Direction)
+{
+    return Shape != EOrbitGravityShape::Spline && OrbitIsSplineTangentDirection(Direction)
+        ? EOrbitGravityDirection::Inward : Direction;
+}
 
 /** How a physics-simulated body responds to inward vortex fields. */
 UENUM(BlueprintType)
@@ -140,6 +171,8 @@ struct ORBIT_API FOrbitFieldDefinition
     double VolumeHalfHeight = 1000.0;
     TArray<FVector> Curve;
     TArray<FVector> CurveUp;
+    /** Immutable AABB blocks for exact fast nearest-spline queries. Optional for authored test fields. */
+    TArray<FOrbitSplineSegmentBlock> CurveBlocks;
     double Strength = 980.0;
     /** Signed tangent-to-radial acceleration ratio. + = clockwise looking along -local Z (or -spline tangent). */
     double VortexSpin = 1.0;

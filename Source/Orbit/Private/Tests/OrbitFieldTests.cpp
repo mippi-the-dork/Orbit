@@ -1,6 +1,8 @@
 #include "OrbitGravityTypes.h"
 #include "OrbitGravitySource.h"
 #include "OrbitGravitySourceComponent.h"
+#include "OrbitSplineSampling.h"
+#include "Components/SplineComponent.h"
 #include "OrbitCharacterControlsComponent.h"
 #include "OrbitGravityAnimInstance.h"
 #include "OrbitPhysicsRestMath.h"
@@ -11,6 +13,33 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "UObject/UnrealType.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineDirectionShapePolicyTest,
+    "Orbit.Field.SplineDirectionShapePolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineDirectionShapePolicyTest::RunTest(const FString& Parameters)
+{
+    const EOrbitGravityDirection Both[] = {
+        EOrbitGravityDirection::SplineTangent, EOrbitGravityDirection::SplineReverseTangent
+    };
+    for (EOrbitGravityDirection Direction : Both)
+    {
+        TestEqual(TEXT("Spline retains tangent direction"),
+            OrbitDirectionForShape(EOrbitGravityShape::Spline, Direction), Direction);
+        for (EOrbitGravityShape Shape : { EOrbitGravityShape::Point, EOrbitGravityShape::Axis,
+                 EOrbitGravityShape::Directional, EOrbitGravityShape::Volume })
+        {
+            TestEqual(TEXT("Non-spline tangent resets to inward"),
+                OrbitDirectionForShape(Shape, Direction), EOrbitGravityDirection::Inward);
+        }
+    }
+    TestEqual(TEXT("Existing outward option remains for point"),
+        OrbitDirectionForShape(EOrbitGravityShape::Point, EOrbitGravityDirection::Outward),
+        EOrbitGravityDirection::Outward);
+    TestEqual(TEXT("Existing spline-up option remains unchanged"),
+        OrbitDirectionForShape(EOrbitGravityShape::Point, EOrbitGravityDirection::SplineUp),
+        EOrbitGravityDirection::SplineUp);
+    return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitPointGravityTest, "Orbit.Field.PointInwardOutward", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FOrbitPointGravityTest::RunTest(const FString& Parameters)
@@ -52,6 +81,262 @@ bool FOrbitSplineGravityTest::RunTest(const FString& Parameters)
     FVector Force;
     TestTrue(TEXT("Spline segment influences location"), FOrbitFieldEvaluator::Evaluate(Source, FVector(500.0, 200.0, 0.0), Force));
     TestTrue(TEXT("Spline attraction is perpendicular to its closest segment"), Force.Equals(FVector(0.0, -980.0, 0.0), 0.0001));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineTangentDirectionsTest,
+    "Orbit.Field.SplineTangentDirections", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineTangentDirectionsTest::RunTest(const FString& Parameters)
+{
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Spline;
+    Field.Strength = 400.0;
+    Field.MaxDistance = 200.0;
+    Field.Curve = {FVector(0, 0, 0), FVector(1000, 0, 0), FVector(1000, 1000, 0)};
+    FVector Acceleration;
+    Field.Direction = EOrbitGravityDirection::SplineTangent;
+    TestTrue(TEXT("Forward tangent participates in field"), FOrbitFieldEvaluator::Evaluate(Field, FVector(400, 100, 0), Acceleration));
+    TestTrue(TEXT("Forward tangent follows first segment"), Acceleration.Equals(FVector(400, 0, 0), 0.01));
+    TestTrue(TEXT("Forward tangent follows second segment"), FOrbitFieldEvaluator::Evaluate(Field, FVector(1100, 650, 0), Acceleration));
+    TestTrue(TEXT("Second segment points positive Y"), Acceleration.Equals(FVector(0, 400, 0), 0.01));
+    Field.Direction = EOrbitGravityDirection::SplineReverseTangent;
+    TestTrue(TEXT("Reverse tangent participates in field"), FOrbitFieldEvaluator::Evaluate(Field, FVector(400, 100, 0), Acceleration));
+    TestTrue(TEXT("Reverse tangent opposes authored point order"), Acceleration.Equals(FVector(-400, 0, 0), 0.01));
+    TestFalse(TEXT("Radial Max Distance still clips tangent gravity"),
+        FOrbitFieldEvaluator::Evaluate(Field, FVector(400, 210, 0), Acceleration));
+    // World-space sampled vectors reflect uniform Actor/Component scale without changing the flow direction.
+    Field.Curve = { FVector(0, 0, 0), FVector(3000, 0, 0) };
+    TestTrue(TEXT("Uniformly scaled spline still evaluates"), FOrbitFieldEvaluator::Evaluate(Field, FVector(1400, 80, 0), Acceleration));
+    TestTrue(TEXT("Uniform scale preserves reverse tangent"), Acceleration.Equals(FVector(-400, 0, 0), 0.01));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineSnapshotReuseTest,
+    "Orbit.Field.SplineSnapshotReuse", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineSnapshotReuseTest::RunTest(const FString& Parameters)
+{
+    USplineComponent* Spline = NewObject<USplineComponent>(GetTransientPackageAsObject());
+    const TArray<FVector> Authored = {FVector(0, 0, 0), FVector(1000, 0, 0), FVector(1500, 300, 0)};
+    Spline->SetSplinePoints(Authored, ESplineCoordinateSpace::Local, true);
+    FOrbitSplineSampleCache Cache;
+    TArray<FVector> Curve, Ups;
+    TArray<FOrbitSplineSegmentBlock> Blocks;
+    Cache.Get(Spline, 40.0, 4096, Curve, Ups, Blocks);
+    TestTrue(TEXT("Cache initially populated"), Curve.Num() > 3);
+    if (Curve.Num() <= 3) { return false; }
+    const FVector* ExistingBuffer = Curve.GetData();
+    Cache.Get(Spline, 40.0, 4096, Curve, Ups, Blocks, true);
+    TestTrue(TEXT("Unchanged snapshot retains exact point allocation"), Curve.GetData() == ExistingBuffer);
+    const uint64 PreviousRebuilds = Cache.GetRebuildCount();
+    Spline->SetWorldScale3D(FVector(2.0));
+    Cache.Get(Spline, 40.0, 4096, Curve, Ups, Blocks, true);
+    TestEqual(TEXT("Scale invalidates snapshot"), Cache.GetRebuildCount(), PreviousRebuilds + 1);
+    TestTrue(TEXT("Rebuilt snapshot follows world-space scale"), Curve.Last().Equals(FVector(3000, 600, 0), 0.1));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineUpdatePolicyTest,
+    "Orbit.Field.SplineUpdatePolicies", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineUpdatePolicyTest::RunTest(const FString& Parameters)
+{
+    // Legacy CDO defaults preserve saved sources that predate the update-mode property.
+    TestEqual(TEXT("Actor legacy default"), GetDefault<AOrbitGravitySource>()->SplineUpdateMode,
+        EOrbitSplineUpdateMode::EveryFrame);
+    TestEqual(TEXT("Component legacy default"), GetDefault<UOrbitGravitySourceComponent>()->SplineUpdateMode,
+        EOrbitSplineUpdateMode::EveryFrame);
+    USplineComponent* Spline = NewObject<USplineComponent>(GetTransientPackageAsObject());
+    Spline->SetSplinePoints({FVector::ZeroVector, FVector(300, 0, 0), FVector(600, 200, 0)},
+        ESplineCoordinateSpace::Local, true);
+    FOrbitSplineSampleCache Cache;
+    TArray<FVector> Points, Ups;
+    TArray<FOrbitSplineSegmentBlock> Blocks;
+    Cache.Get(Spline, 40.0, 2048, Points, Ups, Blocks, false, 100.0);
+    const uint64 InitialBuilds = Cache.GetRebuildCount();
+    Spline->SetLocationAtSplinePoint(1, FVector(300, 400, 0), ESplineCoordinateSpace::Local, true);
+    Cache.Get(Spline, 40.0, 2048, Points, Ups, Blocks, true, 100.0);
+    TestEqual(TEXT("Interval defers authored point changes"), Cache.GetRebuildCount(), InitialBuilds);
+    // A source may explicitly invalidate the cache immediately after procedural edits.
+    Cache.Invalidate();
+    Cache.Get(Spline, 40.0, 2048, Points, Ups, Blocks, true, 100.0, true);
+    TestEqual(TEXT("Explicit refresh immediately rebuilds in manual mode"), Cache.GetRebuildCount(), InitialBuilds + 1);
+    Spline->SetLocationAtSplinePoint(1, FVector(300, 800, 0), ESplineCoordinateSpace::Local, true);
+    Cache.Get(Spline, 40.0, 2048, Points, Ups, Blocks, true, 0.0, true);
+    TestEqual(TEXT("Manual skips authored edits without refresh"), Cache.GetRebuildCount(), InitialBuilds + 1);
+    Spline->SetWorldScale3D(FVector(2.0));
+    Cache.Get(Spline, 40.0, 2048, Points, Ups, Blocks, true, 0.0, true);
+    TestEqual(TEXT("All modes respond to transform changes"), Cache.GetRebuildCount(), InitialBuilds + 2);
+    Spline->SetLocationAtSplinePoint(1, FVector(300, 900, 0), ESplineCoordinateSpace::Local, true);
+    Cache.Get(Spline, 40.0, 2048, Points, Ups, Blocks, true, 0.0);
+    TestEqual(TEXT("Legacy every-frame detects an authored change"), Cache.GetRebuildCount(), InitialBuilds + 3);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineAdaptiveWorldScaleTest,
+    "Orbit.Field.SplineAdaptiveWorldScale", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineAdaptiveWorldScaleTest::RunTest(const FString& Parameters)
+{
+    USplineComponent* Spline = NewObject<USplineComponent>(GetTransientPackageAsObject());
+    TArray<FVector> Authored;
+    constexpr int32 KnotCount = 824;
+    for (int32 Index = 0; Index < KnotCount; ++Index)
+    {
+        const double X = static_cast<double>(Index) * 200.0;
+        const double Y = FMath::Sin(Index * 0.14) * 325.0;
+        Authored.Add(FVector(X, Y, 0.0));
+    }
+    Spline->SetSplinePoints(Authored, ESplineCoordinateSpace::Local, true);
+    TArray<FVector> UnitPoints, UnitUps;
+    FOrbitSplineSampling::Build(Spline, 50.0, 8192, UnitPoints, UnitUps);
+    if (UnitPoints.IsEmpty()) { AddError(TEXT("Adaptive sampler returned no points")); return false; }
+    TestTrue(TEXT("824 input knots are preserved"), UnitPoints.Num() >= KnotCount);
+    TestTrue(TEXT("Long curved spline is not restricted to 2048 segments"), UnitPoints.Num() > 2049);
+    TestEqual(TEXT("Curve and up arrays aligned"), UnitPoints.Num(), UnitUps.Num());
+    TestTrue(TEXT("Curve starts at first authored point"), UnitPoints[0].Equals(Authored[0], 0.1));
+    TestTrue(TEXT("Curve ends at last authored point"), UnitPoints.Last().Equals(Authored.Last(), 0.1));
+
+    Spline->SetWorldScale3D(FVector(3.0));
+    TArray<FVector> ScaledPoints, ScaledUps;
+    FOrbitSplineSampling::Build(Spline, 50.0, 8192, ScaledPoints, ScaledUps);
+    if (ScaledPoints.IsEmpty()) { AddError(TEXT("Scaled adaptive sampler returned no points")); return false; }
+    TestTrue(TEXT("Uniform scale increases sample density at fixed world-space spacing"),
+        ScaledPoints.Num() >= UnitPoints.Num());
+    TestTrue(TEXT("World-space start follows uniform scale"), ScaledPoints[0].Equals(Authored[0] * 3.0, 0.1));
+    TestTrue(TEXT("World-space end follows uniform scale"), ScaledPoints.Last().Equals(Authored.Last() * 3.0, 0.1));
+
+    // Curve evaluation and preview both consume the same world-space sample arrays.
+    FOrbitFieldDefinition Field;
+    Field.Shape = EOrbitGravityShape::Spline;
+    Field.Direction = EOrbitGravityDirection::Outward;
+    Field.MaxDistance = 500.0;
+    Field.Curve = ScaledPoints;
+    Field.CurveUp = ScaledUps;
+    FVector Force;
+    TestTrue(TEXT("Scaled spline influences a point near its centerline"),
+        FOrbitFieldEvaluator::Evaluate(Field, Authored[0] * 3.0 + FVector(0.0, 0.0, 100.0), Force));
+    TestTrue(TEXT("Outward gravity points away from sampled world centerline"), Force.Z > 0.0);
+    TestFalse(TEXT("Finite max distance excludes distant world-space points"),
+        FOrbitFieldEvaluator::Evaluate(Field, Authored[0] * 3.0 + FVector(0.0, 0.0, 700.0), Force));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineCacheInvalidationTest,
+    "Orbit.Field.SplineCacheInvalidation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineCacheInvalidationTest::RunTest(const FString& Parameters)
+{
+    USplineComponent* Spline = NewObject<USplineComponent>(GetTransientPackageAsObject());
+    Spline->SetSplinePoints({FVector::ZeroVector, FVector(500, 0, 0), FVector(1000, 200, 0)},
+        ESplineCoordinateSpace::Local, true);
+    FOrbitSplineSampleCache Cache;
+    TArray<FVector> Points, Ups;
+    TArray<FOrbitSplineSegmentBlock> Blocks;
+    Cache.Get(Spline, 50.0, 1024, Points, Ups, Blocks);
+    TestEqual(TEXT("First read generates geometry once"), Cache.GetRebuildCount(), uint64(1));
+    const FVector OriginalEndpoint = Points.Last();
+    Cache.Get(Spline, 50.0, 1024, Points, Ups, Blocks);
+    TestEqual(TEXT("Unchanged geometry reuses sampling"), Cache.GetRebuildCount(), uint64(1));
+    Spline->SetWorldScale3D(FVector(2.0));
+    Cache.Get(Spline, 50.0, 1024, Points, Ups, Blocks);
+    TestEqual(TEXT("World scale invalidates cache"), Cache.GetRebuildCount(), uint64(2));
+    TestTrue(TEXT("Scale updates world-space endpoint"), Points.Last().Equals(OriginalEndpoint * 2.0, 0.1));
+    Spline->SetLocationAtSplinePoint(1, FVector(500, 400, 0), ESplineCoordinateSpace::Local, true);
+    Cache.Get(Spline, 50.0, 1024, Points, Ups, Blocks);
+    TestEqual(TEXT("Spline point change invalidates cache"), Cache.GetRebuildCount(), uint64(3));
+    Cache.Get(Spline, 25.0, 1024, Points, Ups, Blocks);
+    TestEqual(TEXT("Sample spacing change invalidates cache"), Cache.GetRebuildCount(), uint64(4));
+    Cache.Get(Spline, 25.0, 2048, Points, Ups, Blocks);
+    TestEqual(TEXT("Segment budget change invalidates cache"), Cache.GetRebuildCount(), uint64(5));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineAcceleratedParityTest,
+    "Orbit.Field.SplineAcceleratedNearestParity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineAcceleratedParityTest::RunTest(const FString& Parameters)
+{
+    USplineComponent* Spline = NewObject<USplineComponent>(GetTransientPackageAsObject());
+    TArray<FVector> Points;
+    for (int32 I = 0; I < 824; ++I)
+    {
+        const double T = static_cast<double>(I) * 0.10;
+        Points.Add(FVector(I * 130.0, FMath::Sin(T) * 250.0, FMath::Cos(T * 0.3) * 160.0));
+    }
+    Spline->SetSplinePoints(Points, ESplineCoordinateSpace::Local, true);
+    FOrbitSplineSampleCache Cache;
+    TArray<FVector> Curve, Ups;
+    TArray<FOrbitSplineSegmentBlock> Blocks;
+    Cache.Get(Spline, 70.0, 8192, Curve, Ups, Blocks);
+    TestTrue(TEXT("Acceleration contains enough data to prune"), Blocks.Num() > 4);
+    for (int32 I = 0; I < 96; ++I)
+    {
+        const int32 Knot = (I * 37) % 824;
+        const FVector Query = Points[Knot] + FVector(115.0, FMath::Sin(I * 0.71) * 850.0, FMath::Cos(I * 0.49) * 700.0);
+        int32 BruteSegment = INDEX_NONE, FastSegment = INDEX_NONE;
+        double BruteAlpha = 0.0, FastAlpha = 0.0;
+        const FVector Brute = FOrbitFieldEvaluator::ClosestOnCurve(Curve, Query, BruteSegment, BruteAlpha);
+        const FVector Fast = OrbitClosestOnCurveAccelerated(Curve, Blocks, Query, FastSegment, FastAlpha);
+        if (BruteSegment != FastSegment || !Brute.Equals(Fast, 0.001) || !FMath::IsNearlyEqual(BruteAlpha, FastAlpha, 1e-6))
+        {
+            AddError(FString::Printf(TEXT("Nearest result differs at probe %d: brute %d vs accelerated %d"), I, BruteSegment, FastSegment));
+            return false;
+        }
+    }
+    // Test fields without accelerated metadata must still evaluate as before.
+    int32 Segment = INDEX_NONE;
+    double Alpha = 0.0;
+    const FVector Fallback = OrbitClosestOnCurveAccelerated(Curve, {}, FVector(0, 100, 100), Segment, Alpha);
+    int32 ReferenceSegment = INDEX_NONE;
+    double ReferenceAlpha = 0.0;
+    TestTrue(TEXT("Unindexed fallback preserves nearest"),
+        Fallback.Equals(FOrbitFieldEvaluator::ClosestOnCurve(Curve, FVector(0, 100, 100), ReferenceSegment, ReferenceAlpha), 0.001));
+    TestEqual(TEXT("Unindexed fallback preserves segment"), Segment, ReferenceSegment);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitSplineQueryCostBaselineTest,
+    "Orbit.Field.SplineQueryCostBaseline", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitSplineQueryCostBaselineTest::RunTest(const FString& Parameters)
+{
+    USplineComponent* Spline = NewObject<USplineComponent>(GetTransientPackageAsObject());
+    TArray<FVector> Knots;
+    for (int32 I = 0; I < 824; ++I)
+    {
+        Knots.Add(FVector(I * 120.0, FMath::Sin(I * 0.14) * 325.0, FMath::Cos(I * 0.07) * 220.0));
+    }
+    Spline->SetSplinePoints(Knots, ESplineCoordinateSpace::Local, true);
+    FOrbitSplineSampleCache Cache;
+    TArray<FVector> Curve, Ups;
+    TArray<FOrbitSplineSegmentBlock> Blocks;
+    const double BuildStart = FPlatformTime::Seconds();
+    Cache.Get(Spline, 50.0, 8192, Curve, Ups, Blocks);
+    const double BuildMs = (FPlatformTime::Seconds() - BuildStart) * 1000.0;
+    const double WarmStart = FPlatformTime::Seconds();
+    for (int32 I = 0; I < 20; ++I) { Cache.Get(Spline, 50.0, 8192, Curve, Ups, Blocks); }
+    const double WarmMs = (FPlatformTime::Seconds() - WarmStart) * 1000.0;
+    TestEqual(TEXT("Stable spline built only once across 20 snapshots"), Cache.GetRebuildCount(), uint64(1));
+    TestTrue(TEXT("Benchmark spline contains multiple blocks"), Blocks.Num() > 4);
+    TArray<FVector> Queries;
+    for (int32 I = 0; I < 128; ++I)
+    {
+        Queries.Add(Knots[(I * 29) % 824] + FVector(110.0, 570.0, 230.0));
+    }
+    double Checksum = 0.0;
+    int32 Segment = INDEX_NONE;
+    double Alpha = 0.0;
+    const double LinearStart = FPlatformTime::Seconds();
+    for (const FVector& Query : Queries)
+    {
+        Checksum += FOrbitFieldEvaluator::ClosestOnCurve(Curve, Query, Segment, Alpha).X;
+    }
+    const double LinearMs = (FPlatformTime::Seconds() - LinearStart) * 1000.0;
+    const double IndexedStart = FPlatformTime::Seconds();
+    for (const FVector& Query : Queries)
+    {
+        Checksum -= OrbitClosestOnCurveAccelerated(Curve, Blocks, Query, Segment, Alpha).X;
+    }
+    const double IndexedMs = (FPlatformTime::Seconds() - IndexedStart) * 1000.0;
+    TestTrue(TEXT("Indexed and linear checksum agree"), FMath::Abs(Checksum) < 0.01);
+    AddInfo(FString::Printf(TEXT("Orbit spline perf (824 knots, %d sampled segments): initial build %.3f ms; 20 stable snapshots %.3f ms; 128 full scans %.3f ms; 128 bounded scans %.3f ms"),
+        Curve.Num() - 1, BuildMs, WarmMs, LinearMs, IndexedMs));
+    // Timing is diagnostic, not a CI gate (machines, optimizations and load vary).
     return true;
 }
 
@@ -884,6 +1169,8 @@ bool FOrbitPointSourceTransferTest::RunTest(const FString& Parameters)
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OrbitBlueprintLibrary.h"
 #include "OrbitGravitySourceComponent.h"
+#include "OrbitSplineSampling.h"
+#include "Components/SplineComponent.h"
 #include "UObject/UObjectGlobals.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitInfluenceCompetitionTest,
@@ -1989,6 +2276,32 @@ bool FOrbitVolumeDirectionModesTest::RunTest(const FString& Parameters)
     return true;
 }
 
+// Editor-only visualization settings must not require runtime assets or physics changes.
+#if WITH_EDITORONLY_DATA
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVisualizationAuthoringPolicyTest,
+    "Orbit.Field.VisualizationAuthoringPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitVisualizationAuthoringPolicyTest::RunTest(const FString& Parameters)
+{
+    const AOrbitGravitySource* Defaults = GetDefault<AOrbitGravitySource>();
+    TestNotNull(TEXT("Orbit source defaults available"), Defaults);
+    if (!Defaults) { return false; }
+    TestNotNull(TEXT("Editor boundary selection subobject exists"), Defaults->BoundarySelection.Get());
+    TestTrue(TEXT("Default arrow thickness positive"), Defaults->PreviewArrowThickness > 0.0f);
+    TestTrue(TEXT("Default streamline thickness positive"), Defaults->StreamlineThickness > 0.0f);
+    TestTrue(TEXT("Default box limit thickness positive"), Defaults->LimitBoxThickness > 0.0f);
+    TestTrue(TEXT("Default maximum distance thickness positive"), Defaults->MaxDistanceThickness > 0.0f);
+    for (FName Name : {FName(TEXT("PreviewArrowColor")), FName(TEXT("PreviewArrowThickness")),
+                       FName(TEXT("StreamlineColor")), FName(TEXT("StreamlineThickness"))})
+    {
+        TestNotNull(TEXT("Visualization setting is reflected"), AOrbitGravitySource::StaticClass()->FindPropertyByName(Name));
+    }
+    return true;
+}
+#endif // WITH_EDITORONLY_DATA
+
+// Property metadata is unavailable when the runtime module is packaged for UnrealGame.
+// This test validates editor Details metadata and must compile only with editor-only data.
+#if WITH_EDITORONLY_DATA
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVolumeDirectionDetailsPolicyTest,
     "Orbit.Field.VolumeDirectionDetailsPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FOrbitVolumeDirectionDetailsPolicyTest::RunTest(const FString& Parameters)
@@ -2017,6 +2330,8 @@ bool FOrbitVolumeDirectionDetailsPolicyTest::RunTest(const FString& Parameters)
     }
     return true;
 }
+
+#endif // WITH_EDITORONLY_DATA
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitVolumeDirectionPriorityParityTest,
     "Orbit.Field.VolumeDirectionPriorityParity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

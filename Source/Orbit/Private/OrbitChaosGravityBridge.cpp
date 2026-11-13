@@ -278,6 +278,12 @@ bool FOrbitChaosGravityBridge::TryGetMixedPointDirectionalFields(
             OutFields.Reset();
             return false;
         }
+        if (Field.Shape != EOrbitGravityShape::Spline &&
+            (Field.Direction == EOrbitGravityDirection::SplineTangent ||
+             Field.Direction == EOrbitGravityDirection::SplineReverseTangent))
+        {
+            OutFields.Reset(); return false;
+        }
         if (Field.Shape == EOrbitGravityShape::Point)
         {
             if (!FMath::IsFinite(Field.ReferenceDistance) || Field.ReferenceDistance <= 0.0)
@@ -350,7 +356,9 @@ bool FOrbitChaosGravityBridge::TryGetExpandedFields(
             (Field.Direction != EOrbitGravityDirection::Inward &&
              Field.Direction != EOrbitGravityDirection::Outward &&
              Field.Direction != EOrbitGravityDirection::SplineUp &&
-             Field.Direction != EOrbitGravityDirection::SplineDown && !bValidVortex))
+             Field.Direction != EOrbitGravityDirection::SplineDown &&
+             Field.Direction != EOrbitGravityDirection::SplineTangent &&
+             Field.Direction != EOrbitGravityDirection::SplineReverseTangent && !bValidVortex))
         {
             OutFields.Reset();
             return false;

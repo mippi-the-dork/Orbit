@@ -230,7 +230,22 @@ void UOrbitWorldSubsystem::UnregisterSourceComponent(UOrbitGravitySourceComponen
 
 void UOrbitWorldSubsystem::UpdateSourceSnapshot()
 {
-    ActiveFields.Reset();
+    TArray<FOrbitFieldDefinition> PreviousFields = MoveTemp(ActiveFields);
+    // Reuse array allocations only for the same live source ID. Moving retains
+    // immutable current snapshots while avoiding three large spline buffer copies/frame.
+    auto AppendSource = [this, &PreviousFields](auto* Source)
+    {
+        const int32 PreviousIndex = PreviousFields.IndexOfByPredicate(
+            [Source](const FOrbitFieldDefinition& Field) { return Field.SourceId == static_cast<int32>(Source->GetUniqueID()); });
+        FOrbitFieldDefinition& Definition = ActiveFields.AddDefaulted_GetRef();
+        const bool bHadPrevious = PreviousIndex != INDEX_NONE;
+        if (bHadPrevious)
+        {
+            Definition = MoveTemp(PreviousFields[PreviousIndex]);
+            PreviousFields.RemoveAtSwap(PreviousIndex);
+        }
+        Source->BuildDefinition(Definition, bHadPrevious);
+    };
     for (int32 Index = Sources.Num() - 1; Index >= 0; --Index)
     {
         AOrbitGravitySource* Source = Sources[Index].Get();
@@ -240,8 +255,7 @@ void UOrbitWorldSubsystem::UpdateSourceSnapshot()
         }
         else if (Source->bEnabled)
         {
-            FOrbitFieldDefinition& Definition = ActiveFields.AddDefaulted_GetRef();
-            Source->BuildDefinition(Definition);
+            AppendSource(Source);
         }
     }
     for (int32 Index = SourceComponents.Num() - 1; Index >= 0; --Index)
@@ -250,8 +264,7 @@ void UOrbitWorldSubsystem::UpdateSourceSnapshot()
         if (!IsValid(Source) || !Source->IsRegistered()) { SourceComponents.RemoveAtSwap(Index); }
         else if (Source->bEnabled)
         {
-            FOrbitFieldDefinition& Definition = ActiveFields.AddDefaulted_GetRef();
-            Source->BuildDefinition(Definition);
+            AppendSource(Source);
         }
     }
 }
@@ -493,14 +506,31 @@ bool UOrbitWorldSubsystem::PrepareSpawnedPhysicsBody(UPrimitiveComponent* Compon
     {
         return false;
     }
-    // Being managed by Standard is not proof of Experimental Chaos ownership.
-    // Never report success for a body currently routed through AddForce.
-    for (const FManagedBody& Body : ManagedBodies)
+    // Idempotence is valid only while the *same* Chaos particle is still owned.
+    // RecreatePhysicsState may replace the particle without changing the UObject,
+    // and gameplay may call Prepare again before Orbit's next world tick.
+    for (int32 Index = ManagedBodies.Num() - 1; Index >= 0; --Index)
     {
-        if (Body.Component.Get() == Component)
-        {
-            return Body.bExperimentalChaosGroupAssigned;
-        }
+        FManagedBody& Body = ManagedBodies[Index];
+        if (Body.Component.Get() != Component) { continue; }
+        // Standard owns native gravity through SetEnableGravity(false). Never
+        // silently discard that record or claim it as Experimental ownership.
+        if (!Body.bExperimentalChaosGroupAssigned) { return false; }
+        const bool bEligible = Component->IsRegistered() && Component->IsSimulatingPhysics() &&
+            Component->IsGravityEnabled() && !Component->ComponentHasTag(FName(TEXT("Orbit.Ignore")));
+        const bool bSameParticle = Body.bExperimentalChaosGroupAssigned &&
+            Body.ExperimentalChaosParticleId != INDEX_NONE &&
+            FOrbitChaosGravityBridge::IsCurrentParticle(Component, Body.ExperimentalChaosParticleId);
+        if (bEligible && bSameParticle) { return true; }
+
+        // Drop old ownership before trying to claim the replacement. Restoration
+        // checks identity, so an obsolete group cannot be written to a new particle.
+        RestoreBodyDamping(Body);
+        RestoreExperimentalBodyGroup(Body);
+        UnbindBodyEvents(Body);
+        ManagedBodies.RemoveAtSwap(Index);
+        if (!bEligible) { return false; }
+        break;
     }
     // A just-spawned source may have registered or changed since the previous tick.
     UpdateSourceSnapshot();
@@ -825,6 +855,23 @@ bool UOrbitWorldSubsystem::IsOrbitManagedPhysicsBody(const UPrimitiveComponent* 
 {
     return IsValid(Component) && Component->GetWorld() == GetWorld() &&
         HasManagedBody(Component);
+}
+
+bool UOrbitWorldSubsystem::IsCurrentExperimentalBodyOwned(UPrimitiveComponent* Component) const
+{
+    if (!IsValid(Component) || Component->GetWorld() != GetWorld() ||
+        !Component->IsRegistered() || !Component->IsSimulatingPhysics() ||
+        !Component->IsGravityEnabled()) { return false; }
+    for (const FManagedBody& Body : ManagedBodies)
+    {
+        if (Body.Component.Get() == Component)
+        {
+            return Body.bExperimentalChaosGroupAssigned &&
+                Body.ExperimentalChaosParticleId != INDEX_NONE &&
+                FOrbitChaosGravityBridge::IsCurrentParticle(Component, Body.ExperimentalChaosParticleId);
+        }
+    }
+    return false;
 }
 
 void UOrbitWorldSubsystem::ApplyPhysicsForces(float DeltaTime)

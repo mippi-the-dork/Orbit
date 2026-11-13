@@ -1,6 +1,7 @@
 #include "OrbitGravitySourceComponent.h"
 #include "OrbitWorldSubsystem.h"
 #include "Components/SplineComponent.h"
+#include "OrbitSplineSampling.h"
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
 
@@ -19,6 +20,32 @@ void UOrbitGravitySourceComponent::EnsureBoxCornersMigrated()
     bBoxCornersInitialized = true;
 }
 
+void UOrbitGravitySourceComponent::OnComponentCreated()
+{
+    Super::OnComponentCreated();
+    // Existing deserialized assets do not receive this creation callback, so
+    // they keep Every Frame and their original procedural-spline behavior.
+    if (!IsTemplate() && GetArchetype() == GetClass()->GetDefaultObject())
+    {
+        SplineUpdateMode = EOrbitSplineUpdateMode::Automatic;
+    }
+}
+
+void UOrbitGravitySourceComponent::RefreshSplineGravity()
+{
+    SplineGeometryCache.Invalidate();
+    if (UWorld* World = GetWorld())
+    {
+        if (World->IsGameWorld())
+        {
+            if (UOrbitWorldSubsystem* Subsystem = World->GetSubsystem<UOrbitWorldSubsystem>())
+            {
+                Subsystem->RefreshActiveSources();
+            }
+        }
+    }
+}
+
 void UOrbitGravitySourceComponent::PostLoad()
 {
     Super::PostLoad();
@@ -29,6 +56,10 @@ void UOrbitGravitySourceComponent::PostLoad()
 void UOrbitGravitySourceComponent::PostEditChangeProperty(FPropertyChangedEvent& Event)
 {
     Super::PostEditChangeProperty(Event);
+    // Shape edits and the direction fallback belong to the same UE transaction.
+    // The previous direction is restored when Undo restores the previous shape.
+    Direction = OrbitDirectionForShape(Shape, Direction);
+
     if (Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UOrbitGravitySourceComponent, BoxCornerA) ||
         Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UOrbitGravitySourceComponent, BoxCornerB))
     {
@@ -74,11 +105,21 @@ void UOrbitGravitySourceComponent::SetGravityStrength(double NewStrength)
     }
 }
 
-void UOrbitGravitySourceComponent::BuildDefinition(FOrbitFieldDefinition& Field) const
+void UOrbitGravitySourceComponent::BuildDefinition(FOrbitFieldDefinition& Field, bool bReuseSplineArrays) const
 {
-    Field = FOrbitFieldDefinition();
+    // The world subsystem moves forward the previous definition of this exact source.
+    // Keep only its spline buffers; overwrite all scalar field settings below.
+    bReuseSplineArrays = bReuseSplineArrays && Field.Shape == EOrbitGravityShape::Spline;
+    if (!bReuseSplineArrays)
+    {
+        Field = FOrbitFieldDefinition();
+    }
+    if (Shape != EOrbitGravityShape::Spline)
+    {
+        Field.Curve.Reset(); Field.CurveUp.Reset(); Field.CurveBlocks.Reset();
+    }
     Field.Shape = Shape;
-    Field.Direction = Direction;
+    Field.Direction = OrbitDirectionForShape(Shape, Direction);
     Field.Falloff = Falloff;
     Field.Combine = Combine;
     Field.Center = GetComponentLocation();
@@ -123,16 +164,10 @@ void UOrbitGravitySourceComponent::BuildDefinition(FOrbitFieldDefinition& Field)
         }
         if (Spline)
         {
-            const double Length = Spline->GetSplineLength();
-            const int32 Samples = FMath::Clamp(FMath::CeilToInt(Length / FMath::Max(SplineSampleSpacing, 25.0)), 1, 2048);
-            Field.Curve.Reserve(Samples + 1);
-            Field.CurveUp.Reserve(Samples + 1);
-            for (int32 Index = 0; Index <= Samples; ++Index)
-            {
-                const double Distance = Length * static_cast<double>(Index) / Samples;
-                Field.Curve.Add(Spline->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World));
-                Field.CurveUp.Add(Spline->GetUpVectorAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World));
-            }
+            SplineGeometryCache.Get(Spline, SplineSampleSpacing, SplineMaxSegments, Field.Curve, Field.CurveUp, Field.CurveBlocks, bReuseSplineArrays,
+            SplineUpdateMode == EOrbitSplineUpdateMode::EveryFrame ? 0.0 :
+                (SplineUpdateMode == EOrbitSplineUpdateMode::Automatic ? 0.1 : FMath::Max(0.05, SplineCheckInterval)),
+            SplineUpdateMode == EOrbitSplineUpdateMode::Manual);
         }
     }
 }

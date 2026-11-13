@@ -17,7 +17,8 @@ public class OrbitEditor : ModuleRules
             "Slate",
             "ToolMenus",
             "UnrealEd",
-            "LevelEditor"
+            "LevelEditor",
+            "PropertyEditor"
         });
     }
 }
