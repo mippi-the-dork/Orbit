@@ -5,6 +5,8 @@
 #include "OrbitGravityTypes.h"
 #include "OrbitGravityReceiverComponent.generated.h"
 
+class UStaticMeshComponent;
+
 /**
  * Optional lighting-style gravity channel selection for an Actor.
  * With no Receiver component, ALL actors and physics components use channel 0.
@@ -54,6 +56,16 @@ public:
      *  Returns the count of eligible bodies; zero when Experimental is disabled. */
     UFUNCTION(BlueprintCallable, Category="Orbit|Physics|Experimental")
     int32 PreparePhysicsBodiesNow();
+
+    /** Explicit, synchronous preparation of one already-registered simulated Static
+     *  Mesh belonging to this receiver's Actor. Call after enabling simulation or
+     *  recreating physics state, but before the next physics step. Returns true
+     *  only if the body's current Chaos particle is owned by Orbit.
+     *  Never claims a component on another Actor, or affects Standard mode.
+     *  Requires Experimental pre-BeginPlay ownership opt-in in Project Settings. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Physics|Experimental",
+        meta=(DisplayName="Prepare Physics Body Now"))
+    bool PreparePhysicsBodyNow(UStaticMeshComponent* Body);
 
     virtual void BeginPlay() override;
     virtual void TickComponent(float DeltaTime, ELevelTick TickType,

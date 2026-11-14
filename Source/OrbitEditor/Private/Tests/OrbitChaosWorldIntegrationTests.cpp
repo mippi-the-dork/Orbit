@@ -1157,3 +1157,54 @@ bool FOrbit051ReceiverSimulationRecreate::RunTest(const FString& Parameters)
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS
+
+// Iteration 060: explicit, receiver-scoped preparation lets Blueprint spawn
+// workflows claim a newly enabled rigid body before the next physics step.
+// It must not allow a receiver to claim a mesh belonging to another Actor.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit060ReceiverScopedBodyPreparation,
+    "Orbit.Physics.IntegrationWorld.ReceiverScopedBodyPreparation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit060ReceiverScopedBodyPreparation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Directional source"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    UStaticMeshComponent* Mesh = Fixture.Cube(FVector(0,0,700));
+    UStaticMeshComponent* Foreign = Fixture.Cube(FVector(400,0,700));
+    if (!TestNotNull(TEXT("Owned mesh"), Mesh) ||
+        !TestNotNull(TEXT("Unrelated mesh"), Foreign)) { return false; }
+    AActor* Owner = Mesh->GetOwner();
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(
+        Owner, TEXT("OrbitScopedPreparationReceiver"));
+    if (!TestNotNull(TEXT("Receiver"), Receiver)) { return false; }
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Subsystem"), Subsystem)) { return false; }
+
+    TestFalse(TEXT("Cannot prepare unrelated Actor's component"),
+        Receiver->PreparePhysicsBodyNow(Foreign));
+    TestFalse(TEXT("Cannot prepare null component"),
+        Receiver->PreparePhysicsBodyNow(nullptr));
+    TestFalse(TEXT("Neither rejection claims foreign body"),
+        Subsystem->IsCurrentExperimentalBodyOwned(Foreign));
+    TestTrue(TEXT("Explicit owner-scoped preparation succeeds"),
+        Receiver->PreparePhysicsBodyNow(Mesh));
+    TestTrue(TEXT("Current Chaos particle is claimed immediately"),
+        Subsystem->IsCurrentExperimentalBodyOwned(Mesh));
+    TestTrue(TEXT("Repeated request is idempotent"),
+        Receiver->PreparePhysicsBodyNow(Mesh));
+    Mesh->SetSimulatePhysics(false);
+    TestFalse(TEXT("Disabled body cannot be prepared"),
+        Receiver->PreparePhysicsBodyNow(Mesh));
+    Mesh->SetSimulatePhysics(true);
+    Mesh->SetEnableGravity(true);
+    TestTrue(TEXT("Re-enabled body is prepared on explicit request"),
+        Receiver->PreparePhysicsBodyNow(Mesh));
+    return true;
+}

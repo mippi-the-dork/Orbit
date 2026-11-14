@@ -1,3 +1,7 @@
+## v0.2.56 — Iteration 060
+- Added receiver-scoped Blueprint `Prepare Physics Body Now` for explicit Experimental Chaos ownership of an eligible simulated Static Mesh component, including owner/world checks and current-particle verification.
+- Added native lifecycle regression test and documentation. Standard gravity, existing defaults and serialized source properties are unchanged.
+
 ## 0.2.55 — Iteration 059: Spline Cache Update Policies
 
 - Configurable spline geometry validation frequency: Every Frame (legacy), Automatic, Interval, Manual.

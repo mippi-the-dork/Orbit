@@ -33,6 +33,22 @@ int32 UOrbitGravityReceiverComponent::PreparePhysicsBodiesNow()
     return Subsystem ? Subsystem->PrepareSpawnedPhysicsActor(Owner) : 0;
 }
 
+bool UOrbitGravityReceiverComponent::PreparePhysicsBodyNow(UStaticMeshComponent* Body)
+{
+    UWorld* World = GetWorld();
+    AActor* Owner = GetOwner();
+    if (!IsValid(Body) || !IsValid(Owner) || !World || !World->IsGameWorld() ||
+        !IsRegistered() || Owner->GetWorld() != World || Body->GetOwner() != Owner ||
+        Body->GetWorld() != World || !Body->IsRegistered() ||
+        !Body->IsSimulatingPhysics())
+    {
+        return false;
+    }
+    UOrbitWorldSubsystem* Subsystem = World->GetSubsystem<UOrbitWorldSubsystem>();
+    return Subsystem && Subsystem->PrepareSpawnedPhysicsBody(Body) &&
+        Subsystem->IsCurrentExperimentalBodyOwned(Body);
+}
+
 void UOrbitGravityReceiverComponent::TickComponent(float DeltaTime, ELevelTick TickType,
     FActorComponentTickFunction* ThisTickFunction)
 {
