@@ -22,6 +22,18 @@ namespace OrbitPhysicsIntegrationMath
             !bIgnored && bInMatchingField;
     }
 
+    // One PhysicsAsset body at a time: a simulated parent must not imply its
+    // non-simulating children are eligible for experimental ownership.
+    // Keep this separate from the legacy Static Mesh eligibility policy.
+    inline bool CanClaimArticulatedBody(bool bReceiverOptIn, bool bReceiverRegistered,
+        bool bMeshRegistered, bool bBoneSimulating, bool bParticleSimulating,
+        bool bNativeGravityEnabled, bool bIgnored, bool bHasMatchingInfluence)
+    {
+        return bReceiverOptIn && bReceiverRegistered && bMeshRegistered &&
+            bBoneSimulating && bParticleSimulating && bNativeGravityEnabled &&
+            !bIgnored && bHasMatchingInfluence;
+    }
+
     // The separate multi-source experiment must never activate merely because
     // a user previously opted in to single-source Chaos gravity.
     inline bool ShouldActivateMultiplePointGravity(bool bExperimentalMethod,

@@ -1,3 +1,5 @@
+> **Current development build: Orbit 0.2.59 (Iteration 063).** Adds three solver-backed native automation tests using two real Chaos rigid bodies joined by a runtime physics constraint: gravity response, particle recreation, and source lifecycle. Runtime gravity implementation and Blueprint interfaces are unchanged. **This is not yet a skeletal Physics Asset automation fixture.** See [Iteration 063](Docs/ITERATION_063.md). UE 5.8.3 build and execution are not yet verified.
+
 > **Orbit 0.2.50 (Iteration 056):** Gravity Source Actor and Gravity Source Component Details panels have aligned category names and explicit authoring order (Gravity, Affected Objects, Shape controls, Overlapping Fields, Vortex, Visualization, diagnostics). Added explanatory tooltips, conditional visibility for shape-specific tuning, and an editor metadata regression test. This pass makes **no runtime gravity or serialized value changes**; the previous 0.2.49 tangent direction behavior is preserved. See [Details Panel UX](Docs/DETAILS_PANEL_UX.md) and [Iteration 056](Docs/ITERATION_056.md). UE 5.8.3 editor compilation, packaging and visual validation remain pending.
 
 > **Orbit 0.2.31 (Iteration 042):** Optional Chaos solver parity for receiver channel masks (including combinations) and both Vortex physics modes, with identity-keyed particle receiver snapshots and actual substep velocity for Spiral Capture. Two independent default-off project settings, five native policy tests and five new live-world tests. Previous 38 automated tests passed in user UE 5.8.3; the 10 new tests require UE validation. Standard remains the default. See [Iteration 042](Docs/ITERATION_042.md) and [Compatibility Parity](Docs/COMPATIBILITY_PARITY.md).
@@ -10,7 +12,7 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.31 (Iteration 042, channel and Vortex Chaos parity)  
+**Current version:** 0.2.59 (Iteration 063, constrained Chaos automation)  
 **Target:** Unreal Engine 5.8.0–5.8.3, Win64; 5.8.3 is the user-test target  
 **Engine modifications:** None  
 **Runtime behavior:** Standard default unchanged. Single Directional/Point, Multi-Point, Mixed Point + Directional and Early Ownership remain separately opt-in and retain their eligibility restrictions. User-validated experiments include natural sleeping and source movement in 5.8.3.  
@@ -438,3 +440,7 @@ See [Dual Corner Bounds and Volume Direction Modes](Docs/ITERATION_046.md) for m
 ### Volume direction authoring (Iteration 047)
 
 For Volume sources, **Volume Direction Mode** controls the effective direction. **Field Direction** remains editable only for **Directional (Legacy)** volumes and other field shapes; it is disabled but preserved for other Volume modes. Axis-direction modes are labeled **Away From Local Z Axis** and **Toward Local Z Axis**, and work for all Volume shapes. See [Iteration 047](Docs/ITERATION_047.md).
+
+### Gravity-aware AI waypoint movement (experimental)
+
+Add `Orbit AI Path Follower` to an Orbit gravity-controlled Character and call `FollowWaypoints`, `FollowSphericalArc`, or `FollowNativeNavigationPath` to follow routes using gravity-tangent movement input. This is an opt-in follower, not a spherical NavMesh or replacement for native AI MoveTo. See `Docs/ITERATION_067.md`.

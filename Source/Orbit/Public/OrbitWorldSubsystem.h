@@ -9,6 +9,7 @@ class AOrbitGravitySource;
 class UOrbitGravitySourceComponent;
 class AActor;
 class UPrimitiveComponent;
+class USkeletalMeshComponent;
 class FOrbitChaosGravityBridge;
 class UOrbitSettings;
 
@@ -50,6 +51,31 @@ public:
      *  are skipped and retain the existing Standard fallback. */
     UFUNCTION(BlueprintCallable, Category="Orbit|Physics|Runtime")
     int32 PrepareSpawnedPhysicsActor(AActor* Actor);
+
+    /** Explicit per-bone Experimental Chaos ownership for physics assets.
+     *  Requires a receiver with Enable Articulated Body Ownership, and the
+     *  existing Experimental pre-BeginPlay ownership project opt-in. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Physics|Runtime")
+    int32 PrepareArticulatedPhysicsBodies(USkeletalMeshComponent* SkeletalMesh);
+
+    /** Restore all currently claimed skeletal particles in this mesh, provided
+     *  their Chaos identities still match. Safe to call more than once and safe
+     *  in Standard mode (where no articulated particles are claimed). */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Physics|Runtime")
+    int32 ReleaseArticulatedPhysicsBodies(USkeletalMeshComponent* SkeletalMesh);
+
+    /** Read-only count of live claimed skeletal particles for diagnostics.
+     *  Unlike Prepare, this never takes ownership or rebuilds source snapshots. */
+    UFUNCTION(BlueprintPure, Category="Orbit|Physics|Diagnostics")
+    int32 GetArticulatedOwnedBodyCount(const USkeletalMeshComponent* SkeletalMesh) const;
+
+    /** Read-only per-bone live ownership diagnostics. */
+    TArray<FName> GetArticulatedOwnedBoneNames(const USkeletalMeshComponent* SkeletalMesh) const;
+
+    /** Immediately release all skeletal claims from the receiver's Actor.
+     *  Used during receiver component destruction/unregistration, independent
+     *  of the next world subsystem tick. */
+    void ReleaseArticulatedClaimsForActor(const AActor* Owner);
 
     /** Observes physics-dispatched sleep/wake notifications when the mesh has
      *  Generate Wake Events enabled; not an authoritative classification. */
@@ -339,6 +365,16 @@ private:
     TArray<TWeakObjectPtr<UOrbitGravitySourceComponent>> SourceComponents;
     TArray<FOrbitFieldDefinition> ActiveFields;
     TArray<FManagedBody> ManagedBodies;
+    struct FArticulatedBodyClaim
+    {
+        TWeakObjectPtr<USkeletalMeshComponent> Component;
+        FName BoneName;
+        int32 ParticleId = INDEX_NONE;
+        int32 PreviousGravityGroup = 0;
+    };
+    TArray<FArticulatedBodyClaim> ArticulatedBodyClaims;
+    void RefreshArticulatedBodyClaims();
+    void ReleaseArticulatedBodyClaim(FArticulatedBodyClaim& Claim);
     // Allocated only when the user explicitly selects the experimental method.
     FOrbitChaosGravityBridge* ChaosGravityBridge = nullptr;
     bool bExperimentalUniformFallbackLogged = false;

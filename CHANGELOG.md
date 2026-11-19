@@ -1,3 +1,32 @@
+## 0.2.62 — Iteration 066
+- Added a collision-aware Orbit projectile flight preview Blueprint API with optional spherical sweep, first-blocking-hit result, simple bounce prediction and optional homing toward native HomingTargetComponent.
+- Preview samples live gravity fields throughout flight, respecting projectile receiver channels, gravity scaling and outside-field fallback. No actors are spawned or modified.
+- Added gravity-axis-independent bounce math coverage. Preview is approximate, not a substitute for native ProjectileMovement collision simulation.
+- Native ProjectileMovement runtime bounce/homing/substepping remain inherited and unchanged; no double-gravity added.
+
+## 0.2.61 — Iteration 065
+- Added native-derived Orbit Projectile Movement component with source-sampled gravity while retaining movement, homing, bounce and force semantics.
+- Added Blueprint trajectory sampler and outside-field controls, plus projectile regression test.
+- Audited outstanding native Unreal gravity integrations.
+
+## 0.2.60 — Iteration 064
+- Corrected constrained-particle recreation automation to distinguish a tracked body record from live Chaos particle ownership; explicit rejected preparation also clears stale records.
+- Added Blueprint Set Articulated Ownership Active: opt out and immediately restore all owner skeletal claims, or opt in and optionally prepare currently simulated skeletal bodies.
+- Added read-only Blueprint Get Articulated Owned Bone Names to diagnose partial ragdolls by bone, alongside live-owned body count.
+- Added safety regression coverage for receiver-scoped runtime toggle and diagnostic isolation.
+- Standard gravity and static mesh behavior unchanged. Unreal engine compilation and runtime tests pending.
+
+## 0.2.59 — Iteration 063
+- Added an isolated-world, two-body constrained Chaos automation fixture using engine cube meshes and a real physics constraint.
+- Added three physics-step integration tests for constrained-body gravity, particle recreation/reclaim, and gravity source disable/reenable.
+- Test-only changes; runtime and Blueprint APIs unchanged. A constrained rigid-body pair is not a skeletal Physics Asset fixture.
+
+## v0.2.57 — Iteration 061: Experimental Articulated Physics (Stage 1)
+- Opt-in per-bone Chaos particle ownership for simulated Physics Asset skeletal bodies, preserving independent particle IDs and gravity groups.
+- Explicit receiver Blueprint `Prepare Articulated Physics Bodies Now`; optional receiver lifecycle polling via the existing Auto Prepare Changed Physics Bodies control.
+- Per-particle identity-guarded cleanup, source eligibility rechecks and receiver-mask updates; zero behavioral changes to Standard and existing static-mesh physics.
+- Added isolated safety-gate tests and technical documentation. Full ragdoll physics verification remains outstanding.
+
 ## v0.2.56 — Iteration 060
 - Added receiver-scoped Blueprint `Prepare Physics Body Now` for explicit Experimental Chaos ownership of an eligible simulated Static Mesh component, including owner/world checks and current-particle verification.
 - Added native lifecycle regression test and documentation. Standard gravity, existing defaults and serialized source properties are unchanged.

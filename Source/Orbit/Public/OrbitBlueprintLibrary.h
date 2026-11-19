@@ -4,6 +4,7 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "OrbitGravityOrientationComponent.h"
 #include "OrbitGravityTypes.h"
+#include "OrbitProjectileMovementComponent.h"
 #include "OrbitBlueprintLibrary.generated.h"
 
 class ACharacter;
@@ -114,6 +115,29 @@ struct ORBIT_API FOrbitGravityAnimationState
     float WorldXYSpeed = 0.0f;
 };
 
+/** Optional collision-aware flight preview. Positions include the launch point and every simulated step.
+ * FirstBlockingHit is the earliest trace hit, even when bouncing is enabled. */
+USTRUCT(BlueprintType)
+struct ORBIT_API FOrbitProjectileFlightPreview
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Projectile|Prediction")
+    TArray<FVector> Positions;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Projectile|Prediction")
+    bool bHitSomething = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Projectile|Prediction")
+    FHitResult FirstBlockingHit;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Projectile|Prediction")
+    int32 BounceCount = 0;
+
+    UPROPERTY(BlueprintReadOnly, Category="Orbit|Projectile|Prediction")
+    FVector FinalVelocity = FVector::ZeroVector;
+};
+
 UCLASS()
 class ORBIT_API UOrbitBlueprintLibrary : public UBlueprintFunctionLibrary
 {
@@ -125,6 +149,31 @@ public:
     /** Sample the channels configured on Actor's optional Gravity Receiver (default 0). */
     UFUNCTION(BlueprintPure, Category="Orbit|Gravity", meta=(WorldContext="WorldContextObject"))
     static FOrbitGravitySample SampleOrbitGravityForActor(const UObject* WorldContextObject, const AActor* Actor, FVector WorldPosition, EOrbitGravityChannel Channel = EOrbitGravityChannel::General);
+
+    /** Samples an approximate gravity-curved flight path without collision, bounce, homing,
+     * drag, or user-added forces. Useful for aim preview and debug, not authoritative hit prediction.
+     * Uses actor Receiver channels and the projectile fallback policy; does not spawn anything.
+     * Includes the initial point. TotalTime and StepSeconds are clamped to a maximum 512 steps. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Projectile|Prediction", meta=(WorldContext="WorldContextObject"))
+    static TArray<FVector> PredictOrbitProjectileTrajectory(const UObject* WorldContextObject,
+        const AActor* ProjectileOwner, FVector StartLocation, FVector InitialVelocity,
+        float TotalTime = 2.0f, float StepSeconds = 0.025f, float GravityScale = 1.0f,
+        EOrbitGravityChannel GravityChannel = EOrbitGravityChannel::Physics,
+        EOrbitProjectileOutsideField OutsideFieldBehavior = EOrbitProjectileOutsideField::ProjectSettings);
+
+    /** Predicts a non-physics Orbit Projectile Movement component's flight using its gravity,
+     * initial velocity, homing acceleration, bounce coefficients and the world's collision geometry.
+     * Uses a sphere sweep (Radius > 0) or line trace (Radius == 0) and a fixed bounded step.
+     * This is a designer preview, not authoritative collision prediction: native ProjectileMovement
+     * uses SafeMoveUpdatedComponent, iterative impacts, sliding, friction modes and tick timing.
+     * Stops on first blocking impact unless bounce is requested and configured on the component.
+     * Does not mutate or spawn actors. Returns empty Positions on invalid input. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|Projectile|Prediction", meta=(WorldContext="WorldContextObject"))
+    static FOrbitProjectileFlightPreview PredictOrbitProjectileFlight(const UObject* WorldContextObject,
+        const UOrbitProjectileMovementComponent* Projectile, FVector StartLocation, FVector InitialVelocity,
+        float TotalTime = 2.0f, float StepSeconds = 0.0166667f,
+        TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Visibility,
+        float CollisionRadius = 0.0f, bool bPreviewBounce = true);
 
     /** Removes the component of Vector along Up. Returns Vector unchanged if Up is invalid. */
     UFUNCTION(BlueprintPure, Category="Orbit|Gravity")

@@ -1,5 +1,6 @@
 #include "OrbitBlueprintLibrary.h"
 #include "OrbitWorldSubsystem.h"
+#include "OrbitSettings.h"
 #include "OrbitGravityReceiverComponent.h"
 #include "OrbitGravityOrientationComponent.h"
 #include "OrbitGravitySourceComponent.h"
@@ -10,6 +11,9 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "OrbitCharacterControlsComponent.h"
 #include "Math/RotationMatrix.h"
+#include "CollisionQueryParams.h"
+#include "CollisionShape.h"
+#include "Components/PrimitiveComponent.h"
 
 FOrbitGravitySample UOrbitBlueprintLibrary::SampleOrbitGravity(const UObject* WorldContextObject, FVector WorldPosition, EOrbitGravityChannel Channel)
 {
@@ -27,6 +31,140 @@ FOrbitGravitySample UOrbitBlueprintLibrary::SampleOrbitGravityForActor(const UOb
     if (!World || !Actor) { return Empty; }
     const UOrbitWorldSubsystem* Gravity = World->GetSubsystem<UOrbitWorldSubsystem>();
     return Gravity ? Gravity->SampleGravityForActor(Actor, WorldPosition, Channel) : Empty;
+}
+
+TArray<FVector> UOrbitBlueprintLibrary::PredictOrbitProjectileTrajectory(const UObject* WorldContextObject,
+    const AActor* ProjectileOwner, FVector StartLocation, FVector InitialVelocity,
+    float TotalTime, float StepSeconds, float GravityScale, EOrbitGravityChannel GravityChannel,
+    EOrbitProjectileOutsideField OutsideFieldBehavior)
+{
+    TArray<FVector> Points;
+    if (StartLocation.ContainsNaN() || InitialVelocity.ContainsNaN() ||
+        !FMath::IsFinite(TotalTime) || !FMath::IsFinite(StepSeconds) ||
+        !FMath::IsFinite(GravityScale) || TotalTime <= 0.0f || StepSeconds <= 0.0f)
+    {
+        return Points;
+    }
+    const UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContextObject,
+        EGetWorldErrorMode::ReturnNull) : nullptr;
+    if (!World) { return Points; }
+    const UOrbitWorldSubsystem* Subsystem = World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Subsystem) { return Points; }
+
+    const int32 Count = FMath::Clamp(FMath::CeilToInt(TotalTime / StepSeconds), 1, 512);
+    const double Delta = static_cast<double>(TotalTime) / Count;
+    const bool bNativeFallback = OutsideFieldBehavior == EOrbitProjectileOutsideField::NativeGravity ||
+        (OutsideFieldBehavior == EOrbitProjectileOutsideField::ProjectSettings &&
+         GetDefault<UOrbitSettings>()->bUseWorldGravityOutsideFields);
+    FVector Location = StartLocation;
+    FVector Velocity = InitialVelocity;
+    Points.Reserve(Count + 1);
+    Points.Add(Location);
+    for (int32 i = 0; i < Count; ++i)
+    {
+        // Midpoint integration samples curved fields at a predicted halfway position.
+        const FVector SampleLocation = Location + Velocity * (Delta * 0.5);
+        const FOrbitGravitySample Sample = ProjectileOwner && ProjectileOwner->GetWorld() == World
+            ? Subsystem->SampleGravityForActor(ProjectileOwner, SampleLocation, GravityChannel)
+            : Subsystem->SampleGravity(SampleLocation, GravityChannel);
+        const FVector NativeGravity(0.0, 0.0, World->GetGravityZ() * GravityScale);
+        const FVector Acceleration = UOrbitProjectileMovementComponent::ReplaceGravityTerm(
+            NativeGravity, NativeGravity.Z, Sample, GravityScale, true, bNativeFallback);
+        Velocity += Acceleration * Delta;
+        Location += Velocity * Delta;
+        if (Location.ContainsNaN() || Velocity.ContainsNaN()) { Points.Reset(); return Points; }
+        Points.Add(Location);
+    }
+    return Points;
+}
+
+FOrbitProjectileFlightPreview UOrbitBlueprintLibrary::PredictOrbitProjectileFlight(
+    const UObject* WorldContextObject, const UOrbitProjectileMovementComponent* Projectile,
+    FVector StartLocation, FVector InitialVelocity, float TotalTime, float StepSeconds,
+    TEnumAsByte<ECollisionChannel> TraceChannel, float CollisionRadius, bool bPreviewBounce)
+{
+    FOrbitProjectileFlightPreview Result;
+    if (!IsValid(Projectile) || !IsValid(Projectile->GetOwner()) ||
+        StartLocation.ContainsNaN() || InitialVelocity.ContainsNaN() ||
+        !FMath::IsFinite(TotalTime) || TotalTime <= 0.0f ||
+        !FMath::IsFinite(StepSeconds) || StepSeconds <= 0.0f ||
+        !FMath::IsFinite(CollisionRadius) || CollisionRadius < 0.0f)
+    {
+        return Result;
+    }
+    const UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContextObject,
+        EGetWorldErrorMode::ReturnNull) : nullptr;
+    if (!World || World != Projectile->GetWorld()) { return Result; }
+    const UOrbitWorldSubsystem* Subsystem = World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!Subsystem) { return Result; }
+
+    const int32 Steps = FMath::Clamp(FMath::CeilToInt(TotalTime / StepSeconds), 1, 512);
+    const double Dt = static_cast<double>(TotalTime) / Steps;
+    const bool bNativeFallback = Projectile->OutsideFieldBehavior == EOrbitProjectileOutsideField::NativeGravity ||
+        (Projectile->OutsideFieldBehavior == EOrbitProjectileOutsideField::ProjectSettings &&
+         GetDefault<UOrbitSettings>()->bUseWorldGravityOutsideFields);
+    const AActor* Owner = Projectile->GetOwner();
+    const UPrimitiveComponent* UpdatedPrimitive = Cast<UPrimitiveComponent>(Projectile->UpdatedComponent);
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(OrbitProjectilePreview), false);
+    Params.AddIgnoredActor(Owner);
+    if (UpdatedPrimitive) { Params.AddIgnoredComponent(UpdatedPrimitive); }
+    FVector Position = StartLocation;
+    FVector Velocity = InitialVelocity;
+    Result.Positions.Reserve(Steps + 1);
+    Result.Positions.Add(Position);
+
+    for (int32 Step = 0; Step < Steps; ++Step)
+    {
+        const FVector MidPoint = Position + Velocity * (Dt * 0.5);
+        const FOrbitGravitySample Sample = Subsystem->SampleGravityForActor(Owner, MidPoint, Projectile->GravityChannel);
+        // GetGravityZ includes ProjectileGravityScale and honors native physics volume gravity.
+        const FVector NativeGravity(0.0, 0.0, Projectile->GetNativeProjectileGravityZForPreview());
+        FVector Acceleration = UOrbitProjectileMovementComponent::ReplaceGravityTerm(
+            NativeGravity, NativeGravity.Z, Sample, Projectile->ProjectileGravityScale,
+            Projectile->bUseOrbitGravity, bNativeFallback);
+        if (Projectile->bIsHomingProjectile && Projectile->HomingTargetComponent.IsValid() &&
+            Projectile->HomingAccelerationMagnitude > 0.0f)
+        {
+            // Approximate native homing: accelerate toward the target from current flight location.
+            Acceleration += (Projectile->HomingTargetComponent->GetComponentLocation() - MidPoint).GetSafeNormal() *
+                Projectile->HomingAccelerationMagnitude;
+        }
+        Velocity += Acceleration * Dt;
+        const FVector Desired = Position + Velocity * Dt;
+        if (Desired.ContainsNaN() || Velocity.ContainsNaN()) { return FOrbitProjectileFlightPreview(); }
+
+        FHitResult Hit;
+        const bool bHit = CollisionRadius > KINDA_SMALL_NUMBER
+            ? World->SweepSingleByChannel(Hit, Position, Desired, FQuat::Identity, TraceChannel,
+                FCollisionShape::MakeSphere(CollisionRadius), Params)
+            : World->LineTraceSingleByChannel(Hit, Position, Desired, TraceChannel, Params);
+        if (bHit && Hit.bBlockingHit)
+        {
+            if (!Result.bHitSomething) { Result.bHitSomething = true; Result.FirstBlockingHit = Hit; }
+            Position = Hit.Location;
+            Result.Positions.Add(Position);
+            const bool bCanBounce = bPreviewBounce && Projectile->bShouldBounce &&
+                Result.BounceCount < 16 && !Hit.bStartPenetrating;
+            if (!bCanBounce) { Result.FinalVelocity = Velocity; return Result; }
+            Velocity = UOrbitProjectileMovementComponent::PredictBounceVelocity(
+                Velocity, Hit.ImpactNormal, Projectile->Bounciness, Projectile->Friction);
+            ++Result.BounceCount;
+            // Advance outside the contact surface to avoid repeated zero-distance trace hits.
+            Position += Hit.ImpactNormal.GetSafeNormal() * FMath::Max(0.1, static_cast<double>(CollisionRadius) * 0.01);
+            if (Velocity.SizeSquared() <= FMath::Square(static_cast<double>(Projectile->BounceVelocityStopSimulatingThreshold)))
+            {
+                Result.FinalVelocity = Velocity;
+                return Result;
+            }
+        }
+        else
+        {
+            Position = Desired;
+            Result.Positions.Add(Position);
+        }
+    }
+    Result.FinalVelocity = Velocity;
+    return Result;
 }
 
 FVector UOrbitBlueprintLibrary::ProjectOntoGravityPlane(FVector Vector, FVector Up)

@@ -5,6 +5,7 @@
 
 class UWorld;
 class UPrimitiveComponent;
+struct FBodyInstance;
 
 namespace Chaos { class FPhysicsSolverBase; }
 struct FOrbitUniformGravitySimCallback;
@@ -71,6 +72,14 @@ public:
     // Return true only if the group was assigned successfully to a valid body.
     bool AssignBody(UPrimitiveComponent* Component, int32& OutPreviousGroup,
         int32& OutParticleId, uint8 ReceiverMask);
+    // Skeletal/physical-asset bodies are claimed individually. Never assign a gravity
+    // group through the skeletal component's root BodyInstance.
+    bool AssignArticulatedBody(FBodyInstance* Body, int32& OutPreviousGroup,
+        int32& OutParticleId, uint8 ReceiverMask);
+    static bool IsCurrentArticulatedParticle(FBodyInstance* Body, int32 ExpectedParticleId);
+    static void RestoreArticulatedBody(FBodyInstance* Body, int32 PreviousGroup,
+        int32 ExpectedParticleId);
+
     // A component may be backed by a different Chaos particle after physics-state recreation.
     // Never restore an old ownership record onto that replacement particle.
     static bool IsCurrentParticle(UPrimitiveComponent* Component, int32 ExpectedParticleId);

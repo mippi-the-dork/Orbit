@@ -681,6 +681,56 @@ bool FOrbitChaosGravityBridge::AssignBody(UPrimitiveComponent* Component,
     return bAssigned;
 }
 
+bool FOrbitChaosGravityBridge::AssignArticulatedBody(FBodyInstance* Body,
+    int32& OutPreviousGroup, int32& OutParticleId, uint8 ReceiverMask)
+{
+    OutParticleId = INDEX_NONE;
+    if (!Callback || !Body || ReceiverMask == 0u || !Body->IsInstanceSimulatingPhysics() ||
+        !Body->bEnableGravity) { return false; }
+    bool bAssigned = false;
+    FPhysicsCommand::ExecuteWrite(Body->GetPhysicsActorHandle(), [&](const FPhysicsActorHandle& Handle)
+    {
+        if (!FChaosEngineInterface::IsValid(Handle)) { return; }
+        const int32 PreviousGroup = FChaosEngineInterface::GetGravityGroupIndex_AssumesLocked(Handle);
+        if (PreviousGroup != 0) { return; }
+        const Chaos::FUniqueIdx Id = Handle->GetGameThreadAPI().UniqueIdx();
+        // All articulated particles require a stable identity for per-bone ownership.
+        if (!Id.IsValid()) { return; }
+        OutPreviousGroup = PreviousGroup;
+        OutParticleId = Id.Idx;
+        FChaosEngineInterface::SetGravityGroupIndex_AssumesLocked(Handle, GravityGroup);
+        bAssigned = true;
+    });
+    if (bAssigned) { SetBodyReceiverMask(OutParticleId, ReceiverMask); }
+    return bAssigned;
+}
+
+bool FOrbitChaosGravityBridge::IsCurrentArticulatedParticle(FBodyInstance* Body, int32 ExpectedParticleId)
+{
+    if (!Body || ExpectedParticleId == INDEX_NONE) { return false; }
+    bool bMatches = false;
+    FPhysicsCommand::ExecuteWrite(Body->GetPhysicsActorHandle(), [&](const FPhysicsActorHandle& Handle)
+    {
+        if (!FChaosEngineInterface::IsValid(Handle)) { return; }
+        const Chaos::FUniqueIdx Id = Handle->GetGameThreadAPI().UniqueIdx();
+        bMatches = Id.IsValid() && Id.Idx == ExpectedParticleId;
+    });
+    return bMatches;
+}
+
+void FOrbitChaosGravityBridge::RestoreArticulatedBody(FBodyInstance* Body, int32 PreviousGroup,
+    int32 ExpectedParticleId)
+{
+    if (!Body || ExpectedParticleId == INDEX_NONE) { return; }
+    FPhysicsCommand::ExecuteWrite(Body->GetPhysicsActorHandle(), [&](const FPhysicsActorHandle& Handle)
+    {
+        if (!FChaosEngineInterface::IsValid(Handle)) { return; }
+        const Chaos::FUniqueIdx Id = Handle->GetGameThreadAPI().UniqueIdx();
+        if (!Id.IsValid() || Id.Idx != ExpectedParticleId) { return; }
+        FChaosEngineInterface::SetGravityGroupIndex_AssumesLocked(Handle, PreviousGroup);
+    });
+}
+
 bool FOrbitChaosGravityBridge::IsCurrentParticle(UPrimitiveComponent* Component, int32 ExpectedParticleId)
 {
     if (ExpectedParticleId == INDEX_NONE || !IsValid(Component) || !Component->IsRegistered()) { return false; }

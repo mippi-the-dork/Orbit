@@ -5,7 +5,7 @@ public class Orbit : ModuleRules
     public Orbit(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
-        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DeveloperSettings" });
+        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DeveloperSettings", "NavigationSystem" });
         // Opt-in Chaos solver gravity path. The Standard path remains unchanged.
         PrivateDependencyModuleNames.AddRange(new string[] { "Chaos", "PhysicsCore" });
         // Editor-only billboard sprite is loaded from the plugin's Resources directory.

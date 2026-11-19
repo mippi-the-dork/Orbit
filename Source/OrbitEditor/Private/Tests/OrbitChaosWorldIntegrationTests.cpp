@@ -9,8 +9,12 @@
 #include "OrbitGravitySource.h"
 #include "OrbitWorldSubsystem.h"
 #include "OrbitGravityTypes.h"
+#include "OrbitBlueprintLibrary.h"
 #include "OrbitGravityReceiverComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "Components/SplineComponent.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/StaticMesh.h"
@@ -1158,6 +1162,9 @@ bool FOrbit051ReceiverSimulationRecreate::RunTest(const FString& Parameters)
 
 #endif // WITH_DEV_AUTOMATION_TESTS
 
+// Iterations 060-062 must also be excluded from non-automation builds.
+#if WITH_DEV_AUTOMATION_TESTS
+
 // Iteration 060: explicit, receiver-scoped preparation lets Blueprint spawn
 // workflows claim a newly enabled rigid body before the next physics step.
 // It must not allow a receiver to claim a mesh belonging to another Actor.
@@ -1208,3 +1215,435 @@ bool FOrbit060ReceiverScopedBodyPreparation::RunTest(const FString& Parameters)
         Receiver->PreparePhysicsBodyNow(Mesh));
     return true;
 }
+
+// Iteration 061: safe opt-in boundary. This intentionally does not manufacture
+// physics-asset particles; multi-body ownership needs real ragdoll fixture validation.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit061ArticulatedOwnershipGate,
+    "Orbit.Physics.IntegrationWorld.ArticulatedOwnershipGate",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit061ArticulatedOwnershipGate::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Source"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin()) { return false; }
+    AActor* Owner = Fixture.World->SpawnActor<AActor>();
+    if (!TestNotNull(TEXT("Owner"), Owner)) { return false; }
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(Owner);
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    USkeletalMeshComponent* Mesh = NewObject<USkeletalMeshComponent>(Owner);
+    Owner->AddInstanceComponent(Mesh);
+    Mesh->RegisterComponent();
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Subsystem"), Subsystem)) { return false; }
+    TestFalse(TEXT("Existing receivers do not opt in automatically"),
+        Receiver->bEnableArticulatedBodyOwnership);
+    TestEqual(TEXT("Default-off receiver refuses skeletal ownership"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(Mesh), 0);
+    Receiver->bEnableArticulatedBodyOwnership = true;
+    TestEqual(TEXT("No physics asset means no bodies claimed"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(Mesh), 0);
+    TestEqual(TEXT("Null skeletal component safely rejected"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(nullptr), 0);
+    TestEqual(TEXT("No body records created for invalid asset"),
+        Subsystem->PrepareArticulatedPhysicsBodies(Mesh), 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit061ArticulatedStandardIsolation,
+    "Orbit.Physics.IntegrationWorld.ArticulatedStandardIsolation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit061ArticulatedStandardIsolation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings(false);
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Source"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    if (!Fixture.Begin()) { return false; }
+    AActor* Owner = Fixture.World->SpawnActor<AActor>();
+    if (!TestNotNull(TEXT("Owner"), Owner)) { return false; }
+    USkeletalMeshComponent* Mesh = NewObject<USkeletalMeshComponent>(Owner);
+    Owner->AddInstanceComponent(Mesh);
+    Mesh->RegisterComponent();
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(Owner);
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    Receiver->bEnableArticulatedBodyOwnership = true;
+    TestEqual(TEXT("Standard mode always rejects articulated Experimental ownership"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(Mesh), 0);
+    return true;
+}
+
+// Iteration 062: deterministic articulated ownership cleanup surface.
+// These tests do not pretend to simulate a ragdoll without a Physics Asset.
+// Real 22-body Chaos integration was manually validated in Iteration 061.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit062ArticulatedReleaseValidation,
+    "Orbit.Physics.IntegrationWorld.ArticulatedReleaseValidation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit062ArticulatedReleaseValidation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    if (!TestNotNull(TEXT("Directional gravity source"), Fixture.Source())) { return false; }
+    if (!Fixture.Begin()) { return false; }
+
+    AActor* Owner = Fixture.World->SpawnActor<AActor>();
+    AActor* Other = Fixture.World->SpawnActor<AActor>();
+    if (!TestNotNull(TEXT("Owner"), Owner) || !TestNotNull(TEXT("Other"), Other)) { return false; }
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(Owner);
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    Receiver->bEnableArticulatedBodyOwnership = true;
+    USkeletalMeshComponent* Mesh = NewObject<USkeletalMeshComponent>(Owner);
+    Owner->AddInstanceComponent(Mesh);
+    Mesh->RegisterComponent();
+    USkeletalMeshComponent* ForeignMesh = NewObject<USkeletalMeshComponent>(Other);
+    Other->AddInstanceComponent(ForeignMesh);
+    ForeignMesh->RegisterComponent();
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Subsystem"), Subsystem)) { return false; }
+
+    TestEqual(TEXT("No initial articulated claims"), Receiver->GetArticulatedOwnedBodyCount(Mesh), 0);
+    TestEqual(TEXT("Empty articulated bone query"), Receiver->GetArticulatedOwnedBoneNames(Mesh).Num(), 0);
+    TestEqual(TEXT("Foreign mesh bone query stays isolated"),
+        Receiver->GetArticulatedOwnedBoneNames(ForeignMesh).Num(), 0);
+    TestEqual(TEXT("Runtime opt-out releases immediately"),
+        Receiver->SetArticulatedOwnershipActive(false), 0);
+    TestFalse(TEXT("Runtime opt-out updates receiver flag"), Receiver->bEnableArticulatedBodyOwnership);
+    TestEqual(TEXT("Runtime opt-in without preparation is safe"),
+        Receiver->SetArticulatedOwnershipActive(true, false), 0);
+    TestTrue(TEXT("Runtime opt-in updates receiver flag"), Receiver->bEnableArticulatedBodyOwnership);
+    TestEqual(TEXT("Runtime opt-in with no Physics Asset is safe"),
+        Receiver->SetArticulatedOwnershipActive(true, true), 0);
+    TestEqual(TEXT("Invalid skeletal input does not release claims"),
+        Receiver->ReleaseArticulatedPhysicsBodiesNow(nullptr), 0);
+    TestEqual(TEXT("Foreign skeletal mesh cannot be released by this receiver"),
+        Receiver->ReleaseArticulatedPhysicsBodiesNow(ForeignMesh), 0);
+    TestEqual(TEXT("Foreign skeletal mesh cannot be queried by this receiver"),
+        Receiver->GetArticulatedOwnedBodyCount(ForeignMesh), 0);
+    TestEqual(TEXT("Skeletal body without physics asset has no claims to release"),
+        Receiver->ReleaseArticulatedPhysicsBodiesNow(Mesh), 0);
+    TestEqual(TEXT("Repeated release remains safe"), Receiver->ReleaseArticulatedPhysicsBodiesNow(Mesh), 0);
+    TestEqual(TEXT("Subsystem rejects null release"), Subsystem->ReleaseArticulatedPhysicsBodies(nullptr), 0);
+    TestEqual(TEXT("Subsystem rejects null count"), Subsystem->GetArticulatedOwnedBodyCount(nullptr), 0);
+    Receiver->UnregisterComponent();
+    TestEqual(TEXT("Unregister cleanup remains safe"), Subsystem->GetArticulatedOwnedBodyCount(Mesh), 0);
+    Subsystem->ReleaseArticulatedClaimsForActor(Owner);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit062ArticulatedPartialSimulationSafety,
+    "Orbit.Physics.IntegrationWorld.ArticulatedPartialSimulationSafety",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit062ArticulatedPartialSimulationSafety::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    if (!TestNotNull(TEXT("Directional gravity source"), Fixture.Source())) { return false; }
+    if (!Fixture.Begin()) { return false; }
+    AActor* Owner = Fixture.World->SpawnActor<AActor>();
+    if (!TestNotNull(TEXT("Owner"), Owner)) { return false; }
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(Owner);
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    Receiver->bEnableArticulatedBodyOwnership = true;
+    USkeletalMeshComponent* Mesh = NewObject<USkeletalMeshComponent>(Owner);
+    Owner->AddInstanceComponent(Mesh);
+    Mesh->RegisterComponent();
+    TestEqual(TEXT("No bodies are claimed without simulated PhysicsAsset instances"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(Mesh), 0);
+    TestEqual(TEXT("A no-body prepare must not create ownership"),
+        Receiver->GetArticulatedOwnedBodyCount(Mesh), 0);
+    Mesh->SetSimulatePhysics(false);
+    TestEqual(TEXT("Disabling simulation leaves no skeletal ownership"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(Mesh), 0);
+    TestEqual(TEXT("Explicit cleanup after partial/disabled simulation is safe"),
+        Receiver->ReleaseArticulatedPhysicsBodiesNow(Mesh), 0);
+    Receiver->bEnableArticulatedBodyOwnership = false;
+    TestEqual(TEXT("Receiver opt-out cannot prepare articulated bodies"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(Mesh), 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit062ArticulatedStandardCleanupIsolation,
+    "Orbit.Physics.IntegrationWorld.ArticulatedStandardCleanupIsolation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit062ArticulatedStandardCleanupIsolation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings(false);
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    if (!TestNotNull(TEXT("Directional gravity source"), Fixture.Source())) { return false; }
+    if (!Fixture.Begin()) { return false; }
+    AActor* Owner = Fixture.World->SpawnActor<AActor>();
+    if (!TestNotNull(TEXT("Owner"), Owner)) { return false; }
+    UOrbitGravityReceiverComponent* Receiver = NewObject<UOrbitGravityReceiverComponent>(Owner);
+    Owner->AddInstanceComponent(Receiver);
+    Receiver->RegisterComponent();
+    Receiver->bEnableArticulatedBodyOwnership = true;
+    USkeletalMeshComponent* Mesh = NewObject<USkeletalMeshComponent>(Owner);
+    Owner->AddInstanceComponent(Mesh);
+    Mesh->RegisterComponent();
+    TestEqual(TEXT("Standard mode still rejects articulated prepare"),
+        Receiver->PrepareArticulatedPhysicsBodiesNow(Mesh), 0);
+    TestEqual(TEXT("Standard mode reports no experimental skeletal claims"),
+        Receiver->GetArticulatedOwnedBodyCount(Mesh), 0);
+    TestEqual(TEXT("Standard mode release is a harmless no-op"),
+        Receiver->ReleaseArticulatedPhysicsBodiesNow(Mesh), 0);
+    return true;
+}
+
+
+// Iteration 063: solver-backed articulated *constraint* fixture. Two separate
+// Chaos particles are constrained together and prepared independently. This
+// exercises real Chaos dynamics and particle lifecycle, but deliberately does
+// not claim to emulate a skeletal mesh PhysicsAsset.
+namespace Orbit063
+{
+    struct FConstrainedPair
+    {
+        UStaticMeshComponent* First = nullptr;
+        UStaticMeshComponent* Second = nullptr;
+        UPhysicsConstraintComponent* Joint = nullptr;
+
+        bool Create(OrbitWorldIntegrationTests::FFixture& Fixture, const FVector& Start)
+        {
+            if (!Fixture.World) { return false; }
+            UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+            if (!Fixture.Test.TestNotNull(TEXT("Engine fixture cube mesh"), Cube)) { return false; }
+
+            AActor* Owner = Fixture.World->SpawnActor<AActor>(Start, FRotator::ZeroRotator);
+            if (!Fixture.Test.TestNotNull(TEXT("Constrained fixture actor"), Owner)) { return false; }
+            USceneComponent* Root = NewObject<USceneComponent>(Owner, TEXT("Orbit063FixtureRoot"));
+            Owner->AddInstanceComponent(Root);
+            Owner->SetRootComponent(Root);
+            Root->RegisterComponent();
+            Root->SetWorldLocation(Start);
+
+            auto MakeBody = [&](const FName Name, const FVector& Offset) -> UStaticMeshComponent*
+            {
+                UStaticMeshComponent* Body = NewObject<UStaticMeshComponent>(Owner, Name);
+                Owner->AddInstanceComponent(Body);
+                Body->SetMobility(EComponentMobility::Movable);
+                Body->SetupAttachment(Root);
+                Body->SetRelativeLocation(Offset);
+                Body->SetStaticMesh(Cube);
+                Body->SetWorldScale3D(FVector(0.3, 0.3, 0.3));
+                Body->SetCollisionProfileName(FName(TEXT("PhysicsActor")));
+                Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+                Body->RegisterComponent();
+                Body->SetSimulatePhysics(true);
+                Body->SetEnableGravity(true);
+                Body->SetLinearDamping(0.0f);
+                Body->SetAngularDamping(0.05f);
+                return Body;
+            };
+
+            First = MakeBody(FName(TEXT("Orbit063BodyA")), FVector(-65.0, 0.0, 0.0));
+            Second = MakeBody(FName(TEXT("Orbit063BodyB")), FVector(65.0, 0.0, 0.0));
+            if (!Fixture.Test.TestNotNull(TEXT("First Chaos body"), First) ||
+                !Fixture.Test.TestNotNull(TEXT("Second Chaos body"), Second)) { return false; }
+            Joint = NewObject<UPhysicsConstraintComponent>(Owner, TEXT("Orbit063Joint"));
+            Owner->AddInstanceComponent(Joint);
+            Joint->SetupAttachment(Root);
+            Joint->SetRelativeLocation(FVector::ZeroVector);
+            Joint->SetDisableCollision(true);
+            Joint->RegisterComponent();
+            Joint->SetConstrainedComponents(First, NAME_None, Second, NAME_None);
+            return Fixture.Test.TestTrue(TEXT("Live Chaos constraint created"),
+                Joint->ConstraintInstance.IsValidConstraintInstance());
+        }
+
+        bool HasSimulatingBodies() const
+        {
+            return First && Second && First->IsSimulatingPhysics() && Second->IsSimulatingPhysics();
+        }
+
+        double Separation() const
+        {
+            return First && Second ? FVector::Dist(First->GetComponentLocation(), Second->GetComponentLocation()) : 1e12;
+        }
+    };
+
+    bool Setup(FAutomationTestBase& Test, OrbitWorldIntegrationTests::FFixture& Fixture,
+        AOrbitGravitySource*& Source, FConstrainedPair& Pair)
+    {
+        if (!Fixture.Create()) { return false; }
+        Source = Fixture.Source();
+        if (!Test.TestNotNull(TEXT("Directional Orbit source"), Source)) { return false; }
+        Source->Shape = EOrbitGravityShape::Directional;
+        if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+        if (!Pair.Create(Fixture, FVector(0.0, 0.0, 1000.0))) { return false; }
+        return Test.TestTrue(TEXT("Both fixture Chaos bodies simulate"), Pair.HasSimulatingBodies());
+    }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit063ConstrainedChaosGravity,
+    "Orbit.Physics.IntegrationWorld.ConstrainedPairChaosGravity",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit063ConstrainedChaosGravity::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    AOrbitGravitySource* Source = nullptr;
+    Orbit063::FConstrainedPair Pair;
+    if (!Orbit063::Setup(*this, Fixture, Source, Pair)) { return false; }
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Runtime subsystem"), Subsystem)) { return false; }
+    TestTrue(TEXT("First Chaos particle explicitly owned"), Subsystem->PrepareSpawnedPhysicsBody(Pair.First));
+    TestTrue(TEXT("Second Chaos particle explicitly owned"), Subsystem->PrepareSpawnedPhysicsBody(Pair.Second));
+    if (!Fixture.Step(30)) { return false; }
+    TestTrue(TEXT("First constrained body receives Orbit gravity"),
+        Pair.First->GetPhysicsLinearVelocity().Z < -70.0);
+    TestTrue(TEXT("Second constrained body receives Orbit gravity"),
+        Pair.Second->GetPhysicsLinearVelocity().Z < -70.0);
+    TestTrue(TEXT("Physical joint stays valid during Orbit acceleration"),
+        Pair.Joint->ConstraintInstance.IsValidConstraintInstance());
+    TestTrue(TEXT("Bodies remain near their initially constrained spacing"),
+        Pair.Separation() < 300.0);
+    TestTrue(TEXT("Both Chaos particles remain managed"),
+        Subsystem->IsOrbitManagedPhysicsBody(Pair.First) &&
+        Subsystem->IsOrbitManagedPhysicsBody(Pair.Second));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit063ConstrainedChaosRecreation,
+    "Orbit.Physics.IntegrationWorld.ConstrainedPairParticleRecreation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit063ConstrainedChaosRecreation::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    AOrbitGravitySource* Source = nullptr;
+    Orbit063::FConstrainedPair Pair;
+    if (!Orbit063::Setup(*this, Fixture, Source, Pair)) { return false; }
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Runtime subsystem"), Subsystem)) { return false; }
+    TestTrue(TEXT("Initially claim first particle"), Subsystem->PrepareSpawnedPhysicsBody(Pair.First));
+    TestTrue(TEXT("Initially claim second particle"), Subsystem->PrepareSpawnedPhysicsBody(Pair.Second));
+    Pair.Second->SetSimulatePhysics(false);
+    // IsOrbitManagedPhysicsBody reports a tracked entry, which can remain until
+    // the subsystem's next tick. The live Chaos particle ownership check must
+    // reject a disabled component immediately, even before the stale record is swept.
+    TestFalse(TEXT("Disabled particle cannot retain a valid live Chaos claim"),
+        Subsystem->IsCurrentExperimentalBodyOwned(Pair.Second));
+    TestFalse(TEXT("Preparing a disabled particle rejects and cleans stale ownership"),
+        Subsystem->PrepareSpawnedPhysicsBody(Pair.Second));
+    TestFalse(TEXT("Disabled particle record cleared after explicit preparation"),
+        Subsystem->IsOrbitManagedPhysicsBody(Pair.Second));
+    TestTrue(TEXT("Other constrained particle remains managed"),
+        Subsystem->IsOrbitManagedPhysicsBody(Pair.First));
+    Pair.Second->SetSimulatePhysics(true);
+    Pair.Second->SetEnableGravity(true);
+    Pair.Joint->SetConstrainedComponents(Pair.First, NAME_None, Pair.Second, NAME_None);
+    TestTrue(TEXT("Reenabled particle reacquired without an intervening tick"),
+        Subsystem->PrepareSpawnedPhysicsBody(Pair.Second));
+    Pair.Second->RecreatePhysicsState();
+    Pair.Joint->SetConstrainedComponents(Pair.First, NAME_None, Pair.Second, NAME_None);
+    TestTrue(TEXT("Replacement Chaos particle reacquired before next tick"),
+        Subsystem->PrepareSpawnedPhysicsBody(Pair.Second));
+    TestTrue(TEXT("Reacquisition is idempotent"),
+        Subsystem->PrepareSpawnedPhysicsBody(Pair.Second));
+    if (!Fixture.Step(20)) { return false; }
+    TestTrue(TEXT("Both recreated constrained Chaos bodies remain managed"),
+        Subsystem->IsOrbitManagedPhysicsBody(Pair.First) &&
+        Subsystem->IsOrbitManagedPhysicsBody(Pair.Second));
+    TestTrue(TEXT("Recreated body's Chaos gravity remains functional"),
+        Pair.Second->GetPhysicsLinearVelocity().Z < -25.0);
+    TestTrue(TEXT("Constraint survives re-binding after particle recreation"),
+        Pair.Joint->ConstraintInstance.IsValidConstraintInstance());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit063ConstrainedChaosSourceLifecycle,
+    "Orbit.Physics.IntegrationWorld.ConstrainedPairSourceLifecycle",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit063ConstrainedChaosSourceLifecycle::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    AOrbitGravitySource* Source = nullptr;
+    Orbit063::FConstrainedPair Pair;
+    if (!Orbit063::Setup(*this, Fixture, Source, Pair)) { return false; }
+    UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Runtime subsystem"), Subsystem)) { return false; }
+    TestTrue(TEXT("Claim first particle"), Subsystem->PrepareSpawnedPhysicsBody(Pair.First));
+    TestTrue(TEXT("Claim second particle"), Subsystem->PrepareSpawnedPhysicsBody(Pair.Second));
+    if (!Fixture.Step(12)) { return false; }
+    TestTrue(TEXT("Orbit accelerates the constraint pair with active source"),
+        Pair.First->GetPhysicsLinearVelocity().Z < -15.0 &&
+        Pair.Second->GetPhysicsLinearVelocity().Z < -15.0);
+    // The isolated world has zero native gravity and no Orbit fallback.
+    // Reset velocities to distinguish stale gravity force from inertial motion.
+    Source->bEnabled = false;
+    Pair.First->SetPhysicsLinearVelocity(FVector::ZeroVector);
+    Pair.Second->SetPhysicsLinearVelocity(FVector::ZeroVector);
+    if (!Fixture.Step(12)) { return false; }
+    TestTrue(TEXT("Disabling source stops additional gravitational acceleration"),
+        FMath::Abs(Pair.First->GetPhysicsLinearVelocity().Z) < 35.0 &&
+        FMath::Abs(Pair.Second->GetPhysicsLinearVelocity().Z) < 35.0);
+    Source->bEnabled = true;
+    Pair.First->SetPhysicsLinearVelocity(FVector::ZeroVector);
+    Pair.Second->SetPhysicsLinearVelocity(FVector::ZeroVector);
+    if (!Fixture.Step(15)) { return false; }
+    TestTrue(TEXT("Reenabled source accelerates both constraint particles"),
+        Pair.First->GetPhysicsLinearVelocity().Z < -30.0 &&
+        Pair.Second->GetPhysicsLinearVelocity().Z < -30.0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit065ProjectilePredictionFieldTest,
+    "Orbit.Projectile.IntegrationWorld.DirectionalTrajectory",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit065ProjectilePredictionFieldTest::RunTest(const FString& Parameters)
+{
+    using namespace OrbitWorldIntegrationTests;
+    FScopedOrbitTestSettings Settings;
+    FFixture Fixture(*this);
+    if (!Fixture.Create()) { return false; }
+    AOrbitGravitySource* Source = Fixture.Source();
+    if (!TestNotNull(TEXT("Directional source spawned"), Source)) { return false; }
+    Source->Shape = EOrbitGravityShape::Directional;
+    Source->SetActorRotation(FRotator(90.0, 0.0, 0.0));
+    if (!Fixture.Begin() || !Fixture.Step(2)) { return false; }
+    const UOrbitWorldSubsystem* Subsystem = Fixture.World->GetSubsystem<UOrbitWorldSubsystem>();
+    if (!TestNotNull(TEXT("Source world has Orbit subsystem"), Subsystem)) { return false; }
+    const FVector Start(0.0, 0.0, 500.0);
+    const FOrbitGravitySample Sample = Subsystem->SampleGravityForActor(Source, Start, EOrbitGravityChannel::Physics);
+    if (!TestTrue(TEXT("Runtime field has horizontal influence"), Sample.bHasInfluence &&
+        FMath::Abs(Sample.Acceleration.X) > 100.0 && FMath::Abs(Sample.Acceleration.Z) < 1.0))
+    {
+        return false;
+    }
+    const TArray<FVector> Points = UOrbitBlueprintLibrary::PredictOrbitProjectileTrajectory(
+        Fixture.World, Source, Start, FVector::ZeroVector, 0.5f, 0.05f, 1.0f);
+    if (!TestEqual(TEXT("Prediction returns launch point plus ten simulated steps"), Points.Num(), 11))
+    {
+        return false;
+    }
+    TestTrue(TEXT("Prediction preserves launch point"), Points[0].Equals(Start, 0.01));
+    TestTrue(TEXT("Trajectory accelerates along sampled field direction"),
+        FVector::DotProduct(Points.Last() - Start, Sample.Acceleration) > 10.0);
+    TestTrue(TEXT("Horizontal gravity does not incorrectly pull trajectory world-Z"),
+        FMath::Abs(Points.Last().Z - Start.Z) < 1.0);
+    return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS (Iterations 060-063)
+

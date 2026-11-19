@@ -1127,4 +1127,38 @@ bool FOrbit042VortexVelocity::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbit062ArticulatedBodyEligibilityMatrix,
+    "Orbit.Physics.GravityIntegration.ArticulatedBodyEligibilityMatrix",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbit062ArticulatedBodyEligibilityMatrix::RunTest(const FString& Parameters)
+{
+    using namespace OrbitPhysicsIntegrationMath;
+    const auto Eligible = [](bool ReceiverOptIn, bool ReceiverRegistered, bool MeshRegistered,
+        bool BoneSimulating, bool ParticleSimulating, bool NativeGravity,
+        bool Ignored, bool HasInfluence)
+    {
+        return CanClaimArticulatedBody(ReceiverOptIn, ReceiverRegistered, MeshRegistered,
+            BoneSimulating, ParticleSimulating, NativeGravity, Ignored, HasInfluence);
+    };
+    TestTrue(TEXT("Eligible simulated bone may be independently claimed"),
+        Eligible(true,true,true,true,true,true,false,true));
+    TestFalse(TEXT("Existing receivers do not take ownership by default"),
+        Eligible(false,true,true,true,true,true,false,true));
+    TestFalse(TEXT("Unregistered receiver may not retain/reclaim bodies"),
+        Eligible(true,false,true,true,true,true,false,true));
+    TestFalse(TEXT("Unregistered skeletal component is not eligible"),
+        Eligible(true,true,false,true,true,true,false,true));
+    TestFalse(TEXT("Non-simulating bone excluded even if siblings simulate"),
+        Eligible(true,true,true,false,true,true,false,true));
+    TestFalse(TEXT("Recreated/invalid particle is not yet eligible"),
+        Eligible(true,true,true,true,false,true,false,true));
+    TestFalse(TEXT("Native gravity disabled bones are excluded"),
+        Eligible(true,true,true,true,true,false,false,true));
+    TestFalse(TEXT("Ignored skeletal meshes cannot claim"),
+        Eligible(true,true,true,true,true,true,true,true));
+    TestFalse(TEXT("Bone outside matching field not claimed"),
+        Eligible(true,true,true,true,true,true,false,false));
+    return true;
+}
+
 #endif

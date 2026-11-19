@@ -14,6 +14,10 @@
 #include "OrbitSettings.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/SkeletalBodySetup.h"
+#include "PhysicsEngine/BodyInstance.h"
 #include "Engine/StaticMesh.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Engine/World.h"
@@ -540,6 +544,210 @@ bool UOrbitWorldSubsystem::PrepareSpawnedPhysicsBody(UPrimitiveComponent* Compon
     return true;
 }
 
+void UOrbitWorldSubsystem::ReleaseArticulatedBodyClaim(FArticulatedBodyClaim& Claim)
+{
+    if (ChaosGravityBridge)
+    {
+        ChaosGravityBridge->RemoveBodyReceiverMask(Claim.ParticleId);
+    }
+    // Do not restore a stale record onto a recreated Chaos particle.
+    if (USkeletalMeshComponent* Mesh = Claim.Component.Get())
+    {
+        if (Mesh->IsRegistered())
+        {
+            FBodyInstance* Body = Mesh->GetBodyInstance(Claim.BoneName);
+            FOrbitChaosGravityBridge::RestoreArticulatedBody(Body,
+                Claim.PreviousGravityGroup, Claim.ParticleId);
+        }
+    }
+    Claim.ParticleId = INDEX_NONE;
+}
+
+int32 UOrbitWorldSubsystem::GetArticulatedOwnedBodyCount(const USkeletalMeshComponent* Mesh) const
+{
+    if (!IsValid(Mesh) || !Mesh->IsRegistered() || Mesh->GetWorld() != GetWorld()) { return 0; }
+    int32 Count = 0;
+    for (const FArticulatedBodyClaim& Claim : ArticulatedBodyClaims)
+    {
+        if (Claim.Component.Get() != Mesh) { continue; }
+        FBodyInstance* Body = const_cast<USkeletalMeshComponent*>(Mesh)->GetBodyInstance(Claim.BoneName);
+        if (Body && Mesh->IsSimulatingPhysics(Claim.BoneName) &&
+            Body->IsInstanceSimulatingPhysics() &&
+            FOrbitChaosGravityBridge::IsCurrentArticulatedParticle(Body, Claim.ParticleId))
+        {
+            ++Count;
+        }
+    }
+    return Count;
+}
+
+TArray<FName> UOrbitWorldSubsystem::GetArticulatedOwnedBoneNames(const USkeletalMeshComponent* Mesh) const
+{
+    TArray<FName> Names;
+    if (!IsValid(Mesh) || !Mesh->IsRegistered() || Mesh->GetWorld() != GetWorld()) { return Names; }
+    for (const FArticulatedBodyClaim& Claim : ArticulatedBodyClaims)
+    {
+        if (Claim.Component.Get() != Mesh) { continue; }
+        FBodyInstance* Body = const_cast<USkeletalMeshComponent*>(Mesh)->GetBodyInstance(Claim.BoneName);
+        if (Body && Mesh->IsSimulatingPhysics(Claim.BoneName) &&
+            Body->IsInstanceSimulatingPhysics() &&
+            FOrbitChaosGravityBridge::IsCurrentArticulatedParticle(Body, Claim.ParticleId))
+        {
+            Names.AddUnique(Claim.BoneName);
+        }
+    }
+    Names.Sort([](const FName& A, const FName& B) { return A.LexicalLess(B); });
+    return Names;
+}
+
+int32 UOrbitWorldSubsystem::ReleaseArticulatedPhysicsBodies(USkeletalMeshComponent* Mesh)
+{
+    if (!IsValid(Mesh) || Mesh->GetWorld() != GetWorld()) { return 0; }
+    int32 Released = 0;
+    for (int32 Index = ArticulatedBodyClaims.Num() - 1; Index >= 0; --Index)
+    {
+        FArticulatedBodyClaim& Claim = ArticulatedBodyClaims[Index];
+        if (Claim.Component.Get() != Mesh) { continue; }
+        ReleaseArticulatedBodyClaim(Claim);
+        ArticulatedBodyClaims.RemoveAtSwap(Index);
+        ++Released;
+    }
+    if (Released > 0 && ChaosGravityBridge) { ChaosGravityBridge->CommitReceiverMasks(); }
+    return Released;
+}
+
+void UOrbitWorldSubsystem::ReleaseArticulatedClaimsForActor(const AActor* Owner)
+{
+    if (!Owner || Owner->GetWorld() != GetWorld()) { return; }
+    bool bRemovedAny = false;
+    for (int32 Index = ArticulatedBodyClaims.Num() - 1; Index >= 0; --Index)
+    {
+        FArticulatedBodyClaim& Claim = ArticulatedBodyClaims[Index];
+        USkeletalMeshComponent* Mesh = Claim.Component.Get();
+        if (!Mesh || Mesh->GetOwner() != Owner) { continue; }
+        ReleaseArticulatedBodyClaim(Claim);
+        ArticulatedBodyClaims.RemoveAtSwap(Index);
+        bRemovedAny = true;
+    }
+    if (bRemovedAny && ChaosGravityBridge) { ChaosGravityBridge->CommitReceiverMasks(); }
+}
+
+void UOrbitWorldSubsystem::RefreshArticulatedBodyClaims()
+{
+    for (int32 Index = ArticulatedBodyClaims.Num() - 1; Index >= 0; --Index)
+    {
+        FArticulatedBodyClaim& Claim = ArticulatedBodyClaims[Index];
+        USkeletalMeshComponent* Mesh = Claim.Component.Get();
+        FBodyInstance* Body = Mesh && Mesh->IsRegistered() ? Mesh->GetBodyInstance(Claim.BoneName) : nullptr;
+        const AActor* Owner = Mesh ? Mesh->GetOwner() : nullptr;
+        const UOrbitGravityReceiverComponent* Receiver = IsValid(Owner) ?
+            Owner->FindComponentByClass<UOrbitGravityReceiverComponent>() : nullptr;
+        const bool bStillEligible = IsValid(Mesh) && Mesh->GetWorld() == GetWorld() &&
+            IsValid(Receiver) && Receiver->IsRegistered() &&
+            Receiver->bEnableArticulatedBodyOwnership && Body &&
+            Mesh->IsSimulatingPhysics(Claim.BoneName) &&
+            Body->IsInstanceSimulatingPhysics() && Body->bEnableGravity &&
+            !Mesh->ComponentHasTag(FName(TEXT("Orbit.Ignore"))) &&
+            FOrbitChaosGravityBridge::IsCurrentArticulatedParticle(Body, Claim.ParticleId);
+        if (!bStillEligible)
+        {
+            ReleaseArticulatedBodyClaim(Claim);
+            ArticulatedBodyClaims.RemoveAtSwap(Index);
+            continue;
+        }
+        const uint8 Mask = GetReceiverChannelMask(Owner);
+        const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
+            ActiveFields, Mesh->GetCenterOfMass(Claim.BoneName),
+            Mesh->GetPhysicsLinearVelocity(Claim.BoneName), Mask,
+            GetDefault<UOrbitSettings>()->OverrideResolution);
+        const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
+        if (Mask == 0u || !FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
+            ChaosGravityBridge && ChaosGravityBridge->IsMultiSourceMode(), Mask,
+            ChaosGravityBridge && ChaosGravityBridge->IsChannelAwareMode()) ||
+            (!Sample.bHasInfluence && (Settings->bUseWorldGravityOutsideFields ||
+            !HasCompatiblePhysicsSource(Mask))))
+        {
+            ReleaseArticulatedBodyClaim(Claim);
+            ArticulatedBodyClaims.RemoveAtSwap(Index);
+            continue;
+        }
+        if (ChaosGravityBridge) { ChaosGravityBridge->SetBodyReceiverMask(Claim.ParticleId, Mask); }
+    }
+}
+
+int32 UOrbitWorldSubsystem::PrepareArticulatedPhysicsBodies(USkeletalMeshComponent* Mesh)
+{
+    const UOrbitSettings* Settings = GetDefault<UOrbitSettings>();
+    if (!Settings || !IsValid(Mesh) || Mesh->GetWorld() != GetWorld() ||
+        !Mesh->IsRegistered() || !GetWorld() || !GetWorld()->IsGameWorld() ||
+        !OrbitPhysicsIntegrationMath::ShouldPreclaimExperimentalGravity(
+            Settings->bEnablePhysicsIntegration, Settings->bAutomaticRigidBodyGravity,
+            Settings->RigidBodyGravityMethod == EOrbitRigidBodyGravityMethod::ExperimentalChaosUniform,
+            Settings->bExperimentalPreBeginPlayGravityOwnership, true) ||
+        Settings->bCompareNativeWorldGravityWhenEquivalent) { return 0; }
+    const AActor* Owner = Mesh->GetOwner();
+    const UOrbitGravityReceiverComponent* Receiver = IsValid(Owner) ?
+        Owner->FindComponentByClass<UOrbitGravityReceiverComponent>() : nullptr;
+    if (!IsValid(Receiver) || !Receiver->IsRegistered() ||
+        !Receiver->bEnableArticulatedBodyOwnership ||
+        Mesh->ComponentHasTag(FName(TEXT("Orbit.Ignore")))) { return 0; }
+    UpdateSourceSnapshot();
+    UpdateExperimentalGravityBridge(Settings);
+    if (!ChaosGravityBridge || !ChaosGravityBridge->IsActive()) { return 0; }
+    RefreshArticulatedBodyClaims();
+    const UPhysicsAsset* PhysicsAsset = Mesh->GetPhysicsAsset();
+    if (!PhysicsAsset) { return 0; }
+    int32 Owned = 0;
+    const uint8 Mask = GetReceiverChannelMask(Owner);
+    if (!FOrbitChaosGravityBridge::CanAssignMultiPointReceiver(
+        ChaosGravityBridge->IsMultiSourceMode(), Mask,
+        ChaosGravityBridge->IsChannelAwareMode())) { return 0; }
+    for (const USkeletalBodySetup* Setup : PhysicsAsset->SkeletalBodySetups)
+    {
+        if (!Setup) { continue; }
+        const FName Bone = Setup->BoneName;
+        if (!Mesh->IsSimulatingPhysics(Bone)) { continue; }
+        FBodyInstance* Body = Mesh->GetBodyInstance(Bone);
+        if (!Body) { continue; }
+        const FOrbitGravitySample Sample = FOrbitFieldEvaluator::CombineForBody(
+            ActiveFields, Mesh->GetCenterOfMass(Bone), Mesh->GetPhysicsLinearVelocity(Bone),
+            Mask, Settings->OverrideResolution);
+        if (!OrbitPhysicsIntegrationMath::CanClaimArticulatedBody(
+            Receiver->bEnableArticulatedBodyOwnership, Receiver->IsRegistered(),
+            Mesh->IsRegistered(), Mesh->IsSimulatingPhysics(Bone),
+            Body->IsInstanceSimulatingPhysics(), Body->bEnableGravity,
+            Mesh->ComponentHasTag(FName(TEXT("Orbit.Ignore"))), Sample.bHasInfluence))
+        {
+            continue;
+        }
+        bool bAlreadyOwned = false;
+        for (const FArticulatedBodyClaim& Claim : ArticulatedBodyClaims)
+        {
+            if (Claim.Component.Get() == Mesh && Claim.BoneName == Bone &&
+                FOrbitChaosGravityBridge::IsCurrentArticulatedParticle(Body, Claim.ParticleId))
+            {
+                bAlreadyOwned = true;
+                break;
+            }
+        }
+        if (bAlreadyOwned) { ++Owned; continue; }
+        int32 PreviousGroup = 0;
+        int32 ParticleId = INDEX_NONE;
+        if (!ChaosGravityBridge->AssignArticulatedBody(Body, PreviousGroup, ParticleId, Mask))
+        {
+            continue;
+        }
+        FArticulatedBodyClaim& Claim = ArticulatedBodyClaims.AddDefaulted_GetRef();
+        Claim.Component = Mesh;
+        Claim.BoneName = Bone;
+        Claim.ParticleId = ParticleId;
+        Claim.PreviousGravityGroup = PreviousGroup;
+        ++Owned;
+    }
+    ChaosGravityBridge->CommitReceiverMasks();
+    return Owned;
+}
+
 int32 UOrbitWorldSubsystem::PrepareSpawnedPhysicsActor(AActor* Actor)
 {
     if (!IsValid(Actor) || Actor->GetWorld() != GetWorld() || !GetWorld() ||
@@ -647,6 +855,8 @@ void UOrbitWorldSubsystem::StopExperimentalGravityBridge()
     if (!ChaosGravityBridge) { return; }
     // Bodies are reverted before the solver callback is released, including PIE teardown.
     for (FManagedBody& Body : ManagedBodies) { RestoreExperimentalBodyGroup(Body); }
+    for (FArticulatedBodyClaim& Claim : ArticulatedBodyClaims) { ReleaseArticulatedBodyClaim(Claim); }
+    ArticulatedBodyClaims.Reset();
     delete ChaosGravityBridge;
     ChaosGravityBridge = nullptr;
 }
@@ -1433,6 +1643,7 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
     }
 #endif
     ApplyPhysicsForces(DeltaTime);
+    if (!ArticulatedBodyClaims.IsEmpty()) { RefreshArticulatedBodyClaims(); }
     // Newly discovered bodies and receiver-mask changes are applied as one
     // coherent physics-thread input; never read UObject receiver state in Chaos.
     if (ChaosGravityBridge) { ChaosGravityBridge->CommitReceiverMasks(); }
