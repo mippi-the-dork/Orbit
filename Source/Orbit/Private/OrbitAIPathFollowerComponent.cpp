@@ -1,8 +1,11 @@
 #include "OrbitAIPathFollowerComponent.h"
+#include "OrbitAISurfaceNavigation.h"
 
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "DrawDebugHelpers.h"
 #include "NavigationPath.h"
 #include "NavigationSystem.h"
 
@@ -64,6 +67,7 @@ bool UOrbitAIPathFollowerComponent::FollowWaypoints(const TArray<FVector>& NewWa
         }
     }
     MovingTarget.Reset();
+    bHasActiveSurfaceRoute = false;
     Waypoints = NewWaypoints;
     CurrentWaypointIndex = 0;
     bFollowingPath = true;
@@ -187,11 +191,72 @@ bool UOrbitAIPathFollowerComponent::FollowNativeNavigationPath(FVector Goal)
     return bAccepted;
 }
 
+bool UOrbitAIPathFollowerComponent::FollowSphericalSurfacePath(FVector Goal, FVector SphereCenter,
+    float ReferenceRadius, const FOrbitSphericalNavigationSettings& Settings)
+{
+    ACharacter* Character = Cast<ACharacter>(GetOwner());
+    FOrbitSphericalNavigationSettings Effective = Settings;
+    if (bUseCharacterCapsuleForSurfaceNavigation && Character && Character->GetCapsuleComponent())
+    {
+        float Radius = 0.0f, HalfHeight = 0.0f;
+        Character->GetCapsuleComponent()->GetScaledCapsuleSize(Radius, HalfHeight);
+        Effective.AgentRadius = Radius;
+        Effective.AgentHalfHeight = HalfHeight;
+    }
+    TArray<FVector> Planned;
+    FString Reason;
+    if (!Character || !UOrbitAISurfaceNavigation::FindSphericalSurfacePath(this,
+        Character->GetActorLocation(), Goal, SphereCenter, ReferenceRadius, Effective, Planned, Reason))
+    {
+        StopFollowing();
+        LastPathStatus = Reason.IsEmpty() ? TEXT("Missing Character") : Reason;
+        return false;
+    }
+    if (!FollowWaypoints(Planned)) return false;
+    bHasActiveSurfaceRoute = true;
+    SurfaceGoal = Goal;
+    SurfaceCenter = SphereCenter;
+    SurfaceRadius = ReferenceRadius;
+    ActiveSurfaceSettings = Effective;
+    SurfaceReplanCount = 0;
+    TimeUntilRouteCheck = FMath::Max(0.2f, RouteCheckInterval);
+    LastPathStatus = TEXT("Following capsule-verified spherical route");
+    return true;
+}
+
+bool UOrbitAIPathFollowerComponent::ReplanSphericalSurfacePathNow()
+{
+    ACharacter* Character = Cast<ACharacter>(GetOwner());
+    if (!bHasActiveSurfaceRoute || !Character)
+    {
+        LastPathStatus = TEXT("No active spherical route to replan");
+        return false;
+    }
+    TArray<FVector> NewPath;
+    FString Failure;
+    if (!UOrbitAISurfaceNavigation::FindSphericalSurfacePath(this, Character->GetActorLocation(),
+        SurfaceGoal, SurfaceCenter, SurfaceRadius, ActiveSurfaceSettings, NewPath, Failure))
+    {
+        StopFollowing();
+        LastPathStatus = FString::Printf(TEXT("Surface replan failed: %s"), *Failure);
+        return false;
+    }
+    Waypoints = MoveTemp(NewPath);
+    CurrentWaypointIndex = 0;
+    bFollowingPath = true;
+    ++SurfaceReplanCount;
+    TimeUntilRouteCheck = FMath::Max(0.2f, RouteCheckInterval);
+    LastPathStatus = TEXT("Spherical route replanned");
+    return true;
+}
+
 void UOrbitAIPathFollowerComponent::StopFollowing()
 {
     bFollowingPath = false;
     CurrentWaypointIndex = INDEX_NONE;
     MovingTarget.Reset();
+    bHasActiveSurfaceRoute = false;
+    TimeUntilRouteCheck = 0.0f;
     Waypoints.Reset();
     LastPathStatus = TEXT("Stopped");
 }
@@ -237,10 +302,36 @@ void UOrbitAIPathFollowerComponent::TickComponent(float DeltaTime, ELevelTick Ti
     if (!Waypoints.IsValidIndex(CurrentWaypointIndex))
     {
         bFollowingPath = false;
+        bHasActiveSurfaceRoute = false;
         MovingTarget.Reset();
         CurrentWaypointIndex = INDEX_NONE;
         LastPathStatus = TEXT("Reached destination");
         return;
+    }
+    if (bHasActiveSurfaceRoute && bReplanBlockedSurfaceRoutes)
+    {
+        TimeUntilRouteCheck -= DeltaTime;
+        if (TimeUntilRouteCheck <= 0.0f)
+        {
+            TimeUntilRouteCheck = FMath::Max(0.2f, RouteCheckInterval);
+            // Inspect the immediate movement leg, not the entire route every tick.
+            if (!UOrbitAISurfaceNavigation::IsSphericalSurfaceLegTraversable(this, Current,
+                Waypoints[CurrentWaypointIndex], SurfaceCenter, SurfaceRadius, ActiveSurfaceSettings))
+            {
+                if (!ReplanSphericalSurfacePathNow()) return;
+            }
+        }
+    }
+    if (bDrawSurfacePathDebug && bHasActiveSurfaceRoute && GetWorld())
+    {
+        FVector Previous = Current;
+        const int32 Last = FMath::Min(Waypoints.Num(), CurrentWaypointIndex + 64);
+        for (int32 I = CurrentWaypointIndex; I < Last; ++I)
+        {
+            DrawDebugLine(GetWorld(), Previous, Waypoints[I], FColor::Cyan, false, 0.0f, 0, 2.0f);
+            DrawDebugSphere(GetWorld(), Waypoints[I], 12.0f, 6, FColor::Green, false, 0.0f);
+            Previous = Waypoints[I];
+        }
     }
     const FVector Direction = CalculateTangentSteering(Current, Waypoints[CurrentWaypointIndex], Down);
     if (Direction.IsNearlyZero())

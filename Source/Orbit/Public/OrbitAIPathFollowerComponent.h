@@ -2,16 +2,18 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "OrbitAISurfaceNavigation.h"
 #include "OrbitAIPathFollowerComponent.generated.h"
 
 class AActor;
 class ACharacter;
+struct FOrbitSphericalNavigationSettings;
 
 /**
  * Opt-in, gravity-tangent waypoint steering for AI-controlled Orbit Characters.
  * Works with authored/generated world-space waypoints. Can import native NavMesh
- * paths where a valid native NavMesh exists, but DOES NOT generate curved surface
- * navigation or replace Recast/PathFollowingComponent obstacle avoidance.
+ * paths where a valid native NavMesh exists. Spherical surface paths use Orbit
+ * collision-sampled graph navigation, not Recast or native crowd avoidance.
  * Do not run this and AIController::MoveTo concurrently on the same pawn.
  */
 UCLASS(ClassGroup=(Orbit), BlueprintType, meta=(BlueprintSpawnableComponent))
@@ -77,6 +79,33 @@ public:
     UFUNCTION(BlueprintCallable, Category="Orbit|AI|Path")
     bool FollowNativeNavigationPath(FVector Goal);
 
+    /** Collision-verified spherical graph route. Does not use Recast or handle dynamic crowds. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|AI|Surface")
+    bool FollowSphericalSurfacePath(FVector Goal, FVector SphereCenter, float ReferenceRadius,
+        const FOrbitSphericalNavigationSettings& Settings);
+
+    /** Use the owning Character capsule when planning or checking a spherical path. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|AI|Surface|Agent")
+    bool bUseCharacterCapsuleForSurfaceNavigation = true;
+
+    /** Check the upcoming route leg periodically, and recalculate if it is no longer clear. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|AI|Surface|Dynamic")
+    bool bReplanBlockedSurfaceRoutes = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|AI|Surface|Dynamic", meta=(ClampMin="0.2", Units="s"))
+    float RouteCheckInterval = 0.75f;
+
+    /** Editor / game debug display. Draws current route lines while active. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|AI|Surface|Debug")
+    bool bDrawSurfacePathDebug = false;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Orbit|AI|Status")
+    int32 SurfaceReplanCount = 0;
+
+    /** Recalculate an active spherical route immediately, for changed terrain or scripted obstacles. */
+    UFUNCTION(BlueprintCallable, Category="Orbit|AI|Surface")
+    bool ReplanSphericalSurfacePathNow();
+
     UFUNCTION(BlueprintCallable, Category="Orbit|AI|Path")
     void StopFollowing();
 
@@ -101,4 +130,10 @@ protected:
 
 private:
     TWeakObjectPtr<AActor> MovingTarget;
+    bool bHasActiveSurfaceRoute = false;
+    FVector SurfaceGoal = FVector::ZeroVector;
+    FVector SurfaceCenter = FVector::ZeroVector;
+    float SurfaceRadius = 0.0f;
+    float TimeUntilRouteCheck = 0.0f;
+    FOrbitSphericalNavigationSettings ActiveSurfaceSettings;
 };
