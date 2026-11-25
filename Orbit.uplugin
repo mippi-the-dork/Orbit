@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 77,
-  "VersionName": "0.2.66",
+  "Version": 98,
+  "VersionName": "0.2.87",
   "FriendlyName": "Orbit",
   "Description": "Arbitrary gravity fields, actor and component sources, character controls and orientation, and optional Mover integration within one plugin.",
   "Category": "Physics",
@@ -24,6 +24,17 @@
       "Name": "OrbitMover",
       "Type": "Runtime",
       "LoadingPhase": "PostDefault"
+    },
+    {
+      "Name": "OrbitStateTree",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "StateTree",
+      "Enabled": true
     }
   ]
 }

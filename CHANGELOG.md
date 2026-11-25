@@ -1,3 +1,72 @@
+## v0.2.87 — Iteration 078: Demand-sampled navigation and native AI adapters (pending UE validation)
+
+- Sample the spherical navigation graph **on demand**: endpoint nodes are selected by angular proximity among valid surface hits; A* samples neighbor nodes only when explored. Per-request cache records valid/invalid samples and never persists collision decisions across requests.
+- Profile `AttemptedNodeSamples`, `ReusedNodeSamples`, and the actual sample time, while preserving `FindSphericalSurfacePath` Blueprint signature and existing capsule/edge/endpoint verification.
+- Add matching 16/32/64 **capsule-verified** planning benchmark and request-isolation/demand-sampling tests; earlier 32/64 baseline deliberately disabled capsule clearance.
+- Add the `OrbitStateTree` runtime module with a native **Orbit Move to Location** StateTree task. Native StateTree binds controller/destination/center/radius, uses existing Orbit movement, returns success/failure on the owned request, and aborts only its own request on exit. Requires Unreal's built-in StateTree plugin; does not replace Behavior Trees or Blueprint.
+- Add Blueprint-accessible spherical candidate surface projection and great-circle distance helpers for custom EQS workflows. Native EQS generators/tests and full StateTree asset execution tests remain outstanding.
+- Four new native automation tests, expected Orbit suite **197**. Engine 5.8.3 build and regression pending.
+
+## v0.2.85 — Iteration 077: Lazy collision-verified path planning and native AI compatibility
+
+- Validate spherical graph edges on-demand during A*, instead of checking every edge before searching. Collision decisions are cached only inside the current query, preserving live-obstacle, request-owner and capsule safety.
+- Add optional C++ per-request planning diagnostics and two focused native regression/scale tests; preserve the original Blueprint API.
+- Document intended compatibility with AI Controllers, Behavior Trees, Blackboard, Blueprint, StateTree and EQS, including current limitations. No new decision system, engine edits, or persistent graph cache.
+- UE 5.8.3 compilation and automation pending; v0.2.84 baseline 191/191 passed.
+
+## v0.2.84 — Iteration 076
+
+- Added 16/32/64 independently possessed AI navigation scaling benchmarks with separate plan and deterministic movement timings; recorded the lower-cost mode used at higher agent counts.
+- Added collision-obstacle introduction/removal recovery test that requires physical destination success without request ID churn.
+- Documented why shared collision topology caching and crowd avoidance remain deferred until source-dependent query invalidation and scale measurements are established.
+- No engine edits or third-party QA-plugin dependencies.
+
+## 0.2.77 — Iteration 074 Behavior Tree execution scheduling fixture fix
+
+## 0.2.83 — Iteration 075: Native AI Gameplay Completion and Multi-Agent Coverage
+
+- Added native CharacterMovement-based end-to-end AI destination success test via Orbit AI Controller.
+- Added multiple independently possessed agents walking one spherical collision world with request-scoped cancellation.
+- Added live physical moving-target chase, replan and target-loss test.
+- Added real single-run Behavior Tree task completion test following gravity-relative physical walking.
+- Cached three console-variable handles in the physics world subsystem to avoid per-tick console object lookups; values remain live.
+- UE 5.8.3 compilation and all four new tests pending. The prior v0.2.82 baseline passed 183/183 native Orbit tests.
+
+
+- The transient BT test now explicitly resolves its Vector Blackboard selector against the constructed schema.
+- Advance the isolated game world to service pending Behavior Tree startup and abort scheduling, instead of only directly ticking its BehaviorTreeComponent.
+- Preserve the strict assertions that the real BT task starts an Orbit move and that stopping the tree aborts that owned request. Failure diagnostics now report BT running state, selected key and follower path status.
+- No changes to production gravity, navigation, movement, Behavior Tree task implementation, or unrelated plugins. UE 5.8.3 compile and automation validation pending.
+
+## 0.2.76 — Iteration 074 test-world AI initialization
+
+- Ensure an AI system exists in the isolated Behavior Tree test world before Blackboard initialization. No runtime code changes.
+
+## 0.2.75 - Iteration 074 Gravity Fixture Compilation Fix
+
+- Fixed OrbitEditor C2248 in the registered gravity-source integration fixture by invoking TickComponent through its public UActorComponent interface; runtime override remains protected.
+- No runtime navigation or gravity behavior changes.
+
+## 0.2.69 — Iteration 072: Physics-stepped AI traversal and recovery
+- Establish deterministic tick dependencies: Orbit Character gravity updates first, Orbit AI follower produces steering second, and native CharacterMovement consumes the input third; remove the movement dependency on EndPlay.
+- Expose real physical movement diagnostics (last displacement speed, grounded state, tangent waypoint distance and stalled duration) on the follower.
+- Add configurable movement-stall detection, with a capped number of spherical-route replan attempts; stop and report a stalled route instead of steering forever. Existing user-authored routes do not trigger spherical pathfinding.
+- Add isolated-world UE automation fixtures that tick real native CharacterMovement against spherical collision, with deterministic local radial gravity; cover arc traversal/arrival, obstacle replan after movement begins, and stalled-without-movement recovery.
+- Not verified in UE 5.8.3 by this packaging environment. Actual walking and collision outcome require the user's engine automation run; fixture-supplied gravity is not a full world gravity-source integration test.
+
+## 0.2.68 — Iteration 071: Consistent navigation collision exclusions
+- Correct spherical edge/endpoint collision checks to preserve the querying Character's Actor exclusion from the path-planning context, rather than passing UWorld and allowing the Character to obstruct its own route.
+- Preserve the public Blueprint APIs and independently callable world-context leg query.
+- Adjust the capsule near-miss fixture to put the obstacle unequivocally within the capsule footprint yet outside a point trace; add an explicit precondition asserting fixture overlap.
+- Report the path-follower failure reason directly from its automation assertion.
+- v0.2.67 UE 5.8.3 test results: 2 failures (CapsuleNearMiss, CharacterCapsuleReplan), 1 pass (SphereAndObstacles), other suite cases passing. v0.2.68 compilation and execution pending.
+
+## 0.2.67 — Iteration 069 collision clearance correction
+- Clearance now uses per-component overlap results, ignoring only the sampled supporting walkable component rather than treating the surface itself as an obstacle. All other blocking overlap components continue to fail clearance.
+- Isolated-world obstacle fixtures explicitly set Actor locations after root component registration, avoiding implicit spawn-transform assumptions.
+- Character replanning fixture positions and orients its capsule above the sphere surface; prior fixture centered the capsule at the surface.
+- Existing point-route and public Blueprint signatures unchanged. UE 5.8.3 compilation and regression pending.
+
 ## 0.2.62 — Iteration 066
 - Added a collision-aware Orbit projectile flight preview Blueprint API with optional spherical sweep, first-blocking-hit result, simple bounce prediction and optional homing toward native HomingTargetComponent.
 - Preview samples live gravity fields throughout flight, respecting projectile receiver channels, gravity scaling and outside-field fallback. No actors are spawned or modified.

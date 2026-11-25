@@ -56,6 +56,25 @@ struct ORBIT_API FOrbitSphericalNavigationSettings
     float SurfaceSkin = 3.0f;
 };
 
+/** Per-request measurements for native profiling and automation. No persistent shared collision state. */
+struct ORBIT_API FOrbitSurfaceNavigationProfile
+{
+    double EndpointMilliseconds = 0.0;
+    double GraphSamplingMilliseconds = 0.0;
+    double EdgeValidationMilliseconds = 0.0;
+    double SearchMilliseconds = 0.0;
+    double ConnectorMilliseconds = 0.0;
+    /** Number of actual (successful or rejected) grid surface samples made this request. */
+    int32 AttemptedNodeSamples = 0;
+    /** Repeated node requests answered from the per-request sampling state. */
+    int32 ReusedNodeSamples = 0;
+    int32 SampledNodes = 0;
+    int32 ExpandedNodes = 0;
+    int32 EdgeChecks = 0;
+    int32 ReusedEdgeChecks = 0;
+    int32 BlockedEdges = 0;
+};
+
 /** Spherical surface path generation independent of world-Z Recast navigation. */
 UCLASS()
 class ORBIT_API UOrbitAISurfaceNavigation : public UBlueprintFunctionLibrary
@@ -70,6 +89,27 @@ public:
     static bool FindSphericalSurfacePath(const UObject* WorldContextObject, FVector Start, FVector Goal,
         FVector SphereCenter, float ReferenceRadius, const FOrbitSphericalNavigationSettings& Settings,
         TArray<FVector>& OutWaypoints, FString& OutFailureReason);
+
+    /** Same route and collision semantics as the Blueprint API, with optional per-call diagnostics.
+     * Diagnostics are native-only and never retain world or collision data across requests.
+     */
+    static bool FindSphericalSurfacePathProfiled(const UObject* WorldContextObject, FVector Start, FVector Goal,
+        FVector SphereCenter, float ReferenceRadius, const FOrbitSphericalNavigationSettings& Settings,
+        TArray<FVector>& OutWaypoints, FString& OutFailureReason, FOrbitSurfaceNavigationProfile* OutProfile);
+
+    /** Project a candidate position onto the current collision-verified spherical surface.
+     * Useful for Blueprint EQS generators/tests. Does not modify Unreal's EQS framework.
+     */
+    UFUNCTION(BlueprintCallable, Category="Orbit|AI|Query", meta=(WorldContext="WorldContextObject"))
+    static bool ProjectToSphericalSurface(const UObject* WorldContextObject, FVector Candidate,
+        FVector SphereCenter, float ReferenceRadius, const FOrbitSphericalNavigationSettings& Settings,
+        FVector& OutSurfacePoint);
+
+    /** Shortest great-circle distance on a reference sphere; not obstacle path distance.
+     * Returns -1 for invalid geometry. Suitable as a gravity-relative scoring input.
+     */
+    UFUNCTION(BlueprintPure, Category="Orbit|AI|Query")
+    static double SphericalArcDistance(FVector A, FVector B, FVector SphereCenter, float ReferenceRadius);
 
     /** Deterministic A* on a seam-wrapped latitude/longitude grid, for isolated automation and tooling.
      * BlockedMask and nodes use indices Lat * LongitudeSamples + Lon. Returned path includes both endpoints.

@@ -5,6 +5,9 @@
 #include "OrbitAIPathFollowerComponent.h"
 #include "Tests/AutomationCommon.h"
 #include "Components/SphereComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "CollisionShape.h"
+#include "CollisionQueryParams.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
 #include "Engine/World.h"
@@ -104,6 +107,7 @@ bool FOrbitAISurfaceWorld::RunTest(const FString& Parameters)
     Blocker->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     Blocker->SetCollisionResponseToAllChannels(ECR_Block);
     Blocker->RegisterComponent();
+    BlockerActor->SetActorLocation(FVector(707.1, 707.1, 0.0));
 
     TestFalse(TEXT("Live obstacle invalidates previously clear direct capsule leg"),
         UOrbitAISurfaceNavigation::IsSphericalSurfaceLegTraversable(World, Start, Goal, FVector::ZeroVector,
@@ -149,20 +153,35 @@ bool FOrbitAISurfaceCapsuleNearMiss::RunTest(const FString& Parameters)
     Surface->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     Surface->SetCollisionResponseToAllChannels(ECR_Block);
     Surface->RegisterComponent();
-    AActor* NearObstacle = World->SpawnActor<AActor>(FVector(705.0, 705.0, 55.0), FRotator::ZeroRotator);
+    AActor* NearObstacle = World->SpawnActor<AActor>(FVector(705.0, 705.0, 35.0), FRotator::ZeroRotator);
     USphereComponent* Obstacle = NewObject<USphereComponent>(NearObstacle);
     NearObstacle->AddInstanceComponent(Obstacle);
     NearObstacle->SetRootComponent(Obstacle);
+    // Keep the blocker clearly outside a radial point trace but inside the
+    // footprint of the 34 cm radius / 88 cm half-height radial capsule.
     Obstacle->InitSphereRadius(32.0f);
     Obstacle->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     Obstacle->SetCollisionResponseToAllChannels(ECR_Block);
     Obstacle->RegisterComponent();
+    NearObstacle->SetActorLocation(FVector(705.0, 705.0, 35.0));
     FOrbitSphericalNavigationSettings PointSettings;
     FOrbitSphericalNavigationSettings CapsuleSettings = PointSettings;
     CapsuleSettings.AgentRadius = 34.0f;
     CapsuleSettings.AgentHalfHeight = 88.0f;
     const FVector Start(1000.0, 0.0, 0.0);
     const FVector Goal(0.0, 1000.0, 0.0);
+    // Sanity-check that the obstacle genuinely overlaps the capsule footprint,
+    // independently of the planner. Keep the scene fixture meaningful even if
+    // navigation sampling changes in a future iteration.
+    const FVector MidSurface(707.106781, 707.106781, 0.0);
+    const FVector MidUp = MidSurface.GetSafeNormal();
+    FCollisionQueryParams CheckParams(SCENE_QUERY_STAT(OrbitNearMissFixture), false);
+    CheckParams.AddIgnoredActor(Planet);
+    const bool bFixtureOverlapsCapsule = World->OverlapBlockingTestByChannel(
+        MidSurface + MidUp * (CapsuleSettings.AgentHalfHeight + CapsuleSettings.SurfaceSkin),
+        FQuat::FindBetweenNormals(FVector::UpVector, MidUp), CapsuleSettings.TraceChannel,
+        FCollisionShape::MakeCapsule(CapsuleSettings.AgentRadius, CapsuleSettings.AgentHalfHeight), CheckParams);
+    TestTrue(TEXT("Near-miss obstacle actually overlaps the character capsule"), bFixtureOverlapsCapsule);
     TestTrue(TEXT("Point-sized route clears offset obstacle"),
         UOrbitAISurfaceNavigation::IsSphericalSurfaceLegTraversable(World, Start, Goal,
             FVector::ZeroVector, 1000.0f, PointSettings));
@@ -195,6 +214,12 @@ bool FOrbitAISurfaceFollowerReplan::RunTest(const FString& Parameters)
     ACharacter* Character = World->SpawnActor<ACharacter>(ACharacter::StaticClass(),
         FVector(1000.0, 0.0, 0.0), FRotator::ZeroRotator);
     if (!TestNotNull(TEXT("Navigation Character"), Character)) return false;
+    // Navigation expects the Character capsule center above the surface, not
+    // centered at the surface. Its feet are at radius 1000.
+    Character->SetActorRotation(FQuat::FindBetweenNormals(FVector::UpVector, FVector::ForwardVector));
+    const float CapsuleHalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+    Character->SetActorLocation(FVector(1000.0 + CapsuleHalfHeight + 3.0, 0.0, 0.0), false, nullptr,
+        ETeleportType::TeleportPhysics);
     UOrbitAIPathFollowerComponent* Follower = NewObject<UOrbitAIPathFollowerComponent>(Character);
     Character->AddInstanceComponent(Follower);
     Follower->RegisterComponent();
@@ -202,8 +227,9 @@ bool FOrbitAISurfaceFollowerReplan::RunTest(const FString& Parameters)
     Settings.LongitudeSamples = 24;
     Settings.LatitudeSamples = 13;
     const FVector Goal(0.0, 1000.0, 0.0);
-    if (!TestTrue(TEXT("Character accepts capsule-sized spherical route"),
-        Follower->FollowSphericalSurfacePath(Goal, FVector::ZeroVector, 1000.0f, Settings))) return false;
+    const bool bAccepted = Follower->FollowSphericalSurfacePath(Goal, FVector::ZeroVector, 1000.0f, Settings);
+    if (!TestTrue(FString::Printf(TEXT("Character accepts capsule-sized spherical route (%s)"),
+        *Follower->LastPathStatus), bAccepted)) return false;
     TestTrue(TEXT("Follower is following"), Follower->bFollowingPath);
     TestEqual(TEXT("No replan initially"), Follower->SurfaceReplanCount, 0);
 
@@ -216,6 +242,7 @@ bool FOrbitAISurfaceFollowerReplan::RunTest(const FString& Parameters)
     Blocker->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     Blocker->SetCollisionResponseToAllChannels(ECR_Block);
     Blocker->RegisterComponent();
+    BlockerActor->SetActorLocation(FVector(707.1, 707.1, 0.0));
     TestTrue(TEXT("Character can replan after obstacle appears"), Follower->ReplanSphericalSurfacePathNow());
     TestEqual(TEXT("One recorded successful replan"), Follower->SurfaceReplanCount, 1);
     TestTrue(TEXT("Follower retains replacement route"), Follower->bFollowingPath && Follower->Waypoints.Num() >= 2);

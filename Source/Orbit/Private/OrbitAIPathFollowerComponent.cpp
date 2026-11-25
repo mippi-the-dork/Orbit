@@ -1,5 +1,6 @@
 #include "OrbitAIPathFollowerComponent.h"
 #include "OrbitAISurfaceNavigation.h"
+#include "OrbitCharacterGravityComponent.h"
 
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
@@ -14,6 +15,54 @@ UOrbitAIPathFollowerComponent::UOrbitAIPathFollowerComponent()
     PrimaryComponentTick.bCanEverTick = true;
     PrimaryComponentTick.TickGroup = TG_PrePhysics;
     bAutoActivate = true;
+}
+
+FOrbitAIMoveDiagnostics UOrbitAIPathFollowerComponent::GetMoveDiagnostics() const
+{
+    FOrbitAIMoveDiagnostics Snapshot;
+    Snapshot.RequestId = MoveRequestId;
+    Snapshot.Result = LastMoveResult;
+    Snapshot.bActive = bFollowingPath;
+    Snapshot.bSphericalRoute = bHasActiveSurfaceRoute;
+    Snapshot.WaypointIndex = CurrentWaypointIndex;
+    Snapshot.WaypointCount = Waypoints.Num();
+    Snapshot.SuccessfulReplans = SurfaceReplanCount;
+    Snapshot.StallReplans = StallReplanAttempts;
+    Snapshot.MovementSpeed = LastMovementSpeed;
+    Snapshot.SecondsStalled = SecondsWithoutMovement;
+    Snapshot.TangentWaypointDistance = TangentDistanceToWaypoint;
+    Snapshot.Status = LastPathStatus;
+    if (const ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner()))
+    {
+        if (const UCharacterMovementComponent* Movement = OwnerCharacter->GetCharacterMovement())
+        {
+            Snapshot.bGrounded = Movement->IsMovingOnGround();
+        }
+        if (const UOrbitCharacterGravityComponent* Gravity = OwnerCharacter->FindComponentByClass<UOrbitCharacterGravityComponent>())
+        {
+            Snapshot.bInsideOrbitGravityField = Gravity->bInsideOrbitField;
+            Snapshot.GravitySourceId = Gravity->LastDominantSourceId;
+        }
+    }
+    return Snapshot;
+}
+
+void UOrbitAIPathFollowerComponent::BeginPlay()
+{
+    Super::BeginPlay();
+    if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
+    {
+        // Orbit gravity must establish the current gravity frame before steering;
+        // CharacterMovement must consume the steering input afterwards.
+        if (UOrbitCharacterGravityComponent* Gravity = Character->FindComponentByClass<UOrbitCharacterGravityComponent>())
+        {
+            AddTickPrerequisiteComponent(Gravity);
+        }
+        if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+        {
+            Movement->AddTickPrerequisiteComponent(this);
+        }
+    }
 }
 
 FVector UOrbitAIPathFollowerComponent::CalculateTangentSteering(const FVector& CurrentLocation, const FVector& TargetLocation, const FVector& GravityDown)
@@ -67,10 +116,19 @@ bool UOrbitAIPathFollowerComponent::FollowWaypoints(const TArray<FVector>& NewWa
         }
     }
     MovingTarget.Reset();
+    bSurfaceActorChase = false;
     bHasActiveSurfaceRoute = false;
+    ++MoveRequestId;
+    if (MoveRequestId <= 0) MoveRequestId = 1;
+    LastMoveResult = EOrbitAIMoveResult::InProgress;
     Waypoints = NewWaypoints;
     CurrentWaypointIndex = 0;
     bFollowingPath = true;
+    bHasMovementSample = false;
+    LastMovementSpeed = 0.0f;
+    SecondsWithoutMovement = 0.0f;
+    TangentDistanceToWaypoint = 0.0f;
+    StallReplanAttempts = 0;
     LastPathStatus = TEXT("Following");
     return true;
 }
@@ -209,6 +267,7 @@ bool UOrbitAIPathFollowerComponent::FollowSphericalSurfacePath(FVector Goal, FVe
         Character->GetActorLocation(), Goal, SphereCenter, ReferenceRadius, Effective, Planned, Reason))
     {
         StopFollowing();
+        LastMoveResult = EOrbitAIMoveResult::Failed;
         LastPathStatus = Reason.IsEmpty() ? TEXT("Missing Character") : Reason;
         return false;
     }
@@ -221,6 +280,35 @@ bool UOrbitAIPathFollowerComponent::FollowSphericalSurfacePath(FVector Goal, FVe
     SurfaceReplanCount = 0;
     TimeUntilRouteCheck = FMath::Max(0.2f, RouteCheckInterval);
     LastPathStatus = TEXT("Following capsule-verified spherical route");
+    return true;
+}
+
+bool UOrbitAIPathFollowerComponent::FollowSphericalSurfaceActor(AActor* Goal, FVector SphereCenter,
+    float ReferenceRadius, const FOrbitSphericalNavigationSettings& Settings)
+{
+    if (!IsValid(Goal) || Goal == GetOwner())
+    {
+        LastPathStatus = TEXT("Invalid spherical chase target");
+        return false;
+    }
+    if (!FollowSphericalSurfacePath(Goal->GetActorLocation(), SphereCenter, ReferenceRadius, Settings))
+    {
+        return false;
+    }
+    MovingTarget = Goal;
+    bSurfaceActorChase = true;
+    return true;
+}
+
+bool UOrbitAIPathFollowerComponent::AbortMoveRequest(int32 ExpectedRequestId)
+{
+    if (!bFollowingPath || ExpectedRequestId <= 0 || ExpectedRequestId != MoveRequestId)
+    {
+        return false;
+    }
+    StopFollowing();
+    LastMoveResult = EOrbitAIMoveResult::Aborted;
+    LastPathStatus = TEXT("Aborted");
     return true;
 }
 
@@ -238,6 +326,7 @@ bool UOrbitAIPathFollowerComponent::ReplanSphericalSurfacePathNow()
         SurfaceGoal, SurfaceCenter, SurfaceRadius, ActiveSurfaceSettings, NewPath, Failure))
     {
         StopFollowing();
+        LastMoveResult = EOrbitAIMoveResult::Failed;
         LastPathStatus = FString::Printf(TEXT("Surface replan failed: %s"), *Failure);
         return false;
     }
@@ -245,6 +334,8 @@ bool UOrbitAIPathFollowerComponent::ReplanSphericalSurfacePathNow()
     CurrentWaypointIndex = 0;
     bFollowingPath = true;
     ++SurfaceReplanCount;
+    bHasMovementSample = false;
+    SecondsWithoutMovement = 0.0f;
     TimeUntilRouteCheck = FMath::Max(0.2f, RouteCheckInterval);
     LastPathStatus = TEXT("Spherical route replanned");
     return true;
@@ -252,12 +343,20 @@ bool UOrbitAIPathFollowerComponent::ReplanSphericalSurfacePathNow()
 
 void UOrbitAIPathFollowerComponent::StopFollowing()
 {
+    if (bFollowingPath) LastMoveResult = EOrbitAIMoveResult::Aborted;
     bFollowingPath = false;
     CurrentWaypointIndex = INDEX_NONE;
     MovingTarget.Reset();
+    bSurfaceActorChase = false;
     bHasActiveSurfaceRoute = false;
     TimeUntilRouteCheck = 0.0f;
     Waypoints.Reset();
+    bHasMovementSample = false;
+    SecondsWithoutMovement = 0.0f;
+    LastMovementSpeed = 0.0f;
+    TangentDistanceToWaypoint = 0.0f;
+    StallReplanAttempts = 0;
+    bLastMovementGrounded = false;
     LastPathStatus = TEXT("Stopped");
 }
 
@@ -279,20 +378,68 @@ void UOrbitAIPathFollowerComponent::TickComponent(float DeltaTime, ELevelTick Ti
     if (!Character || !Movement || !Waypoints.IsValidIndex(CurrentWaypointIndex))
     {
         StopFollowing();
+        LastMoveResult = EOrbitAIMoveResult::Failed;
         LastPathStatus = TEXT("Invalid movement or waypoint state");
         return;
     }
-    if (bTrackMovingTarget && MovingTarget.IsValid())
+    if (bSurfaceActorChase)
     {
-        Waypoints.Last() = MovingTarget->GetActorLocation();
+        if (!MovingTarget.IsValid())
+        {
+            StopFollowing();
+            LastMoveResult = EOrbitAIMoveResult::Failed;
+            LastPathStatus = TEXT("Spherical chase target lost");
+            return;
+        }
+        const FVector LatestGoal = MovingTarget->GetActorLocation();
+        if (FVector::DistSquared(LatestGoal, SurfaceGoal) >=
+            FMath::Square(FMath::Max(1.0f, MovingTargetReplanDistance)))
+        {
+            SurfaceGoal = LatestGoal;
+            if (!ReplanSphericalSurfacePathNow()) return;
+        }
     }
-    if (bRequireGrounded && !Movement->IsMovingOnGround())
+    else if (MovingTarget.IsValid())
     {
+        if (bTrackMovingTarget) Waypoints.Last() = MovingTarget->GetActorLocation();
+    }
+    else if (MovingTarget.IsStale())
+    {
+        StopFollowing();
+        LastMoveResult = EOrbitAIMoveResult::Failed;
+        LastPathStatus = TEXT("Target actor lost");
+        return;
+    }
+    bLastMovementGrounded = Movement->IsMovingOnGround();
+    if (bRequireGrounded && !bLastMovementGrounded)
+    {
+        // A Character falling toward a planet is not a navigation stall.
+        bHasMovementSample = false;
+        SecondsWithoutMovement = 0.0f;
+        LastMovementSpeed = 0.0f;
         LastPathStatus = TEXT("Paused: not grounded");
         return;
     }
     const FVector Down = Movement->GetGravityDirection();
     const FVector Current = Character->GetActorLocation();
+    if (DeltaTime > SMALL_NUMBER && FMath::IsFinite(DeltaTime))
+    {
+        if (bHasMovementSample)
+        {
+            LastMovementSpeed = static_cast<float>(FVector::Dist(Current, LastMovementSampleLocation) / DeltaTime);
+            // Do not count the first sample, teleportation or a missing gravity frame as movement progress.
+            if (bDetectMovementStalls && LastMovementSpeed < FMath::Max(0.0f, MinimumMovementSpeed))
+            {
+                SecondsWithoutMovement += DeltaTime;
+            }
+            else
+            {
+                SecondsWithoutMovement = 0.0f;
+            }
+        }
+        LastMovementSampleLocation = Current;
+        bHasMovementSample = true;
+    }
     // Advance past all contiguous reached waypoints to avoid one-frame stalls.
     while (Waypoints.IsValidIndex(CurrentWaypointIndex) && IsWaypointReached(Current,
         Waypoints[CurrentWaypointIndex], Down, AcceptanceRadius, MaxNormalArrivalError, bUseTangentArrival))
@@ -305,7 +452,27 @@ void UOrbitAIPathFollowerComponent::TickComponent(float DeltaTime, ELevelTick Ti
         bHasActiveSurfaceRoute = false;
         MovingTarget.Reset();
         CurrentWaypointIndex = INDEX_NONE;
+        bSurfaceActorChase = false;
+        LastMoveResult = EOrbitAIMoveResult::Succeeded;
         LastPathStatus = TEXT("Reached destination");
+        return;
+    }
+    TangentDistanceToWaypoint = static_cast<float>(FVector::VectorPlaneProject(
+        Waypoints[CurrentWaypointIndex] - Current, Down.GetSafeNormal()).Size());
+    if (bDetectMovementStalls && bHasMovementSample &&
+        SecondsWithoutMovement >= FMath::Max(0.2f, MovementStallTimeout))
+    {
+        if (bHasActiveSurfaceRoute && bReplanStalledSurfaceRoutes &&
+            StallReplanAttempts < FMath::Clamp(MaxStallReplans, 0, 10))
+        {
+            ++StallReplanAttempts;
+            if (!ReplanSphericalSurfacePathNow()) return;
+            LastPathStatus = TEXT("Replanned after movement stall");
+            return;
+        }
+        StopFollowing();
+        LastMoveResult = EOrbitAIMoveResult::Failed;
+        LastPathStatus = TEXT("Stalled: Character did not move");
         return;
     }
     if (bHasActiveSurfaceRoute && bReplanBlockedSurfaceRoutes)
@@ -345,6 +512,13 @@ void UOrbitAIPathFollowerComponent::TickComponent(float DeltaTime, ELevelTick Ti
 
 void UOrbitAIPathFollowerComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
+    {
+        if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+        {
+            Movement->RemoveTickPrerequisiteComponent(this);
+        }
+    }
     StopFollowing();
     Super::EndPlay(EndPlayReason);
 }

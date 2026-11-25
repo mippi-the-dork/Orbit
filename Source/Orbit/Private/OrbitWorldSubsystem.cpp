@@ -1631,11 +1631,13 @@ void UOrbitWorldSubsystem::Tick(float DeltaTime)
     // after first body discovery, so the initial impacts are not missed.
     if (!bAutoMotionStartedThisWorld && !bMotionHistoryRecording && !ManagedBodies.IsEmpty())
     {
-        IConsoleVariable* AutoAll = IConsoleManager::Get().FindConsoleVariable(TEXT("Orbit.Motion.AutoStartAll"));
+        // Find each console object once per process, not on every physics discovery
+        // tick while a world has managed bodies. Values remain live at GetInt/GetFloat.
+        static IConsoleVariable* AutoAll = IConsoleManager::Get().FindConsoleVariable(TEXT("Orbit.Motion.AutoStartAll"));
         if (AutoAll && AutoAll->GetInt() != 0)
         {
-            IConsoleVariable* DurationVar = IConsoleManager::Get().FindConsoleVariable(TEXT("Orbit.Motion.AutoDuration"));
-            IConsoleVariable* RateVar = IConsoleManager::Get().FindConsoleVariable(TEXT("Orbit.Motion.AutoRate"));
+            static IConsoleVariable* DurationVar = IConsoleManager::Get().FindConsoleVariable(TEXT("Orbit.Motion.AutoDuration"));
+            static IConsoleVariable* RateVar = IConsoleManager::Get().FindConsoleVariable(TEXT("Orbit.Motion.AutoRate"));
             bAutoMotionStartedThisWorld = StartAllMotionHistory(
                 DurationVar ? DurationVar->GetFloat() : 20.0f,
                 RateVar ? RateVar->GetInt() : 60);

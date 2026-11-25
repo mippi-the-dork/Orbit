@@ -1,3 +1,5 @@
+> **Current development build: Orbit 0.2.68 (Iteration 071).** Fixes requesting-Character exclusion across spherical navigation graph edges and endpoint connectors; strengthens the capsule near-miss regression fixture. See [Iteration 071](Docs/ITERATION_071.md). UE 5.8.3 build and tests pending.
+
 > **Current development build: Orbit 0.2.59 (Iteration 063).** Adds three solver-backed native automation tests using two real Chaos rigid bodies joined by a runtime physics constraint: gravity response, particle recreation, and source lifecycle. Runtime gravity implementation and Blueprint interfaces are unchanged. **This is not yet a skeletal Physics Asset automation fixture.** See [Iteration 063](Docs/ITERATION_063.md). UE 5.8.3 build and execution are not yet verified.
 
 > **Orbit 0.2.50 (Iteration 056):** Gravity Source Actor and Gravity Source Component Details panels have aligned category names and explicit authoring order (Gravity, Affected Objects, Shape controls, Overlapping Fields, Vortex, Visualization, diagnostics). Added explanatory tooltips, conditional visibility for shape-specific tuning, and an editor metadata regression test. This pass makes **no runtime gravity or serialized value changes**; the previous 0.2.49 tangent direction behavior is preserved. See [Details Panel UX](Docs/DETAILS_PANEL_UX.md) and [Iteration 056](Docs/ITERATION_056.md). UE 5.8.3 editor compilation, packaging and visual validation remain pending.
@@ -12,13 +14,13 @@
 
 **Orbit** is a C++ gravity field plugin for Unreal Engine 5.8.3. Designers can place gravity sources in a level to author spherical, cylindrical, directional, bounded-volume, and spline-shaped gravity. Gameplay code can query the same field, while an initial runtime subsystem automatically applies custom acceleration to eligible physics-simulating components.
 
-**Current version:** 0.2.59 (Iteration 063, constrained Chaos automation)  
+**Current development version:** 0.2.87 (Iteration 078, demand-sampled spherical navigation, capsule profiling, native StateTree task, query helpers; UE verification pending)  
 **Target:** Unreal Engine 5.8.0–5.8.3, Win64; 5.8.3 is the user-test target  
 **Engine modifications:** None  
 **Runtime behavior:** Standard default unchanged. Single Directional/Point, Multi-Point, Mixed Point + Directional and Early Ownership remain separately opt-in and retain their eligibility restrictions. User-validated experiments include natural sleeping and source movement in 5.8.3.  
-**Unverified release gates:** Iteration 042 channel/Vortex C++ additions and 10 new automation tests have not yet been compiled or executed in UE 5.8.3. The prior 29/29 math and 9/9 live Chaos suite passed in UE. Unreal Insights and current-version game packaging remain pending. Weak native Chaos gravity can still permit unsupported sleeping.
+**Current UE test baseline:** v0.2.86 passed 193/193 Orbit automation tests in UE 5.8.3. v0.2.87 changes are pending compile and testing. Full Unreal Insights / shipping verification remains separate.
 
-Orbit is a *gravity framework*, not a Character Movement plugin. The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
+Orbit is a *gravity framework*, not a replacement for Unreal AI or CharacterMovement. See [Native AI integration and limitations](Docs/AI_NATIVE_INTEGRATION.md). The world owns the gravity field. Physics, movement and future navigation/EQS integrations query the same definition.
 
 ## Iteration 039: compatibility, repeatable motion diagnostics, and packaging
 
@@ -444,3 +446,10 @@ For Volume sources, **Volume Direction Mode** controls the effective direction. 
 ### Gravity-aware AI waypoint movement (experimental)
 
 Add `Orbit AI Path Follower` to an Orbit gravity-controlled Character and call `FollowWaypoints`, `FollowSphericalArc`, or `FollowNativeNavigationPath` to follow routes using gravity-tangent movement input. This is an opt-in follower, not a spherical NavMesh or replacement for native AI MoveTo. See `Docs/ITERATION_067.md`.
+
+
+## Iteration 073: Native AI Controller and Behavior Tree integration (v0.2.71)
+
+Orbit now includes the optional `AOrbitAIController` and `UBTTask_OrbitMoveTo` for gravity-relative spherical navigation. A possessed `ACharacter` needs `UOrbitAIPathFollowerComponent` and compatible gravity/movement setup. The controller exposes **Move Orbit To Location**, **Move Orbit To Actor**, and **Stop Orbit Movement**. The Behavior Tree task accepts an Actor or Vector Blackboard key plus a spherical center, radius and sampling settings; it reports success/failure and respects abort. It can run under any native `AAIController` whose Character owns the follower, not only `AOrbitAIController`. Avoid running native Recast `Move To` and Orbit movement concurrently.
+
+Spherical Actor tracking recalculates routes only after a configurable displacement and reports target destruction as failure. Each accepted move has a request ID and terminal result (`Succeeded`, `Failed`, `Aborted`), preventing an older task from cancelling a newer move. Spherical route generation is synchronous and not a persistent NavMesh, native PathFollowingComponent replacement, EQS provider, or network-predicted movement. See `Docs/ITERATION_073.md`.
