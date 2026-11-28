@@ -2,6 +2,10 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OrbitAIController.h"
+#include "OrbitAIBlueprintLibrary.h"
+#include "EnvQueryTest_OrbitSphericalDistance.h"
+#include "EnvQueryGenerator_OrbitSurfacePoints.h"
+#include "AIController.h"
 #include "OrbitAIPathFollowerComponent.h"
 #include "OrbitAISurfaceNavigation.h"
 #include "OrbitStateTreeMoveToTask.h"
@@ -508,6 +512,140 @@ bool FOrbitAIGravityRelativeQuery::RunTest(const FString& Parameters)
         UOrbitAISurfaceNavigation::SphericalArcDistance(FVector::ZeroVector,
             FVector(1000.0, 0.0, 0.0), FVector::ZeroVector,
             OrbitAIScalingTests::Radius) < 0.0);
+    return true;
+}
+
+
+// Native controller interoperability: projects can retain their own AIController BP/C++
+// subclass, providing only the Orbit path follower on the possessed Character.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAIAnyControllerMove,
+    "Orbit.AI.Native.AnyControllerBlueprintMoveAndOwnership",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitAIAnyControllerMove::RunTest(const FString& Parameters)
+{
+    OrbitAIScalingTests::FFixture F;
+    if (!TestTrue(TEXT("Create native Character/planet fixture"), F.Initialize(1))) return false;
+    OrbitAIScalingTests::FAgent& Agent = F.Agents[0];
+    AAIController* Native = F.World->SpawnActor<AAIController>();
+    if (!TestNotNull(TEXT("Spawn standard Unreal AIController"), Native)) return false;
+    Agent.Controller->UnPossess();
+    Native->Possess(Agent.Character);
+    if (!TestTrue(TEXT("Plain AIController possesses Orbit Character"), Native->GetPawn() == Agent.Character)) return false;
+    if (!TestEqual(TEXT("Blueprint library finds the follower without Orbit controller subclass"),
+        UOrbitAIBlueprintLibrary::GetOrbitFollower(Native), Agent.Follower)) return false;
+    int32 FirstId = 0;
+    F.Settings.bValidateEdges = true;
+    if (!TestTrue(TEXT("Plain AIController can start an Orbit Move To"),
+        UOrbitAIBlueprintLibrary::MoveToLocation(Native, OrbitAIScalingTests::FFixture::Point(0.45),
+            FVector::ZeroVector, OrbitAIScalingTests::Radius, F.Settings, FirstId))) return false;
+    TestTrue(TEXT("Request ID returned to Blueprints"), FirstId > 0);
+    const FOrbitAIMoveDiagnostics Snapshot = UOrbitAIBlueprintLibrary::GetMoveStatus(Native);
+    TestTrue(TEXT("Blueprint status shows active request"), Snapshot.bActive);
+    TestEqual(TEXT("Status preserves request ID"), Snapshot.RequestId, FirstId);
+    int32 SecondId = 0;
+    if (!TestTrue(TEXT("New Blueprint request replaces old one"),
+        UOrbitAIBlueprintLibrary::MoveToLocation(Native, OrbitAIScalingTests::FFixture::Point(0.65),
+            FVector::ZeroVector, OrbitAIScalingTests::Radius, F.Settings, SecondId))) return false;
+    TestTrue(TEXT("Replacement request gets a new identity"), SecondId > FirstId);
+    TestFalse(TEXT("Stale Blueprint request is not current"),
+        UOrbitAIBlueprintLibrary::IsRequestCurrent(Native, FirstId));
+    TestTrue(TEXT("New Blueprint request is current"),
+        UOrbitAIBlueprintLibrary::IsRequestCurrent(Native, SecondId));
+    FOrbitAIMoveDiagnostics OwnedSnapshot;
+    TestFalse(TEXT("Stale Blueprint request cannot read replacement status"),
+        UOrbitAIBlueprintLibrary::GetRequestStatus(Native, FirstId, OwnedSnapshot));
+    TestTrue(TEXT("Current Blueprint request reads its own status"),
+        UOrbitAIBlueprintLibrary::GetRequestStatus(Native, SecondId, OwnedSnapshot));
+    TestEqual(TEXT("Owned diagnostics preserve identity"), OwnedSnapshot.RequestId, SecondId);
+    TestFalse(TEXT("Old requester cannot abort new movement"),
+        UOrbitAIBlueprintLibrary::AbortRequest(Native, FirstId));
+    TestTrue(TEXT("New request still active"), Agent.Follower->bFollowingPath);
+    TestTrue(TEXT("Current request owner can abort"),
+        UOrbitAIBlueprintLibrary::AbortRequest(Native, SecondId));
+    TestEqual(TEXT("Abort is reflected through Blueprint status"),
+        UOrbitAIBlueprintLibrary::GetMoveStatus(Native).Result, EOrbitAIMoveResult::Aborted);
+    TestFalse(TEXT("Null controller is safe"),
+        UOrbitAIBlueprintLibrary::AbortRequest(nullptr, SecondId));
+    int32 InvalidId = 77;
+    TestFalse(TEXT("Invalid controller cannot move"),
+        UOrbitAIBlueprintLibrary::MoveToLocation(nullptr, FVector::ZeroVector,
+            FVector::ZeroVector, 1000.0f, F.Settings, InvalidId));
+    TestEqual(TEXT("Invalid request always resets returned ID"), InvalidId, 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAINativeEQSArcTest,
+    "Orbit.AI.Native.EQSSphericalDistanceTestSchemaAndMath",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitAINativeEQSArcTest::RunTest(const FString& Parameters)
+{
+    UEnvQueryTest_OrbitSphericalDistance* Test = NewObject<UEnvQueryTest_OrbitSphericalDistance>();
+    if (!TestNotNull(TEXT("Native EQS test is constructible"), Test)) return false;
+    TestTrue(TEXT("EQS test appears in native query editor"), !Test->GetDescriptionTitle().IsEmpty());
+    TestTrue(TEXT("EQS test has valid radius"), Test->SurfaceRadius > 0.0f);
+    TestTrue(TEXT("EQS test uses regular Unreal query context"), Test->DistanceTo != nullptr);
+    const FVector Center(900.0, -325.0, 420.0);
+    const float Radius = 1300.0f;
+    const FVector A = Center + FVector(Radius, 0, 0);
+    const FVector B = Center + FVector(0, Radius, 0);
+    const float Quarter = UEnvQueryTest_OrbitSphericalDistance::CalculateDistance(A, B, Center, Radius);
+    TestTrue(TEXT("Quarter-circle EQS score is gravity-relative"),
+        FMath::IsNearlyEqual(Quarter, Radius * HALF_PI, 0.01f));
+    TestTrue(TEXT("Native EQS math agrees with existing Blueprint helper"),
+        FMath::IsNearlyEqual(Quarter,
+            UOrbitAISurfaceNavigation::SphericalArcDistance(A, B, Center, Radius), 0.01));
+    TestTrue(TEXT("No zero-cost score for invalid center"),
+        UEnvQueryTest_OrbitSphericalDistance::CalculateDistance(Center, B, Center, Radius) < 0.0f);
+    TestTrue(TEXT("No valid radius yields invalid result"),
+        UEnvQueryTest_OrbitSphericalDistance::CalculateDistance(A, B, Center, 0.0f) < 0.0f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAIStateTreeGenericControllerSchema,
+    "Orbit.AI.Native.StateTreeGenericControllerAndActorInput",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitAIStateTreeGenericControllerSchema::RunTest(const FString& Parameters)
+{
+    FOrbitStateTreeMoveToInstanceData Data;
+    FOrbitStateTreeMoveToTask Task;
+    TestTrue(TEXT("StateTree retains ordinary native instance data"),
+        Task.GetInstanceDataType() == FOrbitStateTreeMoveToInstanceData::StaticStruct());
+    TestTrue(TEXT("Generic Controller is initially unset"), Data.Controller == nullptr);
+    TestTrue(TEXT("Optional Actor target is unset"), Data.TargetActor == nullptr);
+    const FProperty* ControllerProperty = FOrbitStateTreeMoveToInstanceData::StaticStruct()->FindPropertyByName(TEXT("Controller"));
+    const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(ControllerProperty);
+    if (!TestNotNull(TEXT("Controller is a reflected object property"), ObjectProperty)) return false;
+    TestTrue(TEXT("Task accepts standard AAIController bindings, not only Orbit subclasses"),
+        ObjectProperty->PropertyClass == AAIController::StaticClass());
+    TestEqual(TEXT("No request owned before task executes"), Data.OwnedRequestId, 0);
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOrbitAINativeEQSGenerator,
+    "Orbit.AI.Native.EQSSphericalPointGeneratorSchemaAndDistribution",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOrbitAINativeEQSGenerator::RunTest(const FString& Parameters)
+{
+    UEnvQueryGenerator_OrbitSurfacePoints* Generator = NewObject<UEnvQueryGenerator_OrbitSurfacePoints>();
+    if (!TestNotNull(TEXT("Native EQS generator constructible"), Generator)) return false;
+    TestTrue(TEXT("Generator has native EQS editor label"), !Generator->GetDescriptionTitle().IsEmpty());
+    TestTrue(TEXT("Generator defaults to collision-backed projection"), Generator->bProjectToWalkableSurface);
+    TestTrue(TEXT("Generator is bounded"), Generator->SampleCount >= 8 && Generator->SampleCount <= 256);
+    const int32 Count = 64;
+    FVector Sum = FVector::ZeroVector;
+    for (int32 I = 0; I < Count; ++I)
+    {
+        const FVector Direction = UEnvQueryGenerator_OrbitSurfacePoints::SampleDirection(I, Count);
+        if (!TestTrue(TEXT("Every generated direction is unit length"), Direction.IsUnit(0.001))) return false;
+        Sum += Direction;
+    }
+    TestTrue(TEXT("Sphere candidates distribute across both hemispheres"), Sum.Size() < 2.0);
+    TestTrue(TEXT("Repeated index gives stable position"),
+        UEnvQueryGenerator_OrbitSurfacePoints::SampleDirection(7, Count).Equals(
+            UEnvQueryGenerator_OrbitSurfacePoints::SampleDirection(7, Count), KINDA_SMALL_NUMBER));
+    TestTrue(TEXT("Out-of-bounds index rejected"),
+        UEnvQueryGenerator_OrbitSurfacePoints::SampleDirection(-1, Count).IsNearlyZero());
     return true;
 }
 

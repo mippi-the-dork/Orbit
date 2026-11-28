@@ -1,5 +1,6 @@
 #include "OrbitStateTreeMoveToTask.h"
-#include "OrbitAIController.h"
+#include "OrbitAIBlueprintLibrary.h"
+#include "AIController.h"
 #include "OrbitAIPathFollowerComponent.h"
 #include "StateTreeExecutionContext.h"
 
@@ -37,13 +38,18 @@ EStateTreeRunStatus FOrbitStateTreeMoveToTask::EnterState(
     FInstanceDataType& Data = Context.GetInstanceData(*this);
     Data.OwnedRequestId = 0;
     Data.OwnedFollower.Reset();
-    AOrbitAIController* Controller = Data.Controller.Get();
+    AAIController* Controller = Data.Controller.Get();
     if (!IsValid(Controller)) return EStateTreeRunStatus::Failed;
-    UOrbitAIPathFollowerComponent* Follower = Controller->GetOrbitPathFollower();
+    UOrbitAIPathFollowerComponent* Follower = UOrbitAIBlueprintLibrary::GetOrbitFollower(Controller);
     if (!IsValid(Follower)) return EStateTreeRunStatus::Failed;
-    if (!Controller->MoveOrbitToLocation(Data.Destination, Data.SphereCenter,
-        Data.SurfaceRadius, Data.NavigationSettings)) return EStateTreeRunStatus::Failed;
-    Data.OwnedRequestId = Follower->MoveRequestId;
+    int32 StartedId = 0;
+    const bool bStarted = IsValid(Data.TargetActor.Get())
+        ? UOrbitAIBlueprintLibrary::MoveToActor(Controller, Data.TargetActor.Get(),
+            Data.SphereCenter, Data.SurfaceRadius, Data.NavigationSettings, StartedId)
+        : UOrbitAIBlueprintLibrary::MoveToLocation(Controller, Data.Destination,
+            Data.SphereCenter, Data.SurfaceRadius, Data.NavigationSettings, StartedId);
+    if (!bStarted) return EStateTreeRunStatus::Failed;
+    Data.OwnedRequestId = StartedId;
     Data.OwnedFollower = Follower;
     return EvaluateRequest(Follower, Data.OwnedRequestId);
 }

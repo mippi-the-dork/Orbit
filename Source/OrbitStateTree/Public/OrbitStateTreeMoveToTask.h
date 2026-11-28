@@ -5,7 +5,8 @@
 #include "OrbitAISurfaceNavigation.h"
 #include "OrbitStateTreeMoveToTask.generated.h"
 
-class AOrbitAIController;
+class AAIController;
+class AActor;
 class UOrbitAIPathFollowerComponent;
 
 /** Inputs are bindable from ordinary StateTree context/evaluator properties. */
@@ -16,7 +17,11 @@ struct ORBITSTATETREE_API FOrbitStateTreeMoveToInstanceData
 
     /** Bind the current AIController; no Orbit-specific StateTree schema is required. */
     UPROPERTY(EditAnywhere, Category="Input", meta=(Input))
-    TObjectPtr<AOrbitAIController> Controller = nullptr;
+    TObjectPtr<AAIController> Controller = nullptr;
+
+    /** Optional moving target; when provided this overrides Destination. */
+    UPROPERTY(EditAnywhere, Category="Input", meta=(Input))
+    TObjectPtr<AActor> TargetActor = nullptr;
 
     UPROPERTY(EditAnywhere, Category="Input", meta=(Input))
     FVector Destination = FVector::ZeroVector;

@@ -1,3 +1,57 @@
+## 0.2.95 - Iteration 085 - Isolated native EQS execution fixture repair
+
+- Explicitly initialize the world's native AI system before resolving its EQS manager in the two isolated-world live EQS tests. FTestWorldWrapper physics/collision availability does not guarantee that the AI system exists.
+- Split assertions into manager availability, returned query result, and query success. This distinguishes world bootstrap failures from query compilation and candidate/score errors.
+- Add `Orbit.AI.Native.LiveEQS.WorldAISystemLifecycle` to verify manager creation and stable reuse in the test world.
+- Production EQS generator, spherical-distance test, Blueprint bridge, StateTree adapter, pathfinding and Debug Volume are unchanged. Native UE 5.8.3 build and automation pending.
+
+## 0.2.94 - Iteration 084 - Live EQS and native AI execution tests
+
+- Native engine-executed EQS query tests using a real transient Environment Query asset and the real EQS manager. Full-sphere scoring and querier-centered collision projection are both exercised against native query results.
+- `Orbit: Spherical Distance` defaults to native score-only behavior to prevent unconfigured filters from discarding all candidates.
+- Blueprint `Orbit Move To Best EQS Location` consumes an already completed native EQS result on any standard AIController, returning an ownership-safe Orbit move request ID.
+- Added a physics-stepped StateTree movement-status regression for actual arrival, replacement and abort. Full compiled-StateTree asset execution is still a separate validation gate.
+- Four new native tests and the iteration acceptance checklist in `Docs/ITERATION_084.md`; previous 211/211 passing baseline retained. Unreal compile/test pending.
+
+## 0.2.93 - Iteration 083 Debug Volume manual snapshots and arrow thickness
+
+- Exposed configurable arrow line thickness (shaft, head, and zero-gravity marker).
+- Added Manual evaluation mode, explicit Refresh Gravity Preview button, and cached appearance-only redraw button.
+- Split gravity sampling from arrow-line generation; added per-actor evaluation/arrow/line diagnostics.
+- Added three native automation tests for manual evaluation isolation, automatic interval, and appearance redraw.
+- No changes to Orbit gravity, Chaos, navigation, StateTree, or EQS runtime behaviors.
+
+## 0.2.92 - Iteration 081 UE 5.8.3 automation compilation correction
+
+- Fixed two `TestNotNull` calls in `OrbitGravityDebugVolumeTests.cpp` to pass raw pointers via `TObjectPtr::Get()`, matching the UE Automation Framework API.
+- Orbit runtime and debug volume implementation remain unchanged. No other plugins or engine files modified.
+- Source verified; UE compilation and automation rerun pending.
+
+## 0.2.91 — Iteration 081: Orbit Debug Volume Actor
+
+- Added placeable Orbit Debug Volume Actor with two native adjustable local corner widgets and collision-free box outline.
+- Uniform three-dimensional gravity field sampling, native receiver gravity-channel mask and sample mode (General / Physics / Character).
+- Lightweight dedicated render primitive draws direction and magnitude arrows in editor and at runtime, with configurable density, arrow color, scale, optional zero-gravity markers and magnitude-based length.
+- Bounded sample count with automatic uniform density reduction; no per-arrow UObjects; no added gravity source, physics collision or engine changes.
+- Native Visible/Hidden In Game component and Actor options control visualization. Refreshes periodically for moving fields and exposes manual Refresh Gravity Preview.
+- Added three native automation cases for grid budget, native visibility/collision, and world/corner resizing. Pending UE 5.8.3 compile and regression; v0.2.89 remains confirmed 201/201. Iteration 080 changes retained in this package but have not been validated by the user yet.
+
+## 0.2.90 — Iteration 080: Native AI Query Region and Request Isolation
+
+- Added querier-centered spherical-cap EQS generation, preserving full-sphere behavior by default. The new search-region angle follows the native EQS querier context and is collision projected on demand using the existing setting.
+- Added deterministic equal-area spherical-cap sampling that remains valid on arbitrary planet orientations, including the poles and antipodal directions.
+- Added native optional EQS sphere-center contexts to support moving planet centers and reusable EQS assets, preserving fixed-center defaults.
+- Added request-scoped Blueprint read operations so a stale task cannot accidentally treat a newer AI move's status as its own.
+- Added two dedicated EQS region distribution/bounds tests and extended generic-controller request-ownership regression coverage.
+- Documented explicit live StateTree/EQS PIE acceptance criteria rather than claiming schema tests prove execution inside cooked assets.
+
+## v0.2.88 — Iteration 079 (Native AI interoperability and EQS)
+
+- Generic `AAIController` Blueprint Move To Location / Actor, request-id cancellation and diagnostics, with no required custom AIController subclass.
+- StateTree Move To accepts any `AAIController` and optional moving Actor target, maintaining request-specific abort ownership.
+- Native EQS spherical-distance test using standard EQS context, float scoring and filter behavior, plus bounded collision-projecting spherical point generator.
+- Four new native automation tests; v0.2.87 baseline was 197/197 passing, v0.2.88 UE build and tests pending.
+
 ## v0.2.87 — Iteration 078: Demand-sampled navigation and native AI adapters (pending UE validation)
 
 - Sample the spherical navigation graph **on demand**: endpoint nodes are selected by angular proximity among valid surface hits; A* samples neighbor nodes only when explored. Per-request cache records valid/invalid samples and never persists collision decisions across requests.
